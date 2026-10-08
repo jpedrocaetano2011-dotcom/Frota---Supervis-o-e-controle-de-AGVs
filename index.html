@@ -1,0 +1,3231 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>FROTA | Supervisão AGV</title>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <!-- ============================================================
+         SIDEBAR
+         ============================================================ -->
+
+    <aside class="sidebar">
+
+        <div class="logo-area">
+
+            <div class="logo-mark">
+                AGV
+            </div>
+
+            <div>
+                <div class="logo-title">
+                    FROTA
+                </div>
+
+                <div class="logo-subtitle">
+                    SUPERVISÃO
+                </div>
+            </div>
+
+        </div>
+
+
+        <div class="fleet-current">
+
+            <span class="fleet-current-label">
+                AGV SELECIONADO
+            </span>
+
+            <strong id="agvSelecionadoNome">
+                NENHUM
+            </strong>
+
+            <span id="agvSelecionadoId">
+                --
+            </span>
+
+        </div>
+
+
+        <nav class="menu">
+
+            <!-- =========================
+                 FROTA
+                 ========================= -->
+
+            <button
+                type="button"
+                class="menu-item menu-pai ativo"
+                id="menuFrota"
+            >
+
+                <span class="menu-icon">
+                    ▦
+                </span>
+
+                <span>
+                    Frota
+                </span>
+
+                <span class="menu-arrow">
+                    ⌄
+                </span>
+
+            </button>
+
+
+            <!-- =========================
+                 PÁGINAS DO AGV
+                 ========================= -->
+
+            <div
+                class="menu-subgrupo"
+                id="submenuFrota"
+            >
+
+                <a
+                    href="#"
+                    class="menu-item agv-menu"
+                    data-tela="visaoGeral"
+                >
+
+                    <span class="menu-icon">
+                        ◈
+                    </span>
+
+                    <span>
+                        Visão Geral
+                    </span>
+
+                </a>
+
+
+                <a
+                    href="#"
+                    class="menu-item agv-menu"
+                    data-tela="controleManual"
+                >
+
+                    <span class="menu-icon">
+                        ⌘
+                    </span>
+
+                    <span>
+                        Controle Manual
+                    </span>
+
+                </a>
+
+
+                <a
+                    href="#"
+                    class="menu-item agv-menu"
+                    data-tela="sensores"
+                >
+
+                    <span class="menu-icon">
+                        ◉
+                    </span>
+
+                    <span>
+                        Sensores
+                    </span>
+
+                </a>
+
+
+                <a
+                    href="#"
+                    class="menu-item agv-menu"
+                    data-tela="diagnostico"
+                >
+
+                    <span class="menu-icon">
+                        ⌁
+                    </span>
+
+                    <span>
+                        Diagnóstico
+                    </span>
+
+                </a>
+
+
+                <a
+                    href="#"
+                    class="menu-item agv-menu"
+                    data-tela="historico"
+                >
+
+                    <span class="menu-icon">
+                        ▤
+                    </span>
+
+                    <span>
+                        Histórico
+                    </span>
+
+                </a>
+
+
+                <a
+                    href="#"
+                    class="menu-item agv-menu"
+                    data-tela="configuracoes"
+                >
+
+                    <span class="menu-icon">
+                        ⚙
+                    </span>
+
+                    <span>
+                        Configurações
+                    </span>
+
+                </a>
+
+            </div>
+
+
+            <!-- =========================
+                 MISSÕES
+                 ========================= -->
+
+            <div class="menu-divider"></div>
+
+            <a
+                href="#"
+                class="menu-item"
+                data-tela="missoes"
+            >
+
+                <span class="menu-icon">
+                    ➤
+                </span>
+
+                <span>
+                    Missões
+                </span>
+
+            </a>
+
+
+            <!-- =========================
+                 CONTROLE DA PLANTA
+                 ========================= -->
+
+            <div class="menu-divider"></div>
+
+            <a
+                href="#"
+                class="menu-item"
+                data-tela="controlePlanta"
+            >
+
+                <span class="menu-icon">
+                    ⌂
+                </span>
+
+                <span>
+                    Controle da Planta
+                </span>
+
+            </a>
+
+        </nav>
+
+
+        <div class="sidebar-footer">
+
+            <span
+                class="status-dot"
+                id="sidebarMqttDot"
+            ></span>
+
+            <span id="sidebarMqtt">
+                MQTT DESCONECTADO
+            </span>
+
+        </div>
+
+    </aside>
+
+
+    <!-- ============================================================
+         MAIN
+         ============================================================ -->
+
+    <main class="main">
+
+
+        <!-- ========================================================
+             TOPBAR
+             ======================================================== -->
+
+        <header class="topbar">
+
+            <div>
+
+                <h1 id="tituloTela">
+                    Controle da Frota
+                </h1>
+
+                <p id="subtituloTela">
+                    Selecione um AGV para acessar o painel operacional
+                </p>
+
+            </div>
+
+
+            <div class="topbar-status">
+
+
+                <!-- AGV -->
+
+                <div class="top-status">
+
+                    <span
+                        class="status-dot vermelho"
+                        id="indicadorAgv"
+                    ></span>
+
+                    <div>
+
+                        <small>
+                            AGV
+                        </small>
+
+                        <strong id="statusAgv">
+                            NENHUM
+                        </strong>
+
+                    </div>
+
+                </div>
+
+
+                <!-- ONLINE -->
+
+                <div class="top-status">
+
+                    <span
+                        class="status-dot vermelho"
+                        id="indicadorOnline"
+                    ></span>
+
+                    <div>
+
+                        <small>
+                            ONLINE
+                        </small>
+
+                        <strong id="statusOnlineTopo">
+                            OFFLINE
+                        </strong>
+
+                    </div>
+
+                </div>
+
+
+                <!-- MQTT -->
+
+                <div class="top-status">
+
+                    <span
+                        class="status-dot vermelho"
+                        id="indicadorMqtt"
+                    ></span>
+
+                    <div>
+
+                        <small>
+                            MQTT
+                        </small>
+
+                        <strong id="statusMqtt">
+                            DESCONECTADO
+                        </strong>
+
+                    </div>
+
+                </div>
+
+
+                <!-- HEARTBEAT -->
+
+                <div class="top-status">
+
+                    <span class="status-dot"></span>
+
+                    <div>
+
+                        <small>
+                            HEARTBEAT
+                        </small>
+
+                        <strong id="heartbeat">
+                            --
+                        </strong>
+
+                    </div>
+
+                </div>
+
+
+                <!-- RELÓGIO -->
+
+                <div
+                    class="clock"
+                    id="relogio"
+                >
+                    --:--:--
+                </div>
+
+            </div>
+
+        </header>
+
+
+        <!-- ========================================================
+             BANNERS
+             ======================================================== -->
+
+        <div
+            id="bannerEmergencia"
+            class="banner banner-emergencia"
+        >
+
+            <strong>
+                EMERGÊNCIA ATIVA
+            </strong>
+
+            <span>
+                O AGV selecionado está em condição de emergência.
+            </span>
+
+        </div>
+
+
+        <div
+            id="bannerBarreira"
+            class="banner banner-barreira"
+        >
+
+            <strong>
+                BARREIRA INVADIDA
+            </strong>
+
+            <span>
+                Movimentação bloqueada até a área estar livre.
+            </span>
+
+        </div>
+
+
+        <!-- ========================================================
+             FROTA
+             ======================================================== -->
+
+        <section
+            id="frota"
+            class="tela ativa"
+        >
+
+            <div class="section-heading">
+
+                <div></div>
+
+                <div class="fleet-actions">
+
+                    <div
+                        class="fleet-count"
+                        id="fleetCount"
+                    >
+                        0 AGVs
+                    </div>
+
+                    <button
+                        class="btn btn-adicionar-agv"
+                        onclick="abrirCadastroAGV()"
+                    >
+                        + ADICIONAR AGV
+                    </button>
+
+                </div>
+
+            </div>
+
+
+            <div
+                id="fleetGrid"
+                class="fleet-grid"
+            ></div>
+
+        </section>
+
+
+        <!-- ========================================================
+             VISÃO GERAL
+             ======================================================== -->
+
+        <section
+            id="visaoGeral"
+            class="tela"
+        >
+
+            <div class="selected-agv-bar">
+
+                <button
+                    class="btn btn-secondary"
+                    onclick="voltarFrota()"
+                >
+                    ← FROTA
+                </button>
+
+
+                <div>
+
+                    <strong id="vgNome">
+                        AGV
+                    </strong>
+
+                    <span id="vgId">
+                        AGV 01
+                    </span>
+
+                </div>
+
+
+                <button
+                    class="btn btn-secondary"
+                    onclick="selecionarProximoAGV()"
+                >
+                    TROCAR AGV
+                </button>
+
+            </div>
+
+
+            <div class="dashboard">
+
+
+                <!-- ==================== MAPA ==================== -->
+
+                <div class="card mapa-card">
+
+                    <div class="card-header">
+
+                        <h3>
+                            Mapa da Planta
+                        </h3>
+
+                        <span id="mapaEstado">
+                            AGV SELECIONADO
+                        </span>
+
+                    </div>
+
+
+                    <div class="mapa-container">
+
+                        <div
+                            class="mapa-floor"
+                            id="mapaVisaoGeral"
+                        >
+
+                            <div class="plant-map-grid"></div>
+
+
+                            <div
+                                id="conexoesMapaVisaoGeral"
+                                class="plant-connections"
+                            ></div>
+
+
+                            <div
+                                id="pontosMapaVisaoGeral"
+                                class="plant-stations"
+                            ></div>
+
+
+                            <div
+                                id="agvsMapaVisaoGeral"
+                                class="mapa-agvs"
+                            ></div>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <!-- ==================== STATUS OPERACIONAL ==================== -->
+
+                <div class="card">
+
+                    <div class="card-header">
+
+                        <h3>
+                            Status Operacional
+                        </h3>
+
+                    </div>
+
+
+                    <div class="status-list">
+
+                        <div>
+
+                            <span>
+                                Status do AGV
+                            </span>
+
+                            <strong id="statusOnline">
+                                --
+                            </strong>
+
+                        </div>
+
+
+                        <div>
+
+                            <span>
+                                Máquina
+                            </span>
+
+                            <strong id="statusMaquina">
+                                --
+                            </strong>
+
+                        </div>
+
+
+                        <div>
+
+                            <span>
+                                Modo
+                            </span>
+
+                            <strong id="statusModo">
+                                --
+                            </strong>
+
+                        </div>
+
+
+                        <div>
+
+                            <span>
+                                Estação atual
+                            </span>
+
+                            <strong id="estacaoAtual">
+                                --
+                            </strong>
+
+                        </div>
+
+
+                        <div>
+
+                            <span>
+                                Destino
+                            </span>
+
+                            <strong id="destino">
+                                --
+                            </strong>
+
+                        </div>
+
+
+                        <div>
+
+                            <span>
+                                Bateria
+                            </span>
+
+                            <strong id="bateria">
+                                --
+                            </strong>
+
+                        </div>
+
+
+                        <div>
+
+                            <span>
+                                Velocidade
+                            </span>
+
+                            <strong id="velocidade">
+                                --
+                            </strong>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <!-- ==================== SEGURANÇA ==================== -->
+
+                <div class="card">
+
+                    <div class="card-header">
+
+                        <h3>
+                            Segurança
+                        </h3>
+
+                    </div>
+
+
+                    <div class="safety-grid">
+
+                        <div>
+
+                            <span>
+                                Emergência
+                            </span>
+
+                            <strong id="statusEmergencia">
+                                --
+                            </strong>
+
+                        </div>
+
+
+                        <div>
+
+                            <span>
+                                Rearme
+                            </span>
+
+                            <strong id="statusRearme">
+                                --
+                            </strong>
+
+                        </div>
+
+
+                        <div>
+
+                            <span>
+                                Barreira
+                            </span>
+
+                            <strong id="statusBarreira">
+                                --
+                            </strong>
+
+                        </div>
+
+                    </div>
+
+
+                    <div
+                        id="indicadorRearme"
+                        class="rearme-indicator"
+                    >
+                        REARME LIBERADO
+                    </div>
+
+                </div>
+
+
+                <!-- ==================== MISSÃO ==================== -->
+
+                <div class="card">
+
+                    <div class="card-header">
+
+                        <h3>
+                            Missão
+                        </h3>
+
+                        <span id="estadoMissao">
+                            AGUARDANDO
+                        </span>
+
+                    </div>
+
+
+                    <!-- MISSÃO ATUAL / PROGRESSO -->
+
+                    <div class="mission-info">
+
+                        <div>
+
+                            <span>
+                                Progresso
+                            </span>
+
+                            <strong id="progressoTexto">
+                                0%
+                            </strong>
+
+                        </div>
+
+
+                        <div class="progress">
+
+                            <div id="barraProgresso"></div>
+
+                        </div>
+
+                    </div>
+
+
+                    <!-- SELEÇÃO DE MISSÃO -->
+
+                    <div
+                        id="controleMissoesAGV"
+                        class="controle-missoes-agv"
+                    >
+
+                        <div class="controle-missoes-agv-titulo">
+                            CONTROLE DE MISSÕES
+                        </div>
+
+
+                        <div class="controle-missao-selecao">
+
+                            <label for="missaoSelecionadaAGV">
+                                MISSÃO
+                            </label>
+
+                            <select
+                                id="missaoSelecionadaAGV"
+                                onchange="selecionarMissaoAGV(this.value)"
+                            >
+
+                                <option value="">
+                                    SELECIONE UMA MISSÃO
+                                </option>
+
+                            </select>
+
+                        </div>
+
+
+                        <!-- AÇÕES -->
+
+                        <div class="controle-missao-acoes">
+
+                            <button
+                                type="button"
+                                id="btnStart"
+                                class="btn btn-start"
+                                onclick="iniciarMissao()"
+                            >
+                                CARREGAR MISSÃO
+                            </button>
+
+
+                            <button
+                                type="button"
+                                id="btnAdicionarFilaAGV"
+                                class="btn btn-secondary"
+                                onclick="adicionarMissaoFila()"
+                            >
+                                ADICIONAR À FILA
+                            </button>
+
+                        </div>
+
+
+                        <!-- MISSÃO EM EXECUÇÃO -->
+
+                        <div
+                            id="missaoAtualAGV"
+                            class="missao-atual-agv"
+                        ></div>
+
+
+                        <!-- FILA -->
+
+                        <div class="fila-missoes-titulo">
+                            FILA DE MISSÕES
+                        </div>
+
+
+                        <div
+                            id="filaMissoesAGV"
+                            class="fila-missoes-agv"
+                        ></div>
+
+                    </div>
+
+
+                    <!-- REARME -->
+
+                    <div class="button-row">
+
+                        <button
+                            id="btnRearme"
+                            class="btn btn-rearme"
+                            onclick="executarRearme()"
+                            disabled
+                        >
+                            REARME
+                        </button>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- ========================================================
+             CONTROLE MANUAL
+             ======================================================== -->
+
+        <section
+            id="controleManual"
+            class="tela"
+        >
+
+            <div class="selected-agv-bar">
+
+                <button
+                    class="btn btn-secondary"
+                    onclick="voltarFrota()"
+                >
+                    ← FROTA
+                </button>
+
+
+                <div>
+
+                    <strong>
+                        Controle Manual
+                    </strong>
+
+                    <span id="manualAgvNome">
+                        AGV
+                    </span>
+
+                </div>
+
+            </div>
+
+
+            <div class="manual-layout">
+
+
+                <!-- JOYSTICK -->
+
+                <div class="card manual-card">
+
+                    <div class="card-header">
+
+                        <h3>
+                            Joystick Omni
+                        </h3>
+
+                        <span id="manualStatus">
+                            AUTOMÁTICO
+                        </span>
+
+                    </div>
+
+
+                    <div class="joystick-wrap">
+
+                        <div
+                            id="joystick"
+                            class="joystick"
+                        >
+
+                            <div class="joystick-cross horizontal"></div>
+
+                            <div class="joystick-cross vertical"></div>
+
+                            <div
+                                id="joystickCentro"
+                                class="joystick-centro"
+                            ></div>
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="command-values">
+
+                        <div>
+
+                            <small>
+                                VX
+                            </small>
+
+                            <strong id="valorVx">
+                                0.00
+                            </strong>
+
+                        </div>
+
+
+                        <div>
+
+                            <small>
+                                VY
+                            </small>
+
+                            <strong id="valorVy">
+                                0.00
+                            </strong>
+
+                        </div>
+
+
+                        <div>
+
+                            <small>
+                                W
+                            </small>
+
+                            <strong id="valorW">
+                                0.00
+                            </strong>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <!-- ROTAÇÃO -->
+
+                <div class="card">
+
+                    <div class="card-header">
+
+                        <h3>
+                            Rotação
+                        </h3>
+
+                    </div>
+
+
+                    <div class="rotation-buttons">
+
+                        <button
+                            onpointerdown="iniciarRotacao(-1)"
+                            onpointerup="pararRotacao()"
+                            onpointerleave="pararRotacao()"
+                        >
+                            ↺
+                        </button>
+
+
+                        <div id="rotacaoSeta">
+                            ↑
+                        </div>
+
+
+                        <button
+                            onpointerdown="iniciarRotacao(1)"
+                            onpointerup="pararRotacao()"
+                            onpointerleave="pararRotacao()"
+                        >
+                            ↻
+                        </button>
+
+                    </div>
+
+
+                    <div class="speed-control">
+
+                        <label>
+
+                            Velocidade manual
+
+                            <strong id="velocidadeManualTexto">
+                                50%
+                            </strong>
+
+                        </label>
+
+
+                        <input
+                            id="sliderVelocidade"
+                            type="range"
+                            min="10"
+                            max="100"
+                            value="50"
+                        >
+
+                    </div>
+
+
+                    <div class="manual-command-list">
+
+                        <div>
+
+                            <span>
+                                VX
+                            </span>
+
+                            <strong id="comandoVx">
+                                0.00 m/s
+                            </strong>
+
+                        </div>
+
+
+                        <div>
+
+                            <span>
+                                VY
+                            </span>
+
+                            <strong id="comandoVy">
+                                0.00 m/s
+                            </strong>
+
+                        </div>
+
+
+                        <div>
+
+                            <span>
+                                W
+                            </span>
+
+                            <strong id="comandoW">
+                                0.00 rad/s
+                            </strong>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- ========================================================
+             MISSÕES
+             ======================================================== -->
+
+        <section
+            id="missoes"
+            class="tela"
+        >
+
+            <!-- LISTA DE MISSÕES -->
+
+            <div id="painelListaMissoes">
+
+                <div class="section-heading">
+
+                    <div>
+
+                        <h2>
+                            Missões
+                        </h2>
+
+                        <p>
+                            Gerenciamento das missões programadas da planta
+                        </p>
+
+                    </div>
+
+
+                    <button
+                        type="button"
+                        class="btn btn-adicionar-agv"
+                        id="btnNovaMissao"
+                    >
+                        + NOVA MISSÃO
+                    </button>
+
+                </div>
+
+
+                <div
+                    id="listaMissoes"
+                    class="missoes-lista"
+                ></div>
+
+            </div>
+
+
+            <!-- CONSTRUTOR DE MISSÃO -->
+
+            <div
+                id="painelConstrutorMissao"
+                class="missao-construtor"
+                style="display: none;"
+            >
+
+                <div class="section-heading">
+
+                    <div>
+
+                        <h2 id="tituloConstrutorMissao">
+                            Nova missão
+                        </h2>
+
+                        <p>
+                            Construa a sequência de operações da missão
+                        </p>
+
+                    </div>
+
+
+                    <button
+                        type="button"
+                        class="btn btn-secondary"
+                        id="btnVoltarMissoes"
+                    >
+                        ← VOLTAR
+                    </button>
+
+                </div>
+
+
+                <!-- NOME DA MISSÃO -->
+
+                <div class="card missao-identificacao">
+
+                    <div class="card-header">
+
+                        <h3>
+                            Identificação
+                        </h3>
+
+                    </div>
+
+
+                    <label class="missao-label">
+
+                        Nome da missão
+
+                        <input
+                            type="text"
+                            id="nomeMissao"
+                            placeholder="Ex.: Abastecimento Posto A"
+                        >
+
+                    </label>
+
+                </div>
+
+
+                <!-- ETAPAS -->
+
+                <div class="card missao-etapas-card">
+
+                    <div class="card-header">
+
+                        <div>
+
+                            <h3>
+                                Sequência da missão
+                            </h3>
+
+                            <span>
+                                Defina as operações na ordem de execução
+                            </span>
+
+                        </div>
+
+
+                        <button
+                            type="button"
+                            class="btn btn-secondary"
+                            id="btnAdicionarEtapa"
+                        >
+                            + ADICIONAR ETAPA
+                        </button>
+
+                    </div>
+
+
+                    <div
+                        id="listaEtapasMissao"
+                        class="missao-etapas"
+                    ></div>
+
+
+                    <div
+                        id="estadoVazioMissao"
+                        class="missao-vazia"
+                    >
+
+                        <strong>
+                            Nenhuma etapa adicionada
+                        </strong>
+
+                        <span>
+                            Adicione a primeira etapa para começar a construir a missão.
+                        </span>
+
+                    </div>
+
+                </div>
+
+
+                <!-- AÇÕES -->
+
+                <div class="missao-acoes">
+
+                    <button
+                        type="button"
+                        class="btn btn-secondary"
+                        id="btnCancelarMissao"
+                    >
+                        CANCELAR
+                    </button>
+
+
+                    <button
+                        type="button"
+                        class="btn btn-start"
+                        id="btnSalvarMissao"
+                    >
+                        SALVAR MISSÃO
+                    </button>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- ========================================================
+             MODAL DE ETAPA DA MISSÃO
+             ======================================================== -->
+
+        <div
+            id="modalEtapaMissao"
+            class="plant-modal-overlay"
+            hidden
+        >
+
+            <div class="plant-modal modal-etapa-missao">
+
+                <div class="plant-modal-header">
+
+                    <div>
+
+                        <h3 id="tituloModalEtapa">
+                            Adicionar etapa
+                        </h3>
+
+                        <span>
+                            Configure a operação da missão
+                        </span>
+
+                    </div>
+
+
+                    <button
+                        type="button"
+                        class="modal-fechar"
+                        id="btnFecharModalEtapa"
+                    >
+                        ×
+                    </button>
+
+                </div>
+
+
+                <div class="plant-modal-body">
+
+                    <!-- TIPO DA ETAPA -->
+
+                    <div id="campoTipoEtapa">
+
+                        <label class="missao-label">
+
+                            Tipo de operação
+
+                            <select id="tipoEtapaMissao">
+
+                                <option value="">
+                                    Selecione uma operação
+                                </option>
+
+                                <option value="IR_PARA">
+                                    IR PARA
+                                </option>
+
+                                <option value="AGUARDAR">
+                                    AGUARDAR
+                                </option>
+
+                                <option value="AGUARDAR_CONFIRMACAO">
+                                    AGUARDAR CONFIRMAÇÃO
+                                </option>
+
+                                <option value="CARREGAR">
+                                    CARREGAR
+                                </option>
+
+                                <option value="DESCARREGAR">
+                                    DESCARREGAR
+                                </option>
+
+                            </select>
+
+                        </label>
+
+                    </div>
+
+
+                    <!-- CONFIGURAÇÃO DA ETAPA -->
+
+                    <div
+                        id="configuracaoEtapaMissao"
+                        class="configuracao-etapa-missao"
+                    ></div>
+
+                </div>
+
+
+                <div class="plant-modal-actions">
+
+                    <button
+                        type="button"
+                        class="btn btn-secondary"
+                        id="btnCancelarEtapa"
+                    >
+                        CANCELAR
+                    </button>
+
+
+                    <button
+                        type="button"
+                        class="btn btn-start"
+                        id="btnConfirmarEtapa"
+                    >
+                        CONFIRMAR
+                    </button>
+
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <!-- ========================================================
+             SENSORES
+             ======================================================== -->
+
+        <section
+            id="sensores"
+            class="tela"
+        >
+
+            <div class="page-grid">
+
+
+                <!-- ==================== QTR ==================== -->
+
+                <div class="card">
+
+                    <div class="card-header">
+
+                        <h3>
+                            QTR-8A
+                        </h3>
+
+                        <span>
+                            LINE FOLLOWER
+                        </span>
+
+                    </div>
+
+
+                    <div
+                        class="sensor-bars"
+                        id="qtrSensores"
+                    >
+
+                        <div data-qtr="0">
+
+                            <span>
+                                A0
+                            </span>
+
+                            <i
+                                id="qtrA0"
+                                style="width: 18%;"
+                            ></i>
+
+                            <strong id="qtrValorA0">
+                                --
+                            </strong>
+
+                        </div>
+
+
+                        <div data-qtr="1">
+
+                            <span>
+                                A1
+                            </span>
+
+                            <i
+                                id="qtrA1"
+                                style="width: 30%;"
+                            ></i>
+
+                            <strong id="qtrValorA1">
+                                --
+                            </strong>
+
+                        </div>
+
+
+                        <div data-qtr="2">
+
+                            <span>
+                                A2
+                            </span>
+
+                            <i
+                                id="qtrA2"
+                                style="width: 48%;"
+                            ></i>
+
+                            <strong id="qtrValorA2">
+                                --
+                            </strong>
+
+                        </div>
+
+
+                        <div data-qtr="3">
+
+                            <span>
+                                A3
+                            </span>
+
+                            <i
+                                id="qtrA3"
+                                style="width: 67%;"
+                            ></i>
+
+                            <strong id="qtrValorA3">
+                                --
+                            </strong>
+
+                        </div>
+
+
+                        <div data-qtr="4">
+
+                            <span>
+                                A4
+                            </span>
+
+                            <i
+                                id="qtrA4"
+                                style="width: 91%;"
+                            ></i>
+
+                            <strong id="qtrValorA4">
+                                --
+                            </strong>
+
+                        </div>
+
+
+                        <div data-qtr="5">
+
+                            <span>
+                                A5
+                            </span>
+
+                            <i
+                                id="qtrA5"
+                                style="width: 86%;"
+                            ></i>
+
+                            <strong id="qtrValorA5">
+                                --
+                            </strong>
+
+                        </div>
+
+
+                        <div data-qtr="6">
+
+                            <span>
+                                A6
+                            </span>
+
+                            <i
+                                id="qtrA6"
+                                style="width: 45%;"
+                            ></i>
+
+                            <strong id="qtrValorA6">
+                                --
+                            </strong>
+
+                        </div>
+
+
+                        <div data-qtr="7">
+
+                            <span>
+                                A7
+                            </span>
+
+                            <i
+                                id="qtrA7"
+                                style="width: 22%;"
+                            ></i>
+
+                            <strong id="qtrValorA7">
+                                --
+                            </strong>
+
+                        </div>
+
+                    </div>
+
+
+                    <!-- DADOS CALCULADOS DO QTR -->
+
+                    <div class="sensor-summary">
+
+                        <div>
+
+                            <span>
+                                Posição
+                            </span>
+
+                            <strong id="qtrPosicao">
+                                --
+                            </strong>
+
+                        </div>
+
+
+                        <div>
+
+                            <span>
+                                Erro
+                            </span>
+
+                            <strong id="qtrErro">
+                                --
+                            </strong>
+
+                        </div>
+
+
+                        <div>
+
+                            <span>
+                                Correção PID
+                            </span>
+
+                            <strong id="qtrCorrecao">
+                                --
+                            </strong>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <!-- ==================== DISTÂNCIA ==================== -->
+
+                <div class="card">
+
+                    <div class="card-header">
+
+                        <h3>
+                            Sensores de distância
+                        </h3>
+
+                        <span>
+                            VL53L0X
+                        </span>
+
+                    </div>
+
+
+                    <div class="sensor-table">
+
+    <div>
+
+        <span>
+            VL53L0X #1
+        </span>
+
+        <strong id="vl53Valor1">
+            -- mm
+        </strong>
+
+        <small id="vl53Estado1">
+            --
+        </small>
+
+    </div>
+
+
+    <div>
+
+        <span>
+            VL53L0X #2
+        </span>
+
+        <strong id="vl53Valor2">
+            -- mm
+        </strong>
+
+        <small id="vl53Estado2">
+            --
+        </small>
+
+    </div>
+
+</div>
+
+                </div>
+
+
+                <!-- ==================== RFID ==================== -->
+
+                <div class="card">
+
+                    <div class="card-header">
+
+                        <h3>
+                            RFID
+                        </h3>
+
+                        <span>
+                            RDM6300
+                        </span>
+
+                    </div>
+
+
+                <div class="rfid-value">
+
+    RDM6300
+
+    <strong id="rfidStatus">
+        OFFLINE
+    </strong>
+
+</div>
+
+
+<div class="sensor-summary">
+
+    <div>
+
+        <span>
+            Último RFID
+        </span>
+
+        <strong id="rfidUltimo">
+            --
+        </strong>
+
+    </div>
+
+
+    <div>
+
+        <span>
+            Horário
+        </span>
+
+        <strong id="rfidHorario">
+            --
+        </strong>
+
+    </div>
+
+
+    <div>
+
+        <span>
+            Resultado
+        </span>
+
+        <strong id="rfidResultado">
+            --
+        </strong>
+
+    </div>
+
+
+    <div>
+
+        <span>
+            Estação
+        </span>
+
+        <strong id="rfidEstacao">
+            --
+        </strong>
+
+    </div>
+
+</div>  
+                    
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- ========================================================
+             DIAGNÓSTICO
+             ======================================================== -->
+
+        <section
+            id="diagnostico"
+            class="tela"
+        >
+
+            <div class="page-grid">
+
+
+                <!-- ==================== COMUNICAÇÃO ==================== -->
+
+                <div class="card">
+
+                    <div class="card-header">
+
+                        <h3>
+                            Comunicação
+                        </h3>
+
+                    </div>
+
+
+                    <div class="diag-list">
+
+                        <div>
+
+                            <span>
+                                MQTT
+                            </span>
+
+                            <strong id="diagMqtt">
+                                --
+                            </strong>
+
+                        </div>
+
+
+                        <div>
+
+                            <span>
+                                Heartbeat
+                            </span>
+
+                            <strong id="diagHeartbeat">
+                                --
+                            </strong>
+
+                        </div>
+
+
+                        <div>
+
+                            <span>
+                                Broker
+                            </span>
+
+                            <strong id="diagBroker">
+                                HiveMQ Cloud
+                            </strong>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <!-- ==================== SISTEMA ==================== -->
+
+                <div class="card">
+
+                    <div class="card-header">
+
+                        <h3>
+                            Sistema
+                        </h3>
+
+                    </div>
+
+
+                    <div class="diag-list">
+
+                        <div>
+
+                            <span>
+                                Firmware
+                            </span>
+
+                            <strong id="diagFirmware">
+                                --
+                            </strong>
+
+                        </div>
+
+
+                        <div>
+
+                            <span>
+                                IP
+                            </span>
+
+                            <strong id="diagIp">
+                                --
+                            </strong>
+
+                        </div>
+
+
+                        <div>
+
+                            <span>
+                                Uptime
+                            </span>
+
+                            <strong id="diagUptime">
+                                --
+                            </strong>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <!-- ==================== SAÚDE DO AGV ==================== -->
+
+                <!-- ==================== ENDEREÇOS I2C ==================== -->
+
+<div class="card">
+
+    <div class="card-header">
+
+        <h3>
+            Endereços I²C
+        </h3>
+
+        <span>
+            DISPOSITIVOS
+        </span>
+
+    </div>
+
+
+    <div class="diag-list">
+
+        <div>
+
+            <span>
+                TCA9548A
+            </span>
+
+            <strong id="diagI2CTCA">
+                0x70
+            </strong>
+
+        </div>
+
+
+        <div>
+
+            <span>
+                MCP23017
+            </span>
+
+            <strong id="diagI2CMCP">
+                0x20
+            </strong>
+
+        </div>
+
+    </div>
+
+</div>
+
+            </div>
+
+        </section>
+
+
+        <!-- ========================================================
+             HISTÓRICO
+             ======================================================== -->
+
+        <section
+            id="historico"
+            class="tela"
+        >
+
+            <div class="card">
+
+                <div class="card-header">
+
+                    <div>
+
+                        <h3>
+                            Eventos recentes
+                        </h3>
+
+                        <span>
+                            Histórico do AGV selecionado
+                        </span>
+
+                    </div>
+
+
+                    <span id="historicoStatus">
+                        AGV SELECIONADO
+                    </span>
+
+                </div>
+
+
+                <div
+                    id="listaHistorico"
+                    class="history-list"
+                >
+
+                    <div
+                        id="historicoVazio"
+                        class="empty-state"
+                    >
+                        Nenhum evento registrado.
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- ========================================================
+             CONFIGURAÇÕES
+             ======================================================== -->
+
+        <section
+            id="configuracoes"
+            class="tela"
+        >
+
+            <div class="page-grid">
+
+
+                <!-- ==================== IDENTIFICAÇÃO ==================== -->
+
+                <div class="card">
+
+                    <div class="card-header">
+
+                        <h3>
+                            Identificação
+                        </h3>
+
+                    </div>
+
+
+                    <div class="form-grid">
+
+                        <label>
+
+                            Nome
+
+                            <input
+                                id="configNome"
+                                type="text"
+                            >
+
+                        </label>
+
+
+                        <label>
+
+                            ID
+
+                            <input
+                                id="configId"
+                                type="text"
+                                disabled
+                            >
+
+                        </label>
+
+                    </div>
+
+                </div>
+
+
+                <!-- ==================== PONTOS DA PLANTA ==================== -->
+
+                <div class="card">
+
+                    <div class="card-header">
+
+                        <div>
+
+                            <h3>
+                                Pontos da planta
+                            </h3>
+
+                            <span>
+                                Pontos cadastrados na planta operacional
+                            </span>
+
+                        </div>
+
+                    </div>
+
+
+                    <div
+                        id="listaPontosConfiguracao"
+                        class="station-tags"
+                    >
+
+                        <span class="empty-state">
+                            Nenhum ponto cadastrado.
+                        </span>
+
+                    </div>
+
+                </div>
+
+
+                <!-- ==================== COMUNICAÇÃO ==================== -->
+
+                <div class="card">
+
+                    <div class="card-header">
+
+                        <h3>
+                            Comunicação
+                        </h3>
+
+                    </div>
+
+
+                    <div class="form-grid">
+
+                        <label>
+
+                            Broker MQTT
+
+                            <input
+                                id="configBroker"
+                                type="text"
+                                value="HiveMQ Cloud"
+                                disabled
+                            >
+
+                        </label>
+
+
+                        <label>
+
+                            Status
+
+                            <input
+                                id="configMqttStatus"
+                                type="text"
+                                value="DESCONECTADO"
+                                disabled
+                            >
+
+                        </label>
+
+                    </div>
+
+                </div>
+                        <div class="card">
+
+            <div class="card-header">
+
+                <div>
+
+                    <h3>
+                        Controle QTR
+                    </h3>
+
+                    <span>
+                        Parâmetros de controle e velocidade do AGV
+                    </span>
+
+                </div>
+
+            </div>
+
+            <div class="form-grid">
+
+                <label>
+                    KP QTR
+                    <input
+                        id="configKpQtr"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                    >
+                </label>
+
+                <label>
+                    KI QTR
+                    <input
+                        id="configKiQtr"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                    >
+                </label>
+
+                <label>
+                    KD QTR
+                    <input
+                        id="configKdQtr"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                    >
+                </label>
+
+                <label>
+                    Velocidade máxima
+                    <input
+                        id="configVelocidadeMaxima"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                    >
+                    <small>
+                        m/s
+                    </small>
+                </label>
+
+            </div>
+
+            <div class="plant-modal-actions">
+
+                <button
+                    type="button"
+                    class="btn btn-start"
+                    onclick="confirmarConfiguracoesAGV()"
+                >
+                    CONFIRMAR ALTERAÇÕES
+                </button>
+
+            </div>
+
+        </div>
+
+
+                <!-- ==================== OPERAÇÃO ==================== -->
+
+                <div class="card">
+
+                    <div class="card-header">
+
+                        <h3>
+                            Operação
+                        </h3>
+
+                    </div>
+
+
+                    <div class="diag-list">
+
+                        <div>
+
+                            <span>
+                                Estação atual
+                            </span>
+
+                            <strong id="configEstacaoAtual">
+                                --
+                            </strong>
+
+                        </div>
+
+
+                        <div>
+
+                            <span>
+                                Modo atual
+                            </span>
+
+                            <strong id="configModoAtual">
+                                --
+                            </strong>
+
+                        </div>
+
+
+                        <div>
+
+                            <span>
+                                Estado da máquina
+                            </span>
+
+                            <strong id="configMaquinaAtual">
+                                --
+                            </strong>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- ========================================================
+             CONTROLE DA PLANTA
+             ======================================================== -->
+
+        <section
+            id="controlePlanta"
+            class="tela"
+        >
+
+            <div class="section-heading">
+
+                <div></div>
+
+
+                <div class="fleet-actions">
+
+
+                    <button
+                        type="button"
+                        class="btn btn-adicionar-agv"
+                        id="btnAdicionarEstacao"
+                    >
+                        + ADICIONAR ESTAÇÃO
+                    </button>
+
+
+                    <button
+                        type="button"
+                        class="btn btn-secondary"
+                        id="btnAdicionarReferencia"
+                    >
+                        + ADICIONAR REFERÊNCIA
+                    </button>
+
+
+                    <button
+                        type="button"
+                        class="btn btn-secondary"
+                        id="btnEditarMapa"
+                    >
+                        EDITAR MAPA
+                    </button>
+
+
+                    <button
+                        type="button"
+                        class="btn btn-secondary"
+                        id="btnConexoes"
+                        disabled
+                    >
+                        CONEXÕES<br>&nbsp;
+                    </button>
+
+                </div>
+
+            </div>
+
+
+            <div class="plant-control-layout">
+
+
+                <!-- ==================== LISTA DE PONTOS ==================== -->
+
+                <div class="card plant-points-panel">
+
+
+                    <!-- ESTAÇÕES -->
+
+                    <div class="plant-points-section">
+
+                        <div class="card-header">
+
+                            <div>
+
+                                <span class="card-label">
+                                    PLANTA
+                                </span>
+
+                                <h3>
+                                    Estações
+                                </h3>
+
+                            </div>
+
+
+                            <strong id="contadorEstacoes">
+                                0
+                            </strong>
+
+                        </div>
+
+
+                        <div class="plant-search">
+
+                            <input
+                                type="text"
+                                id="buscaEstacoes"
+                                placeholder="Pesquisar estação..."
+                                autocomplete="off"
+                            >
+
+                        </div>
+
+
+                        <div
+                            id="listaEstacoes"
+                            class="station-list"
+                        >
+
+                            <div class="empty-state">
+                                Nenhuma estação cadastrada.
+                            </div>
+
+                        </div>
+
+                    </div>
+
+
+                    <!-- REFERÊNCIAS -->
+
+                    <div class="plant-points-section">
+
+                        <div class="card-header">
+
+                            <div>
+
+                                <span class="card-label">
+                                    PLANTA
+                                </span>
+
+                                <h3>
+                                    Referências
+                                </h3>
+
+                            </div>
+
+
+                            <strong id="contadorReferencias">
+                                0
+                            </strong>
+
+                        </div>
+
+
+                        <div class="plant-search">
+
+                            <input
+                                type="text"
+                                id="buscaReferencias"
+                                placeholder="Pesquisar referência..."
+                                autocomplete="off"
+                            >
+
+                        </div>
+
+
+                        <div
+                            id="listaReferencias"
+                            class="station-list"
+                        >
+
+                            <div class="empty-state">
+                                Nenhuma referência cadastrada.
+                            </div>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <!-- ==================== MAPA ==================== -->
+
+                <div class="card">
+
+                    <div class="card-header">
+
+                        <div>
+
+                            <span class="card-label">
+                                MAPA DA PLANTA
+                            </span>
+
+                            <h3>
+                                Layout
+                            </h3>
+
+                        </div>
+
+
+                        <span id="modoPlanta">
+                            ESTAÇÕES
+                        </span>
+
+                    </div>
+
+
+                    <div
+                        id="mapaPlanta"
+                        class="plant-map"
+                    >
+
+                        <div class="plant-map-grid"></div>
+
+
+                        <div
+                            id="conexoesPlanta"
+                            class="plant-connections"
+                        ></div>
+
+
+                        <div
+                            id="estacoesPlanta"
+                            class="plant-stations"
+                        ></div>
+
+                    </div>
+
+
+                    <!-- ==================== CONEXÕES ==================== -->
+
+                    <div class="plant-connections-panel">
+
+                        <div class="plant-connections-header">
+
+                            <div>
+
+                                <strong>
+                                    CONEXÕES DA PLANTA
+                                </strong>
+
+                                <span>
+                                    Ligações cadastradas entre os pontos
+                                </span>
+
+                            </div>
+
+
+                            <span
+                                id="contadorConexoes"
+                                class="plant-connections-count"
+                            >
+                                0
+                            </span>
+
+                        </div>
+
+
+                        <div
+                            id="listaConexoes"
+                            class="plant-connections-list"
+                        >
+
+                            <div class="empty-state">
+                                Nenhuma conexão cadastrada.
+                            </div>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+
+            <!-- ====================================================
+                 FORMULÁRIO ESTAÇÃO
+                 ==================================================== -->
+
+            <div
+                id="formEstacao"
+                class="plant-modal-overlay"
+                hidden
+            >
+
+                <div class="plant-modal">
+
+                    <div class="plant-modal-header">
+
+                        <div>
+
+                            <span class="card-label">
+                                NOVA ESTAÇÃO
+                            </span>
+
+                            <h3>
+                                Cadastrar estação
+                            </h3>
+
+                        </div>
+
+
+                        <button
+                            type="button"
+                            class="plant-modal-close"
+                            id="fecharFormEstacao"
+                        >
+                            ×
+                        </button>
+
+                    </div>
+
+
+                    <div class="plant-form">
+
+                        <label for="nomeEstacao">
+                            Nome da estação
+                        </label>
+
+
+                        <input
+                            type="text"
+                            id="nomeEstacao"
+                            placeholder="Ex.: Almoxarifado"
+                        >
+
+
+                        <div class="plant-rfid-section">
+
+                            <label>
+                                RFIDs da estação
+                            </label>
+
+
+                            <div
+                                id="listaRfidsEstacao"
+                                class="plant-rfid-list"
+                            >
+
+                                <div class="empty-state">
+                                    Nenhum RFID adicionado.
+                                </div>
+
+                            </div>
+
+
+                            <div class="plant-rfid-add">
+
+                                <input
+                                    id="novoRfidEstacao"
+                                    type="text"
+                                    placeholder="Ex.: 123456789"
+                                >
+
+
+                                <button
+                                    type="button"
+                                    id="adicionarRfidEstacao"
+                                >
+                                    + RFID
+                                </button>
+
+                            </div>
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="plant-modal-actions">
+
+                        <button
+                            type="button"
+                            class="btn btn-secondary"
+                            id="cancelarFormEstacao"
+                        >
+                            CANCELAR
+                        </button>
+
+
+                        <button
+                            type="button"
+                            class="btn btn-adicionar-agv"
+                            id="cadastrarEstacao"
+                        >
+                            CADASTRAR
+                        </button>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+
+            <!-- ====================================================
+                 FORMULÁRIO REFERÊNCIA
+                 ==================================================== -->
+
+            <div
+                id="formReferencia"
+                class="plant-modal-overlay"
+                hidden
+            >
+
+                <div class="plant-modal">
+
+                    <div class="plant-modal-header">
+
+                        <div>
+
+                            <span class="card-label">
+                                NOVA REFERÊNCIA
+                            </span>
+
+                            <h3>
+                                Cadastrar ponto de referência
+                            </h3>
+
+                        </div>
+
+
+                        <button
+                            type="button"
+                            class="plant-modal-close"
+                            id="fecharFormReferencia"
+                        >
+                            ×
+                        </button>
+
+                    </div>
+
+
+                    <div class="plant-form">
+
+                        <div class="plant-rfid-section">
+
+                            <label>
+                                RFIDs da referência
+                            </label>
+
+
+                            <div
+                                id="listaRfidsReferencia"
+                                class="plant-rfid-list"
+                            >
+
+                                <div class="empty-state">
+                                    Nenhum RFID adicionado.
+                                </div>
+
+                            </div>
+
+
+                            <div class="plant-rfid-add">
+
+                                <input
+                                    id="novoRfidReferencia"
+                                    type="text"
+                                    placeholder="Ex.: 987654321"
+                                >
+
+
+                                <button
+                                    type="button"
+                                    id="adicionarRfidReferencia"
+                                >
+                                    + RFID
+                                </button>
+
+                            </div>
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="plant-modal-actions">
+
+                        <button
+                            type="button"
+                            class="btn btn-secondary"
+                            id="cancelarFormReferencia"
+                        >
+                            CANCELAR
+                        </button>
+
+
+                        <button
+                            type="button"
+                            class="btn btn-adicionar-agv"
+                            id="cadastrarReferencia"
+                        >
+                            CADASTRAR
+                        </button>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+    </main>
+
+
+    <!-- ============================================================
+         MODAL ADICIONAR AGV
+         ============================================================ -->
+
+    <div
+        id="modalAdicionarAGV"
+        class="modal-overlay"
+    >
+
+        <div class="modal-agv">
+
+            <div class="modal-agv-header">
+
+                <div>
+
+                    <h3>
+                        Adicionar AGV
+                    </h3>
+
+                    <p>
+                        Cadastrar um novo veículo na frota
+                    </p>
+
+                </div>
+
+
+                <button
+                    type="button"
+                    class="modal-fechar"
+                    onclick="fecharCadastroAGV()"
+                >
+                    ×
+                </button>
+
+            </div>
+
+
+            <div class="modal-agv-body">
+
+                <label>
+
+                    ID do AGV
+
+                    <input
+                        id="novoAgvId"
+                        type="text"
+                        placeholder="Ex.: 04"
+                    >
+
+                </label>
+
+
+                <label>
+
+                    Nome
+
+                    <input
+                        id="novoAgvNome"
+                        type="text"
+                        placeholder="Ex.: CARLOS"
+                    >
+
+                </label>
+
+            </div>
+
+
+            <div class="modal-agv-footer">
+
+                <button
+                    type="button"
+                    class="btn btn-secondary"
+                    onclick="fecharCadastroAGV()"
+                >
+                    CANCELAR
+                </button>
+
+
+                <button
+                    type="button"
+                    class="btn btn-start"
+                    onclick="adicionarAGV()"
+                >
+                    ADICIONAR AGV
+                </button>
+
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <!-- ============================================================
+         FORMULÁRIO DE CONFIGURAÇÃO DA CONEXÃO
+         ============================================================ -->
+
+    <div
+        id="formConexao"
+        class="plant-modal-overlay"
+        hidden
+    >
+
+        <div class="plant-modal conexao-modal">
+
+            <div class="plant-modal-header">
+
+                <div>
+
+                    <span class="card-label">
+                        NOVA CONEXÃO
+                    </span>
+
+                    <h3>
+                        Configurar conexão
+                    </h3>
+
+                </div>
+
+
+                <button
+                    type="button"
+                    class="plant-modal-close"
+                    id="fecharFormConexao"
+                >
+                    ×
+                </button>
+
+            </div>
+
+
+            <!-- PONTOS -->
+
+            <div class="conexao-pontos-resumo">
+
+                <div>
+
+                    <span>
+                        PONTO A
+                    </span>
+
+                    <strong id="conexaoPontoA">
+                        --
+                    </strong>
+
+                    <small>
+
+                        <span id="conexaoAnguloAB">
+                            --
+                        </span>
+
+                        →
+
+                        <span id="conexaoPontoB">
+                            --
+                        </span>
+
+                    </small>
+
+                </div>
+
+
+                <div class="conexao-pontos-seta">
+                    ↔
+                </div>
+
+
+                <div>
+
+                    <span>
+                        PONTO B
+                    </span>
+
+                    <strong id="conexaoPontoBResumo">
+                        --
+                    </strong>
+
+                    <small>
+
+                        <span id="conexaoAnguloBA">
+                            --
+                        </span>
+
+                    </small>
+
+                </div>
+
+            </div>
+
+
+            <!-- TIPO -->
+
+            <div class="conexao-config-section">
+
+                <label>
+                    Tipo de circulação
+                </label>
+
+
+                <div class="conexao-tipos">
+
+
+                    <label
+                        class="conexao-tipo-option"
+                        for="tipoSentidoUnico"
+                    >
+
+                        <input
+                            type="radio"
+                            name="tipoConexao"
+                            id="tipoSentidoUnico"
+                            value="SENTIDO_UNICO"
+                        >
+
+
+                        <div>
+
+                            <strong>
+                                Sentido único
+                            </strong>
+
+                            <small>
+                                Um único sentido de circulação.
+                            </small>
+
+                        </div>
+
+                    </label>
+
+
+                    <label
+                        class="conexao-tipo-option"
+                        for="tipoMaoDupla"
+                    >
+
+                        <input
+                            type="radio"
+                            name="tipoConexao"
+                            id="tipoMaoDupla"
+                            value="MAO_DUPLA"
+                            checked
+                        >
+
+
+                        <div>
+
+                            <strong>
+                                Mão dupla
+                            </strong>
+
+                            <small>
+                                Os dois sentidos usam o mesmo par de RFIDs.
+                            </small>
+
+                        </div>
+
+                    </label>
+
+
+                    <label
+                        class="conexao-tipo-option"
+                        for="tipoDuplaFaixa"
+                    >
+
+                        <input
+                            type="radio"
+                            name="tipoConexao"
+                            id="tipoDuplaFaixa"
+                            value="DUPLA_FAIXA"
+                        >
+
+
+                        <div>
+
+                            <strong>
+                                Dupla faixa
+                            </strong>
+
+                            <small>
+                                Dois sentidos com RFIDs independentes.
+                            </small>
+
+                        </div>
+
+                    </label>
+
+                </div>
+
+
+                <div
+                    id="disponibilidadeRfidsConexao"
+                    class="conexao-rfid-disponibilidade"
+                >
+                    --
+                </div>
+
+            </div>
+
+
+            <!-- SENTIDO ÚNICO -->
+
+            <div
+                id="blocoSentidoUnico"
+                class="conexao-config-section"
+                hidden
+            >
+
+                <label>
+                    Sentido da circulação
+                </label>
+
+
+                <div class="conexao-sentidos">
+
+                    <label>
+
+                        <input
+                            type="radio"
+                            name="sentidoUnico"
+                            value="ORIGEM_DESTINO"
+                            checked
+                        >
+
+                        <span id="textoDirecaoAB">
+                            Ponto A → Ponto B
+                        </span>
+
+                    </label>
+
+
+                    <label>
+
+                        <input
+                            type="radio"
+                            name="sentidoUnico"
+                            value="DESTINO_ORIGEM"
+                        >
+
+                        <span id="textoDirecaoBA">
+                            Ponto B → Ponto A
+                        </span>
+
+                    </label>
+
+                </div>
+
+            </div>
+
+
+            <!-- RFIDS -->
+
+            <div class="conexao-config-section">
+
+                <label>
+                    Relação dos RFIDs
+                </label>
+
+
+                <div
+                    id="avisoRfidConexao"
+                    class="conexao-rfid-aviso"
+                    hidden
+                ></div>
+
+
+                <div
+                    id="rfidConfiguracaoConexao"
+                ></div>
+
+            </div>
+
+
+            <!-- AÇÕES -->
+
+            <div class="plant-modal-actions">
+
+                <button
+                    type="button"
+                    class="btn btn-secondary"
+                    id="cancelarFormConexao"
+                >
+                    CANCELAR
+                </button>
+
+
+                <button
+                    type="button"
+                    class="btn btn-adicionar-agv"
+                    id="salvarFormConexao"
+                >
+                    SALVAR CONEXÃO
+                </button>
+
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <!-- ============================================================
+         MQTT
+         ============================================================ -->
+
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+
+    <script src="script.js"></script>
+
+</body>
+
+</html>
