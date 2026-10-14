@@ -3621,3 +3621,92 @@ input[type=range] {
     color: #d1d5db;
     font-size: 11px;
 }
+
+/* =========================================================
+   CONTROLE MANUAL DA GARRA
+   ========================================================= */
+
+.card-garra {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.garra-descricao {
+    margin: 0;
+    color: var(--text-secondary, #777);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.garra-controles {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.btn-garra {
+    width: 100%;
+    min-height: 64px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+
+    border: 1px solid transparent;
+    border-radius: 10px;
+
+    font-size: 15px;
+    font-weight: 700;
+
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+
+    transition:
+        background-color 0.15s ease,
+        transform 0.1s ease,
+        opacity 0.15s ease;
+}
+
+.btn-garra-subir {
+    background: #e4f4e9;
+    color: #176b36;
+    border-color: #b7dfc4;
+}
+
+.btn-garra-descer {
+    background: #e5efff;
+    color: #1c4f91;
+    border-color: #bfd4f5;
+}
+
+.btn-garra:active {
+    transform: scale(0.98);
+}
+
+.btn-garra:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.btn-garra.comando-ativo {
+    box-shadow: inset 0 0 0 2px currentColor;
+}
+
+.garra-seta {
+    font-size: 24px;
+    line-height: 1;
+}
+
+.garra-aviso {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    font-size: 12px;
+    color: var(--text-secondary, #777);
+}

@@ -6600,15 +6600,15 @@ const TOPICOS = {
     // ============================================================
 
     comando: {
+    start: "comando/start",
+    stop: "comando/stop",
+    rearme: "comando/rearme",
+    modo: "comando/modo",
+    manual: "comando/manual",
 
-        rearme: "comando/rearme",
-
-        carregarMissao: "comando/carregar_missao",
-
-        manual: "comando/manual",
-
-        configuracao: "comando/configuracao"
-    },
+    garraMovimento: "comando/garra/movimento",
+    garraParar: "comando/garra/parar"
+},
 
     // ============================================================
     // ESP → FRONTEND
@@ -8597,11 +8597,23 @@ function iniciarMissaoPorId(agvId, missaoId) {
     // Envia missão para o ESP
     // --------------------------------------------------------
 
-    publicar(
-        TOPICOS.comando.carregarMissao,
-        JSON.stringify(resultado.pacote),
+     
+const enviado = publicar(
+    TOPICOS.comando.carregarMissao,
+    JSON.stringify(resultado.pacote),
+    agv.id
+);
+
+if (!enviado) {
+
+    console.error(
+        "Não foi possível publicar a missão para o AGV:",
         agv.id
     );
+
+    return false;
+}
+
 
     // --------------------------------------------------------
     // Missão apenas CARREGADA
@@ -8660,60 +8672,63 @@ function adicionarMissaoFila() {
 }
 
 
+
 function iniciarProximaMissaoFila(agvId) {
 
     const agv = agvs[agvId];
 
-    if (!agv) {
+    if (!agv || execucoesMissoes[agvId]) {
         return;
     }
-
-
-    if (execucoesMissoes[agvId]) {
-        return;
-    }
-
 
     if (!Array.isArray(agv.filaMissoes)) {
         agv.filaMissoes = [];
     }
 
-
     while (agv.filaMissoes.length > 0) {
 
-        const proximaMissaoId = agv.filaMissoes.shift();
+        // Consulta a primeira missão sem removê-la.
+        const proximaMissaoId = agv.filaMissoes[0];
 
         const missao = obterMissaoPorId(proximaMissaoId);
 
-        // Missão apagada → ignora e procura a próxima
+        // Se foi apagada, remove somente essa missão inválida.
         if (!missao) {
+            agv.filaMissoes.shift();
             continue;
         }
-
 
         agv.missaoSelecionada = proximaMissaoId;
 
         salvarAgvsFrota();
-
         renderizarControleFilaAGV();
-
 
         const iniciou = iniciarMissaoPorId(
             agvId,
             proximaMissaoId
         );
 
-
-        if (iniciou) {
+        // Se não conseguiu carregar, preserva a fila.
+        if (!iniciou) {
+            salvarAgvsFrota();
+            renderizarControleFilaAGV();
             return;
         }
+
+        // Remove somente após o carregamento ser aceito
+        // pela função do frontend.
+        agv.filaMissoes.shift();
+
+        salvarAgvsFrota();
+        renderizarControleFilaAGV();
+
+        return;
     }
 
-
     salvarAgvsFrota();
-
     renderizarControleFilaAGV();
 }
+
 
 
 function removerMissaoFila(indice) {
@@ -8772,18 +8787,18 @@ function executarProximaEtapaMissao(agvId) {
     // Segurança
     // --------------------------------------------------------
 
-    if (!verificarSegurancaDuranteMissao(agvId)) {
+    
+if (!verificarSegurancaDuranteMissao(agvId)) {
 
-        agv.estadoMissao = "AGUARDANDO_REARME";
-        agv.maquina = "AGUARDANDO_REARME";
-        agv.velocidade = 0;
+    agv.velocidade = 0;
 
-        cancelarSimulacaoAGV(agvId);
+    cancelarSimulacaoAGV(agvId);
 
-        atualizarPainel();
+    atualizarPainel();
 
-        return;
-    }
+    return;
+}
+
 
 
     const missao = obterMissaoPorId(execucao.missaoId);
@@ -9324,8 +9339,14 @@ function executarEtapaAguardar(agvId, etapa) {
         execucoesMissoes[agvId].timer = null;
 
         if (!verificarSegurancaDuranteMissao(agvId)) {
-            return;
-        }
+
+    execucao.timer = null;
+    execucao.aguardando = false;
+
+    atualizarPainel();
+
+    return;
+}
 
         concluirEtapaMissao(agvId);
 
@@ -9354,6 +9375,11 @@ function executarEtapaCarregar(agvId, etapa) {
     if (!agv) {
         return;
     }
+    const execucao = execucoesMissoes[agvId];
+
+if (!execucao) {
+    return;
+}
 
 
     if (!agv.demoOnline) {
@@ -9379,12 +9405,7 @@ function executarEtapaCarregar(agvId, etapa) {
     }
 
 
-    const execucao = execucoesMissoes[agvId];
-
-if (!execucao) {
-    return;
-}
-
+    
 execucao.timer = setTimeout(() => {
 
     execucao.timer = null;
@@ -9406,6 +9427,11 @@ function executarEtapaDescarregar(agvId, etapa) {
     if (!agv) {
         return;
     }
+    const execucao = execucoesMissoes[agvId];
+
+if (!execucao) {
+    return;
+}
 
 
     if (!agv.demoOnline) {
@@ -9431,11 +9457,7 @@ function executarEtapaDescarregar(agvId, etapa) {
     }
 
 
-    const execucao = execucoesMissoes[agvId];
 
-if (!execucao) {
-    return;
-}
 
 execucao.timer = setTimeout(() => {
 
@@ -9638,7 +9660,9 @@ function finalizarMissao(agvId) {
 
     agv.estadoMissao = "CONCLUIDA";
 
+    if (agv.demoOnline) {
     agv.maquina = "PRONTO";
+}
 
     agv.missaoAtual = null;
 
@@ -9702,7 +9726,9 @@ function finalizarMissaoComErro(agvId, mensagem) {
 
     agv.estadoMissao = "ERRO";
 
+    if (agv.demoOnline) {
     agv.maquina = "PRONTO";
+}
 
     agv.missaoAtual = null;
 
@@ -9936,49 +9962,28 @@ function executarTrechoSimulado(
     // Segurança a cada frame
     // --------------------------------------------------------
 
-    if (!verificarSegurancaDuranteMissao(agvId)) {
+    
+if (!verificarSegurancaDuranteMissao(agvId)) {
 
-        if (simulacao.animationFrame) {
-
-            cancelAnimationFrame(
-                simulacao.animationFrame
-            );
-        }
-
-
-        const pontoAtual =
-            simulacao.pontos[
-                simulacao.indiceTrecho
-            ];
-
-
-        // Para o AGV no último ponto conhecido
-        if (pontoAtual) {
-
-            atualizarPontoAtualAGV(
-                agv,
-                pontoAtual
-            );
-        }
-
-
-        agv.velocidade = 0;
-
-        agv.estadoMissao =
-            "AGUARDANDO_REARME";
-
-        agv.maquina =
-            "AGUARDANDO_REARME";
-
-        simulacao.animationFrame = null;
-
-
-        renderizarAGVMapaVisaoGeral();
-
-        atualizarPainel();
-
-        return;
+    if (simulacao.animationFrame) {
+        cancelAnimationFrame(
+            simulacao.animationFrame
+        );
     }
+
+    // Preserva a última posição calculada da simulação.
+    agv.velocidade = 0;
+
+    // A animação foi interrompida; não deve permanecer
+    // registrada como uma simulação ativa.
+    delete simulacoesAGV[agvId];
+
+    renderizarAGVMapaVisaoGeral();
+    atualizarPainel();
+
+    return;
+}
+
 
 
     // --------------------------------------------------------
@@ -10329,39 +10334,19 @@ function moverJoystick(event) {
 // FINALIZAÇÃO DO JOYSTICK
 // ============================================================
 
+
 function finalizarJoystick() {
-    if (!manualPermitido()) {
+
+    const agv = agvAtual();
+
+    joystickAtivo = false;
 
     comandoManual.vx = 0;
     comandoManual.vy = 0;
     comandoManual.w = 0;
 
-    publicar(
-        "comando/manual",
-        JSON.stringify({
-            vx: 0,
-            vy: 0,
-            w: 0
-        })
-    );
-
     rotacaoAtiva = false;
 
-    return;
-}
-
-    if (!joystickAtivo) {
-        return;
-    }
-
-    joystickAtivo = false;
-
-    // Ao soltar o joystick,
-    // as velocidades de translação voltam para zero.
-    comandoManual.vx = 0;
-    comandoManual.vy = 0;
-
-    // Volta o botão para o centro
     const centro = document.getElementById("joystickCentro");
 
     if (centro) {
@@ -10369,9 +10354,31 @@ function finalizarJoystick() {
         centro.style.top = "50%";
     }
 
-    publicarManual();
+    const seta = document.getElementById("rotacaoSeta");
+
+    if (seta) {
+        seta.style.transform = "rotate(0deg)";
+    }
+
+    // Envia a parada como melhor esforço.
+    // A segurança física e o firmware não podem depender
+    // da chegada deste comando MQTT.
+    if (agv && agv.online) {
+
+        publicar(
+            "comando/manual",
+            JSON.stringify({
+                vx: 0,
+                vy: 0,
+                w: 0
+            }),
+            agv.id
+        );
+    }
+
     atualizarValoresJoystick();
 }
+
 
 
 // ============================================================
@@ -10482,9 +10489,11 @@ function atualizarJoystick(event) {
 
 function publicarManual() {
 
-    if (!manualPermitido()) {
-        return;
-    }
+    const agv = agvAtual();
+
+if (!agv || !manualPermitido()) {
+    return;
+}
 
 
     // --------------------------------------------------------
@@ -10537,7 +10546,8 @@ function publicarManual() {
 
     publicar(
         "comando/manual",
-        JSON.stringify(comando)
+        JSON.stringify(comando),
+        agv.id
     );
 }
 
@@ -10663,24 +10673,44 @@ function iniciarRotacao(sentido) {
 // PARAR ROTAÇÃO
 // ============================================================
 
+
 function pararRotacao() {
 
     rotacaoAtiva = false;
-
     comandoManual.w = 0;
 
-    publicarManual();
+    const agv = agvAtual();
+
+    if (agv && agv.online) {
+
+        if (manualPermitido()) {
+
+            publicarManual();
+
+        } else {
+
+            // Se a permissão foi perdida, solicita parada total.
+            comandoManual.vx = 0;
+            comandoManual.vy = 0;
+
+            publicar(
+                "comando/manual",
+                JSON.stringify({
+                    vx: 0,
+                    vy: 0,
+                    w: 0
+                }),
+                agv.id
+            );
+        }
+    }
+
     atualizarValoresJoystick();
 
-
-    const seta =
-        document.getElementById("rotacaoSeta");
+    const seta = document.getElementById("rotacaoSeta");
 
     if (seta) {
-
-        seta.style.transform =
-            "rotate(0deg)";
-
+        seta.style.transform = "rotate(0deg)";
     }
 }
 
@@ -10907,4 +10937,432 @@ mapaPlanta?.addEventListener(
 mapaPlanta?.addEventListener(
     "drop",
     soltarPontoMapa
+);
+
+/* ============================================================
+   CONTROLE MANUAL DA GARRA
+   ============================================================ */
+
+let garraMovimentoAtivo = false;
+let garraSentidoAtual = null;
+let garraPonteiroId = null;
+
+
+/* ============================================================
+   VERIFICA SE A TELA ESTÁ VISÍVEL
+   ============================================================ */
+
+function garraTelaManualVisivel() {
+
+    const tela = document.getElementById("controleManual");
+
+    if (!tela) {
+        return false;
+    }
+
+    return (
+        tela.isConnected &&
+        window.getComputedStyle(tela).display !== "none" &&
+        tela.getClientRects().length > 0
+    );
+}
+
+
+/* ============================================================
+   ATUALIZA O ESTADO VISUAL
+   ============================================================ */
+
+function atualizarEstadoVisualGarra(estado, mensagem) {
+
+    const elementoEstado =
+        document.getElementById("garraEstadoManual");
+
+    const elementoMensagem =
+        document.getElementById("garraMensagem");
+
+    const btnSubir =
+        document.getElementById("btnGarraSubir");
+
+    const btnDescer =
+        document.getElementById("btnGarraDescer");
+
+    if (elementoEstado) {
+        elementoEstado.textContent = estado;
+    }
+
+    if (elementoMensagem) {
+        elementoMensagem.textContent = mensagem;
+    }
+
+    if (btnSubir) {
+        btnSubir.classList.toggle(
+            "comando-ativo",
+            estado === "SUBINDO"
+        );
+    }
+
+    if (btnDescer) {
+        btnDescer.classList.toggle(
+            "comando-ativo",
+            estado === "DESCENDO"
+        );
+    }
+}
+
+
+/* ============================================================
+   INICIA O MOVIMENTO MANUAL
+   ============================================================ */
+
+function iniciarGarraManual(sentido) {
+
+    if (
+        sentido !== "SUBIR" &&
+        sentido !== "DESCER"
+    ) {
+        return;
+    }
+
+    if (garraMovimentoAtivo) {
+        return;
+    }
+
+    if (!garraTelaManualVisivel()) {
+        return;
+    }
+
+    if (!manualPermitido()) {
+
+        atualizarEstadoVisualGarra(
+            "BLOQUEADA",
+            "Movimento manual não autorizado"
+        );
+
+        return;
+    }
+
+    const publicado = publicar(
+        TOPICOS.comando.garraMovimento,
+        sentido
+    );
+
+    if (publicado === false) {
+
+        atualizarEstadoVisualGarra(
+            "FALHA",
+            "Não foi possível publicar o comando"
+        );
+
+        return;
+    }
+
+    garraMovimentoAtivo = true;
+    garraSentidoAtual = sentido;
+
+    atualizarEstadoVisualGarra(
+        sentido === "SUBIR" ? "SUBINDO" : "DESCENDO",
+        "Comando enviado; aguardando confirmação do ESP32"
+    );
+}
+
+
+/* ============================================================
+   SOLICITA A PARADA
+   ============================================================ */
+
+function pararGarraManual(
+    motivo = "Movimento interrompido"
+) {
+
+    const haviaMovimento = garraMovimentoAtivo;
+
+    garraMovimentoAtivo = false;
+    garraSentidoAtual = null;
+    garraPonteiroId = null;
+
+    if (!haviaMovimento) {
+        return;
+    }
+
+    const publicado = publicar(
+        TOPICOS.comando.garraParar,
+        "PARAR"
+    );
+
+    if (publicado === false) {
+
+        atualizarEstadoVisualGarra(
+            "FALHA",
+            "Parada não confirmada: verifique a comunicação"
+        );
+
+        return;
+    }
+
+    atualizarEstadoVisualGarra(
+        "PARADA",
+        motivo
+    );
+}
+
+
+/* ============================================================
+   CONFIGURA OS BOTÕES
+   ============================================================ */
+
+function configurarControleManualGarra() {
+
+    const btnSubir =
+        document.getElementById("btnGarraSubir");
+
+    const btnDescer =
+        document.getElementById("btnGarraDescer");
+
+    if (!btnSubir || !btnDescer) {
+        return;
+    }
+
+    if (btnSubir.dataset.garraConfigurada === "true") {
+        return;
+    }
+
+    btnSubir.dataset.garraConfigurada = "true";
+    btnDescer.dataset.garraConfigurada = "true";
+
+
+    /* --------------------------------------------------------
+       PRESSIONAR
+       -------------------------------------------------------- */
+
+    function pressionarBotaoGarra(evento) {
+
+        evento.preventDefault();
+
+        if (
+            evento.pointerType === "mouse" &&
+            evento.button !== 0
+        ) {
+            return;
+        }
+
+        if (garraMovimentoAtivo) {
+            return;
+        }
+
+        const sentido =
+            evento.currentTarget.id === "btnGarraSubir"
+                ? "SUBIR"
+                : "DESCER";
+
+        garraPonteiroId = evento.pointerId;
+
+        try {
+            evento.currentTarget.setPointerCapture(
+                evento.pointerId
+            );
+        } catch (erro) {
+            // A soltura global também será monitorada.
+        }
+
+        iniciarGarraManual(sentido);
+    }
+
+
+    /* --------------------------------------------------------
+       SOLTAR OU CANCELAR
+       -------------------------------------------------------- */
+
+    function soltarBotaoGarra(evento) {
+
+        if (
+            garraPonteiroId !== null &&
+            evento.pointerId !== garraPonteiroId
+        ) {
+            return;
+        }
+
+        if (garraMovimentoAtivo) {
+
+            pararGarraManual("Botão solto");
+
+        } else {
+
+            garraPonteiroId = null;
+
+        }
+    }
+
+
+    /* --------------------------------------------------------
+       EVENTOS DOS BOTÕES
+       -------------------------------------------------------- */
+
+    btnSubir.addEventListener(
+        "pointerdown",
+        pressionarBotaoGarra
+    );
+
+    btnDescer.addEventListener(
+        "pointerdown",
+        pressionarBotaoGarra
+    );
+
+    btnSubir.addEventListener(
+        "pointerup",
+        soltarBotaoGarra
+    );
+
+    btnDescer.addEventListener(
+        "pointerup",
+        soltarBotaoGarra
+    );
+
+    btnSubir.addEventListener(
+        "pointercancel",
+        soltarBotaoGarra
+    );
+
+    btnDescer.addEventListener(
+        "pointercancel",
+        soltarBotaoGarra
+    );
+
+    btnSubir.addEventListener(
+        "lostpointercapture",
+        soltarBotaoGarra
+    );
+
+    btnDescer.addEventListener(
+        "lostpointercapture",
+        soltarBotaoGarra
+    );
+
+
+    /* --------------------------------------------------------
+       SOLTURA FORA DOS BOTÕES
+       -------------------------------------------------------- */
+
+    window.addEventListener(
+        "pointerup",
+        soltarBotaoGarra
+    );
+
+    window.addEventListener(
+        "pointercancel",
+        soltarBotaoGarra
+    );
+
+
+    /* --------------------------------------------------------
+       PERDA DE FOCO
+       -------------------------------------------------------- */
+
+    window.addEventListener("blur", function () {
+
+        pararGarraManual("Janela perdeu o foco");
+
+    });
+
+
+    /* --------------------------------------------------------
+       PÁGINA OCULTA
+       -------------------------------------------------------- */
+
+    document.addEventListener(
+        "visibilitychange",
+        function () {
+
+            if (document.hidden) {
+
+                pararGarraManual(
+                    "Página ficou oculta"
+                );
+
+            }
+
+        }
+    );
+
+
+    /* --------------------------------------------------------
+       ESTADO INICIAL
+       -------------------------------------------------------- */
+
+    atualizarEstadoVisualGarra(
+        "PARADA",
+        "Aguardando comando"
+    );
+}
+
+
+/* ============================================================
+   WATCHDOG DO FRONTEND
+   ============================================================ */
+
+function verificarControleManualGarra() {
+
+    if (!garraMovimentoAtivo) {
+        return;
+    }
+
+    if (
+        document.hidden ||
+        !garraTelaManualVisivel()
+    ) {
+
+        pararGarraManual(
+            "Controle manual indisponível"
+        );
+
+        return;
+    }
+
+    if (!manualPermitido()) {
+
+        pararGarraManual(
+            "Permissão de movimento perdida"
+        );
+
+        return;
+    }
+
+    if (
+        typeof clienteMQTT !== "undefined" &&
+        clienteMQTT &&
+        !clienteMQTT.connected
+    ) {
+
+        pararGarraManual(
+            "Conexão MQTT perdida"
+        );
+
+    }
+}
+
+
+/* ============================================================
+   INICIALIZAÇÃO
+   ============================================================ */
+
+if (document.readyState === "loading") {
+
+    document.addEventListener(
+        "DOMContentLoaded",
+        configurarControleManualGarra
+    );
+
+} else {
+
+    configurarControleManualGarra();
+
+}
+
+
+/* ============================================================
+   VERIFICAÇÃO PERIÓDICA
+   ============================================================ */
+
+setInterval(
+    verificarControleManualGarra,
+    100
 );
