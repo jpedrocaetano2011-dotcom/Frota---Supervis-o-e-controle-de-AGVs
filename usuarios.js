@@ -166,31 +166,19 @@ const Usuarios = (() => {
         const c = empresa.codigo;
         const atual = mqtts.find(m => m.empresa_id === empresa.id) || null;
         const urlPadrao = atual?.url || mqtts.find(m => m.url)?.url || "";
-        const porAgv = new Map(mqttAgvs.map(m => [m.agv_id, m]));
-        const linhasAgv = agvsDb.map(a => {
-            const m = porAgv.get(a.id);
-            return `<tr>
-                <td><strong class="mono">${esc(a.id)}</strong> <span class="suave">${esc(a.nome)}</span></td>
-                <td>${m ? `<span class="pilula verde">gerada</span>` : `<span class="pilula">sem credencial</span>`}</td>
-                <td class="usuarios-acao"><button type="button" class="btn btn-mini" data-mqtt-agv="${esc(a.id)}" ${m ? 'data-ja="1"' : ""}>${m ? "Gerar outra senha" : "Gerar credencial"}</button></td>
-            </tr>
-            ${m ? `<tr class="usuarios-mqtt-ficha"><td colspan="3">
+        // Um usuario para todos os AGVs da empresa (guardado como agv_id "TODOS"):
+        // com o trafego, cada AGV le o estado dos outros da mesma empresa.
+        const m = mqttAgvs.find(x => x.agv_id === "TODOS") || null;
+        const linhasAgv = !m ? "" : agvsDb.map(a => `<tr class="usuarios-mqtt-ficha"><td>
                 <details>
-                    <summary>Ver o que colocar no HiveMQ e no firmware do AGV ${esc(a.id)}</summary>
-                    <ol class="usuarios-passos">
-                        <li>HiveMQ › <em>Access Management</em> › <em>Permissions</em> › <em>Create new permission</em>: nome <code>agv-${esc(c)}-${esc(a.id)}</code>, Topic Filter <code>agv/${esc(c)}/${esc(a.id)}/#</code>.</li>
-                        <li><em>Access Credentials</em>: Username <code>${esc(m.usuario)}</code>, Password <code>${esc(m.senha)}</code>, Permission <code>agv-${esc(c)}-${esc(a.id)}</code> › <em>Create Credential</em>.</li>
-                        <li>No topo do <span class="mono">AGV_FROTA.ino</span>, troque estas linhas e grave o AGV:</li>
-                    </ol>
+                    <summary>Linhas do firmware do AGV <strong class="mono">${esc(a.id)}</strong> <span class="suave">${esc(a.nome)}</span></summary>
                     <pre class="usuarios-codigo" data-copiar>#define EMPRESA "${esc(c)}"
 #define AGV_ID "${esc(a.id)}"
 const char* MQTT_USER     = "${esc(m.usuario)}";
 const char* MQTT_PASSWORD = "${esc(m.senha)}";</pre>
                     <button type="button" class="btn btn-mini" data-copiar-anterior>Copiar linhas</button>
                 </details>
-            </td></tr>` : ""}`;
-        }).join("");
-
+            </td></tr>`).join("");
         return `
         <section class="card usuarios-mqtt">
             <div class="usuarios-mqtt-topo">
@@ -220,9 +208,17 @@ const char* MQTT_PASSWORD = "${esc(m.senha)}";</pre>
                 <div class="usuarios-campo-largo"><button type="submit" class="btn btn-primario">Salvar MQTT da empresa</button></div>
             </form>
 
-            <h3>2. Um usuário por AGV</h3>
-            <p class="suave usuarios-dica">Cada AGV só enxerga os próprios tópicos (<code>agv/${esc(c)}/&lt;ID&gt;/#</code>). Cadastre o AGV na Frota primeiro.</p>
-            ${agvsDb.length ? `<div class="tabela-rolagem"><table class="tabela-usuarios"><tbody>${linhasAgv}</tbody></table></div>` : `<p class="suave">Nenhum AGV cadastrado na frota desta empresa.</p>`}
+            <h3>2. Usuário dos AGVs (um para todos da empresa)</h3>
+            <p class="suave usuarios-dica">Com o controle de tráfego, cada AGV lê o estado dos outros AGVs da mesma empresa, então o usuário dos AGVs enxerga <code>agv/${esc(c)}/#</code>. Outras empresas continuam separadas.</p>
+            ${m ? `
+            <ol class="usuarios-passos">
+                <li>HiveMQ › <em>Access Management</em> › <em>Access Credentials</em>: Username <code>${esc(m.usuario)}</code>, Password <code>${esc(m.senha)}</code>, Permission <code>site-${esc(c)}</code> (a mesma do site: filtro <code>agv/${esc(c)}/#</code>) › <em>Create Credential</em>.</li>
+                <li>Se algum AGV desta empresa ainda usa um usuário só dele (permissão com filtro <code>agv/${esc(c)}/&lt;ID&gt;/#</code>), apague essa credencial depois de gravar o AGV com as linhas novas.</li>
+                <li>Em cada AGV, troque as 4 linhas do topo do <span class="mono">AGV_FROTA.ino</span> pelas dele (abaixo) e grave. Só o <code>AGV_ID</code> muda de um para outro.</li>
+            </ol>
+            ${agvsDb.length ? `<div class="tabela-rolagem"><table class="tabela-usuarios"><tbody>${linhasAgv}</tbody></table></div>` : `<p class="suave">Nenhum AGV cadastrado na frota desta empresa: cadastre na Frota para ver as linhas de cada um.</p>`}
+            <div><button type="button" class="btn btn-mini" data-mqtt-agvs="1">Gerar outra senha</button></div>`
+            : `<p class="suave usuarios-dica">Ainda não gerado.</p><div><button type="button" class="btn btn-primario" data-mqtt-agvs="0">Gerar usuário dos AGVs</button></div>`}
         </section>`;
     }
 
@@ -288,11 +284,11 @@ const char* MQTT_PASSWORD = "${esc(m.senha)}";</pre>
         } else if (alvo.dataset.gerarSenha !== undefined) {
             const campo = alvo.closest(".usuarios-senha")?.querySelector("input");
             if (campo) campo.value = senhaAleatoria();
-        } else if (alvo.dataset.mqttAgv) {
-            if (alvo.dataset.ja && !(await ui.confirmar({ titulo: `Gerar outra senha para o AGV ${alvo.dataset.mqttAgv}?`, texto: "A senha antiga para de valer quando você trocar no HiveMQ. O AGV só volta a conectar depois de gravado com a nova.", confirmar: "Gerar" }))) return;
-            const id = alvo.dataset.mqttAgv;
-            executar(db.from("mqtt_agvs").upsert({ empresa_id: Nuvem.empresa().id, agv_id: id, usuario: `${Nuvem.empresa().codigo}-${id}`, senha: senhaAleatoria() }),
-                `Credencial do AGV ${id} gerada. Abra “Ver o que colocar” logo abaixo dele.`);
+        } else if (alvo.dataset.mqttAgvs !== undefined) {
+            if (alvo.dataset.mqttAgvs === "1" && !(await ui.confirmar({ titulo: "Gerar outra senha para os AGVs?", texto: "Troque a senha também no HiveMQ e grave todos os AGVs desta empresa com as linhas novas. Até lá eles não conectam.", confirmar: "Gerar" }))) return;
+            const codigo = Nuvem.empresa().codigo;
+            executar(db.from("mqtt_agvs").upsert({ empresa_id: Nuvem.empresa().id, agv_id: "TODOS", usuario: `${codigo}-agvs`, senha: senhaAleatoria() }),
+                "Usuário dos AGVs gerado. Siga os passos logo abaixo.");
         } else if (alvo.dataset.copiarAnterior !== undefined) {
             const texto = alvo.previousElementSibling?.textContent || "";
             navigator.clipboard?.writeText(texto).then(() => ui.aviso("Linhas copiadas.", "sucesso"), () => ui.aviso("Selecione o texto e copie com Ctrl+C.", "info"));

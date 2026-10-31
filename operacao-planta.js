@@ -377,7 +377,67 @@ function rotaDoAGV(agv) {
 let mapaVisaoGeral = null;
 let animacaoMapa = null;
 let ultimoQuadroMapa = 0;
-const camadasMapa = { rotulos: true, mostrarTags: true, rota: true, rastro: true, outros: true, grade: false };
+const camadasMapa = { rotulos: true, mostrarTags: true, rota: true, rastro: true, outros: true, grade: false, zonas: true };
+
+/* ------------------------------------------------------------
+   TRAFEGO: zonas de conflito no mapa
+   ------------------------------------------------------------ */
+
+let cacheZonas = { planta: null, zonas: [] };
+function zonasDaPlanta() {
+    const planta = plantaPublicada();
+    if (cacheZonas.planta !== planta) cacheZonas = { planta, zonas: Planta.zonasDeConflito(planta) };
+    return cacheZonas.zonas;
+}
+
+// zona -> { ocupada: [ids], pedida: [ids] } a partir do status/trafego dos AGVs
+function estadoTrafegoZonas() {
+    const estado = new Map();
+    const pegar = z => { if (!estado.has(z)) estado.set(z, { ocupada: [], pedida: [] }); return estado.get(z); };
+    Object.values(agvs).forEach(agv => {
+        const t = agv.trafego;
+        if (!t) return;
+        (t.o || []).forEach(z => pegar(z).ocupada.push(agv.id));
+        [...(t.c || []), ...(t.p || [])].forEach(z => { const e = pegar(z); if (!e.pedida.includes(agv.id)) e.pedida.push(agv.id); });
+    });
+    return estado;
+}
+
+// Sobreposicao do mapa: zonas livres (contorno fraco), pedidas (ambar) e
+// ocupadas (cor de destaque, com o AGV que esta nela).
+function desenharZonasTrafego(mapa, grupo, { Y, px, tema }) {
+    if (mapa.opcoes && mapa.opcoes.zonas === false) return;
+    const planta = plantaPublicada();
+    const el = MapaSVG.el;
+    const t = tema || MapaSVG.tema();
+    const estado = estadoTrafegoZonas();
+    zonasDaPlanta().forEach(z => {
+        const e = estado.get(z.id);
+        const ocupada = e && e.ocupada.length > 0, pedida = e && e.pedida.length > 0;
+        const cor = ocupada ? t.accent : pedida ? t.amber : t.muted;
+        const opacidade = ocupada ? 0.28 : pedida ? 0.22 : 0.08;
+        const g = el("g", { "pointer-events": "none", class: "zona-trafego" }, grupo);
+        z.segmentos.forEach(id => {
+            const s = Planta.segmentoPorId(planta, id);
+            const a = s && Planta.noPorId(planta, s.a), b = s && Planta.noPorId(planta, s.b);
+            if (!a || !b) return;
+            el("line", { x1: a.x, y1: Y(a.y), x2: b.x, y2: Y(b.y), stroke: cor, "stroke-opacity": opacidade, "stroke-width": 0.5, "stroke-linecap": "round" }, g);
+        });
+        z.nos.forEach(id => {
+            const n = Planta.noPorId(planta, id);
+            if (!n) return;
+            el("circle", { cx: n.x, cy: Y(n.y), r: 0.45, fill: cor, "fill-opacity": opacidade, stroke: cor, "stroke-opacity": ocupada || pedida ? 0.8 : 0.25, "stroke-width": 1, "stroke-dasharray": ocupada ? "" : "4 3", "vector-effect": "non-scaling-stroke" }, g);
+        });
+        if (ocupada || pedida) {
+            const n = Planta.noPorId(planta, z.nos[0]) || null;
+            if (!n) return;
+            const texto = ocupada ? e.ocupada.join(", ") : "aguardando " + e.pedida.join(", ");
+            const tam = px(11);
+            const rotulo = el("text", { x: n.x + 0.5, y: Y(n.y) - 0.5, "font-size": tam, "font-weight": 600, fill: cor, "paint-order": "stroke", stroke: t.papel || "#fff", "stroke-width": px(3), "stroke-linejoin": "round" }, g);
+            rotulo.textContent = `${z.id} · ${texto}`;
+        }
+    });
+}
 
 try {
     Object.assign(camadasMapa, JSON.parse(localStorage.getItem("camadasMapa") || "{}"));
@@ -417,6 +477,7 @@ function renderizarMapaVisaoGeral() {
     }
     if (!mapaVisaoGeral) {
         mapaVisaoGeral = MapaSVG.criar(container, Object.assign({}, camadasMapa));
+        mapaVisaoGeral.sobreposicao = desenharZonasTrafego;
         document.getElementById("mapaZoomMais")?.addEventListener("click", () => mapaVisaoGeral.zoom(1 / 1.3));
         document.getElementById("mapaZoomMenos")?.addEventListener("click", () => mapaVisaoGeral.zoom(1.3));
         document.getElementById("mapaAjustar")?.addEventListener("click", () => mapaVisaoGeral.ajustar());

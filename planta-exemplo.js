@@ -44,7 +44,7 @@
         });
         no("E01", "ESTACAO", 5, 9.4, { estacao: "E01", orientacaoChegada: 90, barreira: 300 });
         no("E02", "ESTACAO", 10, 9.4, { estacao: "E02", orientacaoChegada: 90, barreira: 300 });
-        no("E03", "ESTACAO", 5, 2.3, { estacao: "E03", orientacaoChegada: 270 });
+        no("E03", "ESTACAO", 5, 2.3, { estacao: "E03", orientacaoChegada: 270, barreira: 300 });
         no("E04", "ESTACAO", 15, 2.3, { estacao: "E04", orientacaoChegada: 270, barreira: 300 });
         no("E04-2", "ESTACAO", 17.5, 9.4, { estacao: "E04", orientacaoChegada: 90, nome: "Kits" });
         no("R17", "REFERENCIA", 17.5, 6.0);

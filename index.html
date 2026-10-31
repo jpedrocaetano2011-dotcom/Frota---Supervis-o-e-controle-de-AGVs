@@ -100,6 +100,7 @@
             </div>
         </div>
         <div id="fleetGrid" class="fleet-grid"></div>
+        <section class="card card-sem-padding frota-trafego" id="frotaTrafego" aria-label="Tráfego" hidden></section>
     </section>
 
     <!-- ========================================================
@@ -126,6 +127,7 @@
                                 <label><input type="checkbox" data-camada="rastro" checked> Rastro do AGV</label>
                                 <label><input type="checkbox" data-camada="outros" checked> Outros AGVs</label>
                                 <label><input type="checkbox" data-camada="grade"> Grade</label>
+                                <label><input type="checkbox" data-camada="zonas" checked> Zonas de tráfego</label>
                             </div>
                         </div>
                     </div>
@@ -330,6 +332,14 @@
                 <div id="painelConstrutorMissao" style="display:none;flex-direction:column;gap:18px">
                     <div class="missao-editor-topo">
                         <label>Nome da missão<input type="text" id="nomeMissao" placeholder="Ex.: Abastecer montagem"></label>
+                        <label title="Só vale quando dois AGVs disputam um cruzamento ou estação">Prioridade no tráfego
+                            <select id="prioridadeMissao">
+                                <option value="0">Baixa</option>
+                                <option value="1" selected>Normal</option>
+                                <option value="2">Alta</option>
+                                <option value="3">Urgente</option>
+                            </select>
+                        </label>
                         <div class="grupo" style="display:flex;gap:8px;flex-wrap:wrap">
                             <button type="button" class="btn" id="btnDuplicarMissaoAtual" data-requer="operar">Duplicar</button>
                             <button type="button" class="btn btn-perigo" id="btnExcluirMissaoAtual" data-requer="operar">Excluir</button>

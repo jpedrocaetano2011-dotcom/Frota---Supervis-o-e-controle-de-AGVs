@@ -537,6 +537,7 @@ async function abrirNovaMissao() {
     missaoEmEdicao = { id: gerarIdMissao(), nome: "", etapas: [] };
     missaoListaSelecionada = missaoEmEdicao.id;
     document.getElementById("nomeMissao").value = "";
+    document.getElementById("prioridadeMissao").value = "1";
     renderizarListaMissoes();
     renderizarEditorMissao();
     setTimeout(() => document.getElementById("nomeMissao")?.focus(), 30);
@@ -549,6 +550,7 @@ async function editarMissao(id) {
     missaoEmEdicao = JSON.parse(JSON.stringify(missao));
     missaoListaSelecionada = id;
     document.getElementById("nomeMissao").value = missao.nome || "";
+    document.getElementById("prioridadeMissao").value = String(missao.prioridade ?? 1);
     renderizarListaMissoes();
     renderizarEditorMissao();
 }
@@ -730,6 +732,12 @@ document.getElementById("buscaMissoes")?.addEventListener("input", renderizarLis
 document.getElementById("nomeMissao")?.addEventListener("input", () => {
     if (!missaoEmEdicao) return;
     renderizarEditorMissaoTitulo();
+});
+document.getElementById("prioridadeMissao")?.addEventListener("change", evento => {
+    if (!missaoEmEdicao) return;
+    const valor = Number(evento.target.value);
+    if (valor === 1) delete missaoEmEdicao.prioridade;
+    else missaoEmEdicao.prioridade = valor;
 });
 
 function renderizarEditorMissaoTitulo() {
@@ -1425,6 +1433,22 @@ function processarMensagemMQTT(topico, valor) {
             break;
 
 
+        case "status/trafego":
+
+            // Zonas que o AGV ocupa (o), reserva (c) e pede (p); m = por que espera.
+            if (!valor) {
+                agv.trafego = null;
+            } else {
+                const t = lerJSON();
+                if (t) {
+                    t.recebidoEm = Date.now();
+                    agv.trafego = t;
+                }
+            }
+            if (typeof renderizarTrafegoFrota === "function") renderizarTrafegoFrota();
+            break;
+
+
         case "status/heartbeat":
 
             // O ESP envia o tempo ligado, em segundos.
@@ -1904,9 +1928,75 @@ function renderizarFiltrosFrota(lista) {
         </button>`).join(""));
 }
 
+/* ------------------------------------------------------------
+   TRAFEGO NA FROTA: quem ocupa cada zona e quem espera quem
+   ------------------------------------------------------------ */
+
+function renderizarTrafegoFrota() {
+    const caixa = document.getElementById("frotaTrafego");
+    if (!caixa) return;
+    const comTrafego = Object.values(agvs).filter(a => a.trafego && ((a.trafego.o || []).length || (a.trafego.p || []).length || (a.trafego.c || []).length));
+    caixa.hidden = comTrafego.length === 0;
+    if (!comTrafego.length) { caixa.innerHTML = ""; return; }
+    const podeLiberar = !window.Nuvem || Nuvem.pode("administrar");
+    const linhas = comTrafego.sort((a, b) => String(a.id).localeCompare(String(b.id), "pt-BR", { numeric: true })).map(agv => {
+        const t = agv.trafego;
+        const esperando = (t.p || []).length > 0 || (t.c || []).length > 0;
+        const segundos = Number(t.es) || 0;
+        const situacao = esperando
+            ? `<span class="pilula ambar">${t.ag ? "parado esperando" : "pedindo passagem"}${segundos ? " · " + ui.duracao(segundos) : ""}</span> <span class="suave">${escaparHtml(t.m || "zonas: " + [...(t.p || [])].join(", "))}</span>`
+            : `<span class="suave">sem pedidos</span>`;
+        const obstaculo = t.ob ? ` <span class="pilula vermelho">obstáculo à frente</span>` : "";
+        const ocupa = (t.o || []).length ? (t.o || []).map(z => `<span class="pilula azul">${escaparHtml(z)}</span>`).join(" ") : `<span class="suave">—</span>`;
+        return `<tr>
+            <td><strong>${escaparHtml(agv.id)}</strong> <span class="suave">${escaparHtml(agv.nome || "")}</span>${agv.online ? "" : ` <span class="pilula">offline</span>`}</td>
+            <td>${ocupa}</td>
+            <td>${situacao}${obstaculo}</td>
+            <td class="usuarios-acao">${podeLiberar && (t.o || []).length ? `<button type="button" class="btn btn-mini" data-liberar-zonas="${escaparHtml(agv.id)}">Liberar zonas</button>` : ""}</td>
+        </tr>`;
+    }).join("");
+    ui.trocarHtml(caixa, `
+        <div class="card-barra"><div><h2>Tráfego</h2><div class="card-sub">Zonas de conflito: cruzamentos, corredores de mão dupla com estação e trocas laterais. Um AGV por zona.</div></div></div>
+        <div class="tabela-rolagem"><table class="tabela-usuarios">
+            <thead><tr><th>AGV</th><th>Ocupa</th><th>Situação</th><th></th></tr></thead>
+            <tbody>${linhas}</tbody>
+        </table></div>`);
+}
+
+async function liberarZonasAGV(id) {
+    const agv = agvs[id];
+    if (!agv || !agv.trafego) return;
+    if (window.Nuvem && !Nuvem.exigir("administrar", "liberar zonas de tráfego")) return;
+    const zonas = (agv.trafego.o || []).join(", ");
+    if (!(await ui.confirmar({
+        titulo: `Liberar as zonas do AGV ${id}?`,
+        texto: `${zonas}\n\nUse só depois de conferir que o AGV ${id} não está mais dentro delas (por exemplo, foi retirado com a missão parada). Outros AGVs podem entrar em seguida.`,
+        confirmar: "Liberar", perigo: true
+    }))) return;
+    if (agv.virtual && typeof AgvVirtual !== "undefined") {
+        if (AgvVirtual.instancias[id]) publicar("comando/trafego", JSON.stringify({ acao: "LIBERAR" }), id);
+        else AgvVirtual.esquecerTrafego(id);
+    } else if (agv.online) {
+        publicar("comando/trafego", JSON.stringify({ acao: "LIBERAR" }), id);
+    } else if (clienteMQTT && clienteMQTT.connected && mqttEmpresa) {
+        // AGV desligado: limpa o estado retido dele no broker
+        clienteMQTT.publish(gerarTopico(id, "status/trafego"), JSON.stringify({ o: [], c: [], p: [] }), { qos: 1, retain: true });
+    } else {
+        ui.aviso("Sem conexão com o MQTT: não foi possível liberar.", "erro");
+        return;
+    }
+    ui.aviso(`Zonas do AGV ${id} liberadas.`, "sucesso");
+}
+
+document.addEventListener("click", evento => {
+    const botao = evento.target.closest("[data-liberar-zonas]");
+    if (botao) liberarZonasAGV(botao.dataset.liberarZonas);
+});
+
 function renderizarFrota() {
     const grid = document.getElementById("fleetGrid");
     if (!grid) return;
+    renderizarTrafegoFrota();
 
     const ordem = { emergencia: 0, falha: 1, atencao: 2, missao: 3, pronto: 4, desligado: 5, offline: 6 };
     const todos = Object.values(agvs).sort((a, b) => {

@@ -126,9 +126,9 @@ const AgvVirtual = (function () {
             js_publicar: (pTopico, pPayload, retido) => {
                 const topico = lerTexto(inst.memoria, pTopico);
                 const payload = lerTexto(inst.memoria, pPayload);
-                // o firmware publica em agv/<EMPRESA>/01/...; o site trata como agv/<id>/...
+                // o firmware publica em agv/<EMPRESA>/<id>/...; o site trata como agv/<id>/...
                 const base = inst.base || "agv/01/";
-                inst.filaSaida.push([topico.startsWith(base) ? `agv/${id}/` + topico.slice(base.length) : topico, payload]);
+                inst.filaSaida.push([topico.startsWith(base) ? `agv/${id}/` + topico.slice(base.length) : topico, payload, topico, Boolean(retido)]);
             }
         };
         const instancia = await WebAssembly.instantiate(modulo, { env, wasi_snapshot_preview1: wasi });
@@ -136,6 +136,11 @@ const AgvVirtual = (function () {
         inst.memoria = instancia.exports.memory;
         inst.exp._initialize();
         inst.ptrTopico = inst.exp.vi_buffer_topico();
+        if (inst.exp.vi_identidade) {
+            // cada AGV virtual com o próprio ID nos tópicos (tráfego entre eles)
+            escreverTexto(inst, inst.ptrTopico, `${empresaVirtual()}/${id}`, 160);
+            inst.exp.vi_identidade();
+        }
         inst.base = inst.exp.vi_topico_base ? lerTexto(inst.memoria, inst.exp.vi_topico_base()) : "agv/01/";
         inst.ptrPayload = inst.exp.vi_buffer_payload();
         inst.tamPayload = inst.exp.vi_tamanho_payload();
@@ -161,6 +166,7 @@ const AgvVirtual = (function () {
         }
         inst.exp.vi_entradas(inst.entradas);
         inst.versaoNvs = inst.exp.vi_nvs_versao();
+        entregarRetidos(inst);
         if (agv) {
             agv.virtualAtivo = true;
             salvarAgvsFrota();
@@ -226,11 +232,68 @@ const AgvVirtual = (function () {
             }
         });
         inst.obstaculos.forEach(o => e.vi_mundo_obstaculo(o.x, o.y, o.largura, o.profundidade, 0));
-        // Os outros AGVs virtuais também são obstáculos
+        if (!e.vi_outro_agv) {
+            Object.values(instancias).forEach(outro => {
+                if (outro === inst || !outro.exp) return;
+                e.vi_mundo_obstaculo(outro.exp.vi_x(), outro.exp.vi_y(), 0.34, 0.28, outro.exp.vi_th());
+            });
+        }
+    }
+
+    // Os outros AGVs virtuais aparecem no sensor de distância deste
+    function atualizarOutrosAgvs(inst) {
+        const e = inst.exp;
+        if (!e.vi_outro_agv) return;
+        e.vi_outros_limpar();
         Object.values(instancias).forEach(outro => {
             if (outro === inst || !outro.exp) return;
-            e.vi_mundo_obstaculo(outro.exp.vi_x(), outro.exp.vi_y(), 0.34, 0.28, outro.exp.vi_th());
+            e.vi_outro_agv(outro.exp.vi_x(), outro.exp.vi_y(), 0.34, 0.28, outro.exp.vi_th());
         });
+    }
+
+
+    /* ========================================================
+       TRÁFEGO ENTRE AGVS VIRTUAIS
+       ========================================================
+       O papel do broker: o status/trafego de cada AGV virtual vai para
+       os outros (agv/<empresa>/+/status/trafego) e o retido fica guardado
+       para quem ligar depois. */
+
+    const trafegoRetido = new Map();   // tópico completo -> payload
+
+    function empresaVirtual() {
+        try {
+            const codigo = window.Nuvem && Nuvem.empresa && Nuvem.empresa()?.codigo;
+            if (codigo && /^[a-z0-9-]{1,24}$/.test(codigo)) return codigo;
+        } catch (erro) { /* sem nuvem */ }
+        return "demo";
+    }
+
+    function entregarMqtt(inst, topico, payload) {
+        if (!inst.exp || !inst.brokerDisponivel) return;
+        escreverTexto(inst, inst.ptrTopico, topico, 160);
+        inst.exp.vi_mqtt(escreverTexto(inst, inst.ptrPayload, payload, inst.tamPayload));
+    }
+
+    function entregarTrafego(origem, topico, payload, retido) {
+        if (retido) trafegoRetido.set(topico, payload);
+        Object.values(instancias).forEach(inst => { if (inst !== origem) entregarMqtt(inst, topico, payload); });
+    }
+
+    // Ao ligar (ou o broker voltar): recebe o que estava retido, inclusive o
+    // próprio estado (o AGV que reiniciou continua dono das zonas que ocupava).
+    function entregarRetidos(inst) {
+        trafegoRetido.forEach((payload, topico) => entregarMqtt(inst, topico, payload));
+    }
+
+    // AGV virtual removido ou desligado com zonas presas: solta tudo dele
+    function esquecerTrafego(id) {
+        const vazio = JSON.stringify({ o: [], c: [], p: [] });
+        [...trafegoRetido.keys()].filter(t => t.split("/")[2] === id).forEach(topico => {
+            trafegoRetido.delete(topico);
+            entregarTrafego(null, topico, vazio, false);
+        });
+        entregarAoSite(`agv/${id}/status/trafego`, vazio);
     }
 
 
@@ -266,7 +329,8 @@ const AgvVirtual = (function () {
             const inst = instancias[id];
             if (!inst || inst.pausado) return;
             if (inst.revisaoMundo !== planta.revisao) montarMundo(inst);
-            else if (ids.length > 1) atualizarObstaculos(inst);
+            else if (ids.length > 1 && !inst.exp.vi_outro_agv) atualizarObstaculos(inst);
+            if (ids.length > 1) atualizarOutrosAgvs(inst);
 
             const ms = Math.round(dt * (inst.mundo.velocidade || 1));
             // passos de até 20 ms para os pulsos de botão terem resolução
@@ -291,7 +355,8 @@ const AgvVirtual = (function () {
             // Publicações do firmware -> site (fora da chamada ao WASM)
             const fila = inst.filaSaida;
             inst.filaSaida = [];
-            fila.forEach(([t, p]) => {
+            fila.forEach(([t, p, original, retido]) => {
+                if (t.endsWith("/status/trafego")) entregarTrafego(inst, original, p, retido);
                 if (t.endsWith("/status/sensores/rfid")) {
                     try { ultimoRfid[id] = JSON.parse(p).codigo; } catch (erro) { /* ignora */ }
                 }
@@ -388,6 +453,7 @@ const AgvVirtual = (function () {
     async function remover(id) {
         if (!(await ui.confirmar({ titulo: `Remover o AGV virtual ${id}?`, texto: "A memória e a configuração salvas dele neste navegador também serão apagadas.", confirmar: "Remover", perigo: true }))) return;
         desligar(id);
+        esquecerTrafego(id);
         delete agvs[id];
         localStorage.removeItem(CHAVE_NVS + id);
         localStorage.removeItem(CHAVE_CONFIG + id);
@@ -463,6 +529,7 @@ const AgvVirtual = (function () {
     function desenharSobreposicao(m, grupo, { Y, px, tema }) {
         const el = MapaSVG.el;
         const t = tema || MapaSVG.tema();
+        if (typeof desenharZonasTrafego === "function") desenharZonasTrafego(m, grupo, { Y, px, tema: t });
         Object.values(instancias).forEach(inst => {
             inst.obstaculos.forEach(o => {
                 el("rect", { x: o.x - o.largura / 2, y: Y(o.y + o.profundidade / 2), width: o.largura, height: o.profundidade, fill: t.redSoft, stroke: t.red, "stroke-width": 2, rx: 0.02, "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, grupo);
@@ -723,6 +790,7 @@ const AgvVirtual = (function () {
             if (!inst) return;
             inst.brokerDisponivel = e.target.checked;
             inst.exp.vi_broker(e.target.checked ? 1 : 0);
+            if (e.target.checked) entregarRetidos(inst);
         });
 
         // painel físico
@@ -809,7 +877,7 @@ const AgvVirtual = (function () {
 
     return {
         ligar, desligar, receberComando, pulsar, alternar, posicionar, abrir, criarNovo, adicionarObstaculo,
-        retomar, ligarBotoes, instancias, BITS,
+        retomar, ligarBotoes, instancias, BITS, esquecerTrafego,
         _passo: passo
     };
 })();

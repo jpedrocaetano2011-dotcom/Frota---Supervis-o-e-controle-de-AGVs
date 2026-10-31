@@ -36,7 +36,7 @@
         administrar: ["fornecedor", "admin"]
     };
     // Comandos que mudam o AGV em si (parâmetros, firmware, calibração): só admin.
-    const TOPICOS_ADMIN = /^comando\/(configuracao|ota|calibracao_qtr|calibracao_mecanica)$/;
+    const TOPICOS_ADMIN = /^comando\/(configuracao|ota|calibracao_qtr|calibracao_mecanica|trafego)$/;
 
     let modo = "local";
     let cliente = null, usuario = null, perfil = null, empresa = null;
@@ -176,13 +176,13 @@
         const [a, p, m] = await Promise.all([
             cliente.from("agvs").select("id, nome").eq("empresa_id", id).order("id"),
             cliente.from("plantas").select("rascunho, publicada, revisao").eq("empresa_id", id).maybeSingle(),
-            cliente.from("missoes").select("id, nome, etapas").eq("empresa_id", id).order("id")
+            cliente.from("missoes").select("id, nome, etapas, prioridade").eq("empresa_id", id).order("id")
         ]);
         [a, p, m].forEach(r => { if (r.error) throw r.error; });
         dados = {
             agvs: a.data,
             planta: p.data || { rascunho: null, publicada: null, revisao: 0 },
-            missoes: m.data.map(x => ({ id: x.id, nome: x.nome, etapas: x.etapas }))
+            missoes: m.data.map(x => Object.assign({ id: x.id, nome: x.nome, etapas: x.etapas }, x.prioridade !== 1 && x.prioridade != null ? { prioridade: x.prioridade } : {}))
         };
         revisaoNuvem = dados.planta.revisao || 0;
         rascunhoNuvem = JSON.stringify(dados.planta.rascunho);
@@ -293,7 +293,7 @@
         return fila;
     }
 
-    const fotoDaMissao = m => JSON.stringify({ nome: m.nome || "", etapas: Array.isArray(m.etapas) ? m.etapas : [] });
+    const fotoDaMissao = m => JSON.stringify({ nome: m.nome || "", etapas: Array.isArray(m.etapas) ? m.etapas : [], prioridade: Number.isInteger(m.prioridade) ? m.prioridade : 1 });
 
     function salvarMissoes(lista) {
         if (modo !== "nuvem" || !pode("operar")) return;

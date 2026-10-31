@@ -1417,3 +1417,8 @@ body.entrando > :not(.entrada):not(.toasts):not(script) { visibility: hidden; }
 @media (max-width: 700px) {
     .usuarios-form-mqtt, .usuarios-form-linha-simples { grid-template-columns: 1fr; }
 }
+
+/* Frota › tráfego entre AGVs */
+.frota-trafego { margin-top: 16px; }
+.frota-trafego .card-barra { padding: 14px 16px; }
+.frota-trafego td .pilula + .pilula { margin-left: 4px; }

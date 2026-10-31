@@ -972,11 +972,179 @@
             etapas.push(copia);
         }
 
+        const pacote = { tipo: "CARREGAR_MISSAO", missao: String(missao.id), revisaoPlanta: planta.revisao, etapas };
+        const prioridade = Math.max(0, Math.min(3, Math.round(Number(missao.prioridade ?? 1))));
+        if (prioridade !== 1) pacote.prioridade = prioridade;
+        const trafego = anotarTrafego(planta, pacote, posicao?.ponto || null);
+        if (!trafego.sucesso) return { sucesso: false, erro: trafego.erro };
         return {
             sucesso: true,
-            pacote: { tipo: "CARREGAR_MISSAO", missao: String(missao.id), revisaoPlanta: planta.revisao, etapas },
+            pacote,
             posicaoFinal: { ponto, orientacao }
         };
+    }
+
+
+    /* ========================================================
+       TRAFEGO: ZONAS DE CONFLITO
+       ========================================================
+       Onde dois AGVs podem se encontrar, calculado da planta:
+       - juncao/cruzamento: ponto onde chegam caminhos de dois lados;
+       - corredor de mao dupla (com a estacao na ponta, se houver);
+       - troca lateral (com os dois pontos das pontas).
+       Zonas que se tocam viram uma so. Fora delas os AGVs andam em fila
+       (o sensor de distancia cuida). Antes de uma zona o AGV pede
+       passagem; se nao puder, para MARGEM_PARADA antes do ponto, num
+       trecho de linha comum ("trecho de espera"), e espera.
+    */
+    const TRAFEGO = { margemParada: 1.2, margemSaida: 0.8, esperaMinima: 2.4, maxZonasMissao: 32, distanciaVizinhos: 1.2 };
+
+    function zonasDeConflito(planta) {
+        const pai = new Map();
+        const achar = x => { while (pai.get(x) !== x) { pai.set(x, pai.get(pai.get(x))); x = pai.get(x); } return x; };
+        const unir = (a, b) => { const ra = achar(a), rb = achar(b); if (ra !== rb) pai.set(ra, rb); };
+        const marcados = new Set();
+        const elemento = e => { if (!pai.has(e)) pai.set(e, e); return e; };
+        const zona = itens => { itens.forEach(elemento); itens.forEach(i => marcados.add(i)); for (let k = 1; k < itens.length; k++) unir(itens[0], itens[k]); };
+
+        const antes = new Map();       // no -> pontos de onde se chega nele
+        const grau = new Map();        // no -> segmentos ligados
+        const liga = (de, para) => { if (!antes.has(para)) antes.set(para, new Set()); antes.get(para).add(de); };
+        planta.segmentos.forEach(s => {
+            if (!noPorId(planta, s.a) || !noPorId(planta, s.b)) return;
+            grau.set(s.a, (grau.get(s.a) || 0) + 1);
+            grau.set(s.b, (grau.get(s.b) || 0) + 1);
+            if (s.sentido === "A_PARA_B") liga(s.a, s.b);
+            else if (s.sentido === "B_PARA_A") liga(s.b, s.a);
+            else { liga(s.a, s.b); liga(s.b, s.a); }
+        });
+        // juncoes: chega gente de dois lugares diferentes
+        antes.forEach((origens, no) => { if (origens.size >= 2) zona(["n:" + no]); });
+        planta.segmentos.forEach(s => {
+            if (!noPorId(planta, s.a) || !noPorId(planta, s.b)) return;
+            if (tipoSegmento(s) === "LATERAL") {
+                zona(["s:" + s.id, "n:" + s.a, "n:" + s.b]);
+            } else if (s.sentido === "DUPLO") {
+                // corredor de mao dupla: o segmento, a ponta sem saida (estacao)
+                // e os pontos internos do corredor
+                const itens = ["s:" + s.id];
+                [s.a, s.b].forEach(n => {
+                    const ligados = planta.segmentos.filter(x => x.a === n || x.b === n);
+                    const soCorredor = ligados.every(x => x.sentido === "DUPLO" && tipoSegmento(x) === "LINHA");
+                    if (grau.get(n) === 1 || (soCorredor && grau.get(n) === 2)) itens.push("n:" + n);
+                });
+                zona(itens);
+            }
+        });
+        // pontos de zona muito perto um do outro (ex.: as duas faixas a 0,5 m,
+        // com uma estacao de cada lado na mesma coluna): dois AGVs chegando de
+        // frente um para o outro se veem no sensor e ninguem anda. Viram uma zona so.
+        const nosZona = [...marcados].filter(e => e.startsWith("n:")).map(e => noPorId(planta, e.slice(2))).filter(Boolean);
+        for (let i = 0; i < nosZona.length; i++) for (let k = i + 1; k < nosZona.length; k++) {
+            const a = nosZona[i], b = nosZona[k];
+            if (Math.hypot(a.x - b.x, a.y - b.y) < TRAFEGO.distanciaVizinhos) unir("n:" + a.id, "n:" + b.id);
+        }
+
+        const grupos = new Map();
+        marcados.forEach(e => {
+            const r = achar(e);
+            if (!grupos.has(r)) grupos.set(r, { nos: [], segmentos: [] });
+            const g = grupos.get(r);
+            if (e.startsWith("n:")) g.nos.push(e.slice(2)); else g.segmentos.push(e.slice(2));
+        });
+        const lista = [...grupos.values()].map(g => {
+            g.nos.sort(); g.segmentos.sort();
+            const base = g.nos[0] || g.segmentos[0];
+            return { id: ("Z" + base).slice(0, 9), nos: g.nos, segmentos: g.segmentos };
+        });
+        // ids unicos (cortados em 9 caracteres para caber no firmware)
+        const usados = new Map();
+        lista.forEach(z => { const n = usados.get(z.id) || 0; usados.set(z.id, n + 1); if (n) z.id = (z.id.slice(0, 7) + "~" + n).slice(0, 9); });
+        return lista.sort((a, b) => a.id.localeCompare(b.id));
+    }
+
+    // Marca na missao compilada onde pedir passagem, onde parar e o que
+    // liberar. Campos no trecho (so quando ha trafego):
+    //   pedir     mascara das zonas que precisa ter antes de passar de "parada"
+    //   parada    metros desde o inicio do trecho (-1 = antes de sair do ponto)
+    //   liberar   mascara das zonas a soltar depois de "liberarEm" metros
+    // Na missao: zonas (nomes; bit i = zonas[i]) e zonasInicio (do ponto de partida).
+    function anotarTrafego(planta, pacote, pontoInicial) {
+        const zonas = zonasDeConflito(planta);
+        const doNo = new Map(), doSeg = new Map();
+        zonas.forEach(z => { z.nos.forEach(n => doNo.set(n, z.id)); z.segmentos.forEach(s => doSeg.set(s, z.id)); });
+        const trechos = [];
+        const inicioEtapa = new Set(), fimEtapa = new Set();
+        pacote.etapas.forEach(e => {
+            if (!(e.trechos || []).length) return;
+            inicioEtapa.add(trechos.length);
+            e.trechos.forEach(t => trechos.push(t));
+            fimEtapa.add(trechos.length - 1);
+        });
+        trechos.forEach(t => { delete t.pedir; delete t.parada; delete t.liberar; delete t.liberarEm; });
+        delete pacote.zonas; delete pacote.zonasInicio;
+        const inicio = pontoInicial ? doNo.get(pontoInicial) : null;
+        const ocupa = trechos.map(t => {
+            const z = new Set();
+            if (doSeg.has(t.segmento)) z.add(doSeg.get(t.segmento));
+            if (doNo.has(t.destino)) z.add(doNo.get(t.destino));
+            return z;
+        });
+        const usadas = new Set(inicio ? [inicio] : []);
+        ocupa.forEach(z => z.forEach(id => usadas.add(id)));
+        if (!usadas.size) return { sucesso: true };
+        if (usadas.size > TRAFEGO.maxZonasMissao) {
+            return { sucesso: false, erro: `A rota passa por ${usadas.size} zonas de conflito (máximo ${TRAFEGO.maxZonasMissao}). Divida a missão.` };
+        }
+        const nomes = [...usadas].sort();
+        const bit = id => 2 ** nomes.indexOf(id);
+        const mascara = conj => [...conj].reduce((m, id) => m + bit(id), 0);
+        const espera = trechos.map(t => t.tipo !== "LATERAL" && !doSeg.has(t.segmento) && t.comprimento >= TRAFEGO.esperaMinima);
+
+        // Grupo a partir do trecho j: tudo que ele usa ate poder parar de novo
+        // fora de uma zona: o proximo trecho de espera ou o fim da etapa (o AGV
+        // para no destino; numa estacao, so a zona dela fica com ele).
+        const grupo = j => {
+            const g = new Set();
+            for (let k = j; k < trechos.length; k++) {
+                if (k > j && espera[k]) break;
+                ocupa[k].forEach(id => g.add(id));
+                if (fimEtapa.has(k)) break;
+            }
+            return g;
+        };
+        // Simula o que o AGV segura, trecho a trecho:
+        // - pede antes de sair do ponto (comeco de etapa que nao e trecho de
+        //   espera) ou no ponto de parada de cada trecho de espera;
+        // - solta o que nao vai mais usar ate a proxima parada.
+        let segura = new Set(inicio ? [inicio] : []);
+        trechos.forEach((t, j) => {
+            if (inicioEtapa.has(j) && !espera[j]) {
+                const g = grupo(j);
+                const falta = [...g].filter(id => !segura.has(id));
+                if (falta.length) { t.pedir = mascara(g); t.parada = -1; }
+                g.forEach(id => segura.add(id));
+            }
+            const fica = grupo(j);
+            const soltar = [...segura].filter(id => !fica.has(id));
+            if (soltar.length) {
+                t.liberar = mascara(soltar);
+                t.liberarEm = arred(Math.min(TRAFEGO.margemSaida, t.comprimento || 0), 2);
+                soltar.forEach(id => segura.delete(id));
+            }
+            if (espera[j]) {
+                const g = grupo(j);
+                const falta = [...g].filter(id => !segura.has(id));
+                if (falta.length) {
+                    t.pedir = mascara(g);
+                    t.parada = arred(Math.max(TRAFEGO.margemSaida, t.comprimento - TRAFEGO.margemParada), 2);
+                }
+                g.forEach(id => segura.add(id));
+            }
+        });
+        pacote.zonas = nomes;
+        if (inicio) pacote.zonasInicio = bit(inicio);
+        return { sucesso: true };
     }
 
     // Remove campos que so o site usa (economiza bytes no MQTT)
@@ -1087,7 +1255,7 @@
     const API = {
         VERSAO, LIMITES, TIPOS_NO, TIPOS_LAYOUT, TIPOS_SEGMENTO, DISTANCIA_SUGESTAO_LATERAL,
         criarVazia, normalizar, migrarV1, validar,
-        calcularRota, compilarIrPara, compilarMissao, pacoteParaESP,
+        calcularRota, compilarIrPara, compilarMissao, pacoteParaESP, zonasDeConflito, anotarTrafego, TRAFEGO,
         noPorId, segmentoPorId, estacaoPorId, acessosDaEstacao, estacaoDoNo, nomeDoPonto, candidatosDestino,
         comprimentoSegmento, anguloEntre, anguloExato, tagsNoSentido, tipoSegmento, segmentoGemeo,
         localizarRfid, velocidadeSegmento, proximoId, prefixoNo, normalizarAngulo, diferencaDirecao,
