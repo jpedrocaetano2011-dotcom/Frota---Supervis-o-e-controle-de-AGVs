@@ -35,13 +35,21 @@ const Usuarios = (() => {
             const db = Nuvem.cliente();
             const empresa = Nuvem.empresa();
             const fornecedor = Nuvem.perfil().papel === "fornecedor";
-            const [perfis, convites, empresas] = await Promise.all([
+            const nada = Promise.resolve({ data: null });
+            const [perfis, convites, empresas, mqtts, mqttAgvs, agvsDb] = await Promise.all([
                 db.from("perfis").select("usuario_id, email, nome, papel, criado_em").eq("empresa_id", empresa.id).order("email"),
                 db.from("convites").select("email, papel, criado_em").eq("empresa_id", empresa.id).order("email"),
-                fornecedor ? db.from("empresas").select("*").order("nome") : Promise.resolve({ data: null })
+                fornecedor ? db.from("empresas").select("*").order("nome") : nada,
+                fornecedor ? db.from("mqtt_empresas").select("*") : nada,
+                fornecedor ? db.from("mqtt_agvs").select("*").eq("empresa_id", empresa.id).order("agv_id") : nada,
+                fornecedor ? db.from("agvs").select("id, nome").eq("empresa_id", empresa.id).order("id") : nada
             ]);
             [perfis, convites, empresas].forEach(r => { if (r.error) throw r.error; });
-            el.innerHTML = html(empresa, perfis.data, convites.data, empresas.data, fornecedor);
+            // Banco sem a parte 2 (01_esquema.sql antigo): segue sem a seção de MQTT.
+            const semTabelasMqtt = [mqtts, mqttAgvs].some(r => r.error);
+            if (semTabelasMqtt) console.warn("Tabelas de MQTT ausentes: rode o 01_esquema.sql novo.", mqtts.error || mqttAgvs.error);
+            el.innerHTML = html(empresa, perfis.data, convites.data, empresas.data, fornecedor) +
+                (fornecedor ? htmlMqtt(empresa, semTabelasMqtt ? null : mqtts.data, semTabelasMqtt ? null : mqttAgvs.data, agvsDb.data || []) : "");
         } catch (erro) {
             el.innerHTML = `<section class="card"><p class="entrada-erro">Não foi possível carregar: ${esc(Nuvem.traduzirErro(erro))}</p><button type="button" class="btn" data-usuarios="recarregar">Tentar de novo</button></section>`;
         } finally {
@@ -141,6 +149,83 @@ const Usuarios = (() => {
             </section>`;
     }
 
+    /* ---------------- MQTT da empresa (só fornecedor) ---------------- */
+
+    function senhaAleatoria() {
+        const letras = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+        const v = new Uint32Array(20);
+        crypto.getRandomValues(v);
+        return Array.from(v, n => letras[n % letras.length]).join("");
+    }
+
+    function htmlMqtt(empresa, mqtts, mqttAgvs, agvsDb) {
+        if (mqtts === null) {
+            return `<section class="card usuarios-mqtt"><h2>MQTT da empresa</h2>
+                <p class="entrada-erro">O banco ainda não tem as tabelas da parte 2. Rode de novo o <span class="mono">backend/supabase/01_esquema.sql</span> inteiro no SQL Editor do Supabase e recarregue a página.</p></section>`;
+        }
+        const c = empresa.codigo;
+        const atual = mqtts.find(m => m.empresa_id === empresa.id) || null;
+        const urlPadrao = atual?.url || mqtts.find(m => m.url)?.url || "";
+        const porAgv = new Map(mqttAgvs.map(m => [m.agv_id, m]));
+        const linhasAgv = agvsDb.map(a => {
+            const m = porAgv.get(a.id);
+            return `<tr>
+                <td><strong class="mono">${esc(a.id)}</strong> <span class="suave">${esc(a.nome)}</span></td>
+                <td>${m ? `<span class="pilula verde">gerada</span>` : `<span class="pilula">sem credencial</span>`}</td>
+                <td class="usuarios-acao"><button type="button" class="btn btn-mini" data-mqtt-agv="${esc(a.id)}" ${m ? 'data-ja="1"' : ""}>${m ? "Gerar outra senha" : "Gerar credencial"}</button></td>
+            </tr>
+            ${m ? `<tr class="usuarios-mqtt-ficha"><td colspan="3">
+                <details>
+                    <summary>Ver o que colocar no HiveMQ e no firmware do AGV ${esc(a.id)}</summary>
+                    <ol class="usuarios-passos">
+                        <li>HiveMQ › <em>Access Management</em> › <em>Permissions</em> › <em>Create new permission</em>: nome <code>agv-${esc(c)}-${esc(a.id)}</code>, Topic Filter <code>agv/${esc(c)}/${esc(a.id)}/#</code>.</li>
+                        <li><em>Access Credentials</em>: Username <code>${esc(m.usuario)}</code>, Password <code>${esc(m.senha)}</code>, Permission <code>agv-${esc(c)}-${esc(a.id)}</code> › <em>Create Credential</em>.</li>
+                        <li>No topo do <span class="mono">AGV_FROTA.ino</span>, troque estas linhas e grave o AGV:</li>
+                    </ol>
+                    <pre class="usuarios-codigo" data-copiar>#define EMPRESA "${esc(c)}"
+#define AGV_ID "${esc(a.id)}"
+const char* MQTT_USER     = "${esc(m.usuario)}";
+const char* MQTT_PASSWORD = "${esc(m.senha)}";</pre>
+                    <button type="button" class="btn btn-mini" data-copiar-anterior>Copiar linhas</button>
+                </details>
+            </td></tr>` : ""}`;
+        }).join("");
+
+        return `
+        <section class="card usuarios-mqtt">
+            <div class="usuarios-mqtt-topo">
+                <div><h2>MQTT · ${esc(empresa.nome)}</h2><div class="card-sub">Só você (fornecedor) vê. Tópicos desta empresa: <code>agv/${esc(c)}/&lt;AGV&gt;/…</code></div></div>
+                ${atual ? `<span class="pilula verde">configurado</span>` : `<span class="pilula ambar">não configurado</span>`}
+            </div>
+
+            <h3>1. Usuário do site (painel)</h3>
+            <p class="suave usuarios-dica">Todas as telas abertas da ${esc(empresa.nome)} usam este usuário. Crie no HiveMQ › <em>Access Management</em>:</p>
+            <ol class="usuarios-passos">
+                <li><em>Permissions</em> › <em>Create new permission</em>: nome <code>site-${esc(c)}</code>, Topic Filter <code>agv/${esc(c)}/#</code>.</li>
+                <li><em>Access Credentials</em>: o usuário e a senha abaixo, Permission <code>site-${esc(c)}</code> › <em>Create Credential</em>.</li>
+                <li>Salve aqui. Mudanças no HiveMQ levam até 5 minutos para valer.</li>
+            </ol>
+            <form class="usuarios-form usuarios-form-mqtt" data-form-usuarios="mqtt">
+                <label class="campo usuarios-campo-largo"><span>Endereço (WebSocket)</span><input name="url" required placeholder="wss://SEU-CLUSTER.s1.eu.hivemq.cloud:8884/mqtt" value="${esc(urlPadrao)}" spellcheck="false"></label>
+                <label class="campo"><span>Usuário</span><input name="usuario" required value="${esc(atual?.usuario || c + "-site")}" spellcheck="false"></label>
+                <label class="campo"><span>Senha</span><span class="usuarios-senha"><input name="senha" required class="mono" value="${esc(atual?.senha || "")}" spellcheck="false" autocomplete="off"><button type="button" class="btn btn-mini" data-gerar-senha>Gerar</button></span></label>
+                <details class="usuarios-campo-largo">
+                    <summary>Usuário só de leitura para visualizadores (opcional)</summary>
+                    <p class="suave usuarios-dica">Só vale em broker que permite "só assinar" com filtro de tópico. No HiveMQ Serverless não dá: deixe em branco e os visualizadores usam o usuário acima (o site continua bloqueando os comandos deles).</p>
+                    <div class="usuarios-form-linha-simples">
+                        <label class="campo"><span>Usuário de leitura</span><input name="leitura_usuario" value="${esc(atual?.leitura_usuario || "")}" spellcheck="false"></label>
+                        <label class="campo"><span>Senha de leitura</span><input name="leitura_senha" class="mono" value="${esc(atual?.leitura_senha || "")}" spellcheck="false" autocomplete="off"></label>
+                    </div>
+                </details>
+                <div class="usuarios-campo-largo"><button type="submit" class="btn btn-primario">Salvar MQTT da empresa</button></div>
+            </form>
+
+            <h3>2. Um usuário por AGV</h3>
+            <p class="suave usuarios-dica">Cada AGV só enxerga os próprios tópicos (<code>agv/${esc(c)}/&lt;ID&gt;/#</code>). Cadastre o AGV na Frota primeiro.</p>
+            ${agvsDb.length ? `<div class="tabela-rolagem"><table class="tabela-usuarios"><tbody>${linhasAgv}</tbody></table></div>` : `<p class="suave">Nenhum AGV cadastrado na frota desta empresa.</p>`}
+        </section>`;
+    }
+
     async function executar(promessa, sucesso) {
         try {
             const { data, error } = await promessa;
@@ -165,6 +250,18 @@ const Usuarios = (() => {
         if (form.dataset.formUsuarios === "convidar") {
             await executar(db.rpc("convidar", { p_email: v.email, p_papel: v.papel, p_empresa: Nuvem.empresa().id }),
                 r => r === "convidado" ? `Acesso liberado para ${v.email}. Ela entra ao criar a conta.` : `${v.email} já tinha conta: acesso liberado agora.`);
+        } else if (form.dataset.formUsuarios === "mqtt") {
+            const url = v.url.trim();
+            if (!/^wss?:\/\/[^/]+/i.test(url)) {
+                ui.aviso("O endereço precisa começar com wss:// (ex.: wss://seu-cluster.s1.eu.hivemq.cloud:8884/mqtt).", "erro");
+                abrir();
+                return;
+            }
+            const ok = await executar(db.from("mqtt_empresas").upsert({
+                empresa_id: Nuvem.empresa().id, url, usuario: v.usuario.trim(), senha: v.senha,
+                leitura_usuario: (v.leitura_usuario || "").trim() || null, leitura_senha: v.leitura_senha || null
+            }), null);
+            if (ok) Nuvem.avisoComAcao("MQTT da empresa salvo. Atualize a página para o site conectar com ele.", "Atualizar", () => location.reload());
         } else if (form.dataset.formUsuarios === "empresa") {
             await executar(db.rpc("criar_empresa", { p_nome: v.nome, p_codigo: v.codigo, p_email_admin: v.email || "" }),
                 `Empresa ${v.nome} criada.${v.email ? ` ${v.email} entra como administrador.` : ""}`);
@@ -188,6 +285,17 @@ const Usuarios = (() => {
             executar(db.rpc("remover_da_empresa", { p_usuario: alvo.dataset.remover }), "Acesso removido.");
         } else if (alvo.dataset.cancelar) {
             executar(db.rpc("cancelar_convite", { p_email: alvo.dataset.cancelar }), "Convite cancelado.");
+        } else if (alvo.dataset.gerarSenha !== undefined) {
+            const campo = alvo.closest(".usuarios-senha")?.querySelector("input");
+            if (campo) campo.value = senhaAleatoria();
+        } else if (alvo.dataset.mqttAgv) {
+            if (alvo.dataset.ja && !(await ui.confirmar({ titulo: `Gerar outra senha para o AGV ${alvo.dataset.mqttAgv}?`, texto: "A senha antiga para de valer quando você trocar no HiveMQ. O AGV só volta a conectar depois de gravado com a nova.", confirmar: "Gerar" }))) return;
+            const id = alvo.dataset.mqttAgv;
+            executar(db.from("mqtt_agvs").upsert({ empresa_id: Nuvem.empresa().id, agv_id: id, usuario: `${Nuvem.empresa().codigo}-${id}`, senha: senhaAleatoria() }),
+                `Credencial do AGV ${id} gerada. Abra “Ver o que colocar” logo abaixo dele.`);
+        } else if (alvo.dataset.copiarAnterior !== undefined) {
+            const texto = alvo.previousElementSibling?.textContent || "";
+            navigator.clipboard?.writeText(texto).then(() => ui.aviso("Linhas copiadas.", "sucesso"), () => ui.aviso("Selecione o texto e copie com Ctrl+C.", "info"));
         } else if (alvo.dataset.abrirEmpresa) {
             Nuvem.trocarEmpresa(alvo.dataset.abrirEmpresa);
         } else if (alvo.dataset.ativa) {

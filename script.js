@@ -1162,17 +1162,13 @@ const TOPICOS = {
     }
 };
 /*
-   Coloque aqui as mesmas credenciais que você já usa no seu projeto.
-   Elas ficam no navegador porque esta é uma aplicação web estática.
+   O endereço, o usuário e a senha do MQTT não ficam no código: vêm da
+   empresa, depois do login (Nuvem.conexaoMqtt). Tópicos no broker:
+   agv/<empresa>/<id>/... ; dentro do site o resto do código usa
+   agv/<id>/... (o prefixo da empresa é tirado ao receber).
 */
-const mqttConfig = {
-    host: "f6ceab8162134aa0b1c56a36b2d292f2.s1.eu.hivemq.cloud",
-    port: 8884,
-    protocol: "wss",
-    path: "/mqtt",
-    username: "agvomni1",
-    password: "agvomni1"
-};
+let mqttEmpresa = null;
+let motivoMqtt = null;   // por que está desconectado (mostrado no menu)
 
 
 function agvAtual() {
@@ -1180,7 +1176,7 @@ function agvAtual() {
 }
 
 function gerarTopico(id, caminho) {
-    return `agv/${id}/${caminho}`;
+    return `agv/${mqttEmpresa}/${id}/${caminho}`;
 }
 
 function marcarHeartbeat(id) {
@@ -1206,20 +1202,28 @@ function atualizarOnline() {
 
 function conectarMQTT() {
 
-    if (!window.mqtt) {
-        console.error("Biblioteca MQTT não carregada.");
+    const conexao = window.Nuvem ? Nuvem.conexaoMqtt() : null;
+    if (!conexao) {
+        // Sem MQTT configurado para a empresa: só AGVs virtuais.
+        atualizarIndicadorMQTT(false, "MQTT não configurado");
         return;
     }
 
-    clienteMQTT = mqtt.connect(
-        `wss://${mqttConfig.host}:${mqttConfig.port}${mqttConfig.path}`,
-        {
-            username: mqttConfig.username,
-            password: mqttConfig.password,
-            clientId: `painel-frota-${Math.random().toString(16).slice(2)}`,
-            reconnectPeriod: 3000
-        }
-    );
+    if (!window.mqtt) {
+        console.error("Biblioteca MQTT não carregada.");
+        atualizarIndicadorMQTT(false, "MQTT indisponível");
+        return;
+    }
+
+    mqttEmpresa = conexao.empresa;
+    const prefixo = `agv/${mqttEmpresa}/`;
+
+    clienteMQTT = mqtt.connect(conexao.url, {
+        username: conexao.usuario,
+        password: conexao.senha,
+        clientId: `painel-${mqttEmpresa}-${Math.random().toString(16).slice(2, 10)}`,
+        reconnectPeriod: 3000
+    });
 
     clienteMQTT.on("connect", () => {
 
@@ -1227,13 +1231,13 @@ function conectarMQTT() {
 
         atualizarIndicadorMQTT(true);
 
-        // O ESP publica eventos em agv/<id>/evento/missao, por isso
-        // a assinatura precisa do curinga "#" (antes era só agv/+/evento).
+        // Só os tópicos da própria empresa. Os eventos vêm em
+        // agv/<empresa>/<id>/evento/missao, por isso o curinga "#".
         [
-            "agv/+/status/#",
-            "agv/+/evento",
-            "agv/+/evento/#",
-            "agv/+/sistema/#"
+            `${prefixo}+/status/#`,
+            `${prefixo}+/evento`,
+            `${prefixo}+/evento/#`,
+            `${prefixo}+/sistema/#`
         ].forEach(topico => {
 
             clienteMQTT.subscribe(topico, { qos: 1 }, erro => {
@@ -1247,19 +1251,28 @@ function conectarMQTT() {
     });
 
     clienteMQTT.on("message", (topico, mensagem) => {
-        processarMensagemMQTT(topico, mensagem.toString());
+        if (!topico.startsWith(prefixo)) return;
+        processarMensagemMQTT("agv/" + topico.slice(prefixo.length), mensagem.toString());
     });
 
     clienteMQTT.on("error", erro => {
         console.error("Erro MQTT:", erro);
+        if (/not authori[sz]ed|bad user ?name|bad username or password/i.test(String(erro?.message || ""))) {
+            // Usuário ou senha recusados: não adianta insistir a cada 3 s.
+            motivoMqtt = "MQTT recusou o acesso";
+            clienteMQTT.end(true);
+            atualizarIndicadorMQTT(false, motivoMqtt);
+            ui.aviso("O broker MQTT recusou o usuário e a senha da empresa. Confira o cadastro em Usuários › MQTT (fornecedor).", "erro");
+            return;
+        }
         atualizarIndicadorMQTT(false);
     });
 
     clienteMQTT.on("close", () => {
-        atualizarIndicadorMQTT(false);
+        atualizarIndicadorMQTT(false, motivoMqtt);
     });
 }
-function atualizarIndicadorMQTT(conectado) {
+function atualizarIndicadorMQTT(conectado, motivo) {
     const dot = document.getElementById("indicadorMqtt");
     const status = document.getElementById("statusMqtt");
     const sideDot = document.getElementById("sidebarMqttDot");
@@ -1270,8 +1283,8 @@ function atualizarIndicadorMQTT(conectado) {
         el.classList.toggle("verde", conectado);
         el.classList.toggle("vermelho", !conectado);
     });
-    if (status) status.textContent = conectado ? "CONECTADO" : "DESCONECTADO";
-    if (sideText) sideText.textContent = conectado ? "MQTT conectado" : "MQTT desconectado";
+    if (status) status.textContent = conectado ? "CONECTADO" : (motivo || "DESCONECTADO").toUpperCase();
+    if (sideText) sideText.textContent = conectado ? "MQTT conectado" : (motivo || "MQTT desconectado");
 
     Object.values(agvs).forEach(agv => agv.mqttConectado = conectado);
     atualizarPainel();

@@ -126,7 +126,9 @@ const AgvVirtual = (function () {
             js_publicar: (pTopico, pPayload, retido) => {
                 const topico = lerTexto(inst.memoria, pTopico);
                 const payload = lerTexto(inst.memoria, pPayload);
-                inst.filaSaida.push([topico.replace(/^agv\/01\//, `agv/${id}/`), payload]);
+                // o firmware publica em agv/<EMPRESA>/01/...; o site trata como agv/<id>/...
+                const base = inst.base || "agv/01/";
+                inst.filaSaida.push([topico.startsWith(base) ? `agv/${id}/` + topico.slice(base.length) : topico, payload]);
             }
         };
         const instancia = await WebAssembly.instantiate(modulo, { env, wasi_snapshot_preview1: wasi });
@@ -134,6 +136,7 @@ const AgvVirtual = (function () {
         inst.memoria = instancia.exports.memory;
         inst.exp._initialize();
         inst.ptrTopico = inst.exp.vi_buffer_topico();
+        inst.base = inst.exp.vi_topico_base ? lerTexto(inst.memoria, inst.exp.vi_topico_base()) : "agv/01/";
         inst.ptrPayload = inst.exp.vi_buffer_payload();
         inst.tamPayload = inst.exp.vi_tamanho_payload();
 
@@ -322,7 +325,7 @@ const AgvVirtual = (function () {
             return false;
         }
         if (!inst.brokerDisponivel) return false;
-        escreverTexto(inst, inst.ptrTopico, `agv/01/${caminho}`, 160);
+        escreverTexto(inst, inst.ptrTopico, `${inst.base}${caminho}`, 160);
         const n = escreverTexto(inst, inst.ptrPayload, mensagem, inst.tamPayload);
         inst.exp.vi_mqtt(n);
         return true;

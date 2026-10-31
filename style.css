@@ -1396,3 +1396,24 @@ body.entrando > :not(.entrada):not(.toasts):not(script) { visibility: hidden; }
     .usuarios-grade { grid-template-columns: 1fr; }
     .tabela-usuarios th, .tabela-usuarios td { padding: 10px 12px; }
 }
+
+/* Usuários › MQTT (fornecedor) */
+.usuarios-mqtt { margin-top: 16px; display: flex; flex-direction: column; gap: 10px; }
+.usuarios-mqtt-topo { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.usuarios-mqtt h3 { font-size: 14px; font-weight: 600; margin-top: 10px; }
+.usuarios-mqtt code, .usuarios-passos code { font-family: var(--mono); font-size: 12.5px; background: var(--soft); border: 1px solid var(--border); border-radius: 6px; padding: 1px 5px; word-break: break-all; }
+.usuarios-passos { padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); line-height: 1.5; }
+.usuarios-passos em { color: var(--text); font-style: normal; font-weight: 500; }
+.usuarios-form-mqtt { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.usuarios-campo-largo { grid-column: 1 / -1; }
+.usuarios-form-mqtt details summary, .usuarios-mqtt-ficha summary { cursor: pointer; font-size: 13px; font-weight: 500; }
+.usuarios-form-linha-simples { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 8px; }
+.usuarios-senha { display: flex; gap: 6px; }
+.usuarios-senha input { flex: 1; }
+.usuarios-codigo { font-family: var(--mono); font-size: 12.5px; background: var(--soft); border: 1px solid var(--border); border-radius: var(--raio-pequeno); padding: 10px 12px; margin: 8px 0; white-space: pre; overflow-x: auto; }
+.usuarios-mqtt-ficha td { background: var(--soft); }
+.usuarios-mqtt-ficha details { display: flex; flex-direction: column; gap: 6px; }
+.usuarios-mqtt-ficha .usuarios-passos { margin: 8px 0 0; }
+@media (max-width: 700px) {
+    .usuarios-form-mqtt, .usuarios-form-linha-simples { grid-template-columns: 1fr; }
+}

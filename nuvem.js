@@ -18,7 +18,14 @@
 (function (raiz) {
     "use strict";
 
-    const cfg = raiz.CONFIG_NUVEM || {};
+    const cfg = Object.assign({}, raiz.CONFIG_NUVEM || {});
+    // Aceita os enganos comuns no config.js: link do painel do Supabase,
+    // barra ou /rest/v1 no fim, espaços.
+    cfg.url = String(cfg.url || "").trim()
+        .replace(/^https?:\/\/(?:app\.)?supabase\.com\/dashboard\/project\/([a-z0-9]+).*$/i, "https://$1.supabase.co")
+        .replace(/\/(rest|auth)\/v1.*$/i, "")
+        .replace(/\/+$/, "");
+    cfg.chave = String(cfg.chave || "").trim();
     const CONFIGURADA = Boolean(cfg.url && cfg.chave);
     const URL_BIBLIOTECA = cfg.biblioteca || "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js";
     const CHAVES_DADOS = ["plantaAGV2", "plantaAGV2Publicada", "missoesAGV", "agvsFrota", "agvSelecionado", "telaAtual"];
@@ -34,6 +41,7 @@
     let modo = "local";
     let cliente = null, usuario = null, perfil = null, empresa = null;
     let dados = null;
+    let conexaoMqttEmpresa = null;
     let fotoMissoes = new Map();
     let revisaoNuvem = 0, publicando = 0, rascunhoNuvem = "null", timerRascunho = null, rascunhoPendente = null;
     let fila = Promise.resolve();
@@ -180,6 +188,24 @@
         rascunhoNuvem = JSON.stringify(dados.planta.rascunho);
         fotoMissoes = new Map(dados.missoes.map(x => [x.id, fotoDaMissao(x)]));
         gravar("missoesAGV", JSON.stringify(dados.missoes));
+        // Credencial MQTT da empresa (só chega depois do login; nunca fica no código).
+        try {
+            const r = await cliente.rpc("conexao_mqtt", { p_empresa: id });
+            if (r.error) throw r.error;
+            conexaoMqttEmpresa = r.data || null;
+        } catch (erro) {
+            console.warn("MQTT da empresa indisponível:", erro?.message || erro);
+            conexaoMqttEmpresa = null;
+        }
+    }
+
+    // Conexão MQTT para o script.js: { url, usuario, senha, empresa, nivel } ou null.
+    // Sem nuvem, usa config.js › mqttLocal (opcional, para testes na bancada).
+    function conexaoMqtt() {
+        if (modo === "nuvem") return conexaoMqttEmpresa;
+        const m = cfg.mqttLocal;
+        if (m && m.url && m.empresa) return { url: m.url, usuario: m.usuario || "", senha: m.senha || "", empresa: m.empresa, nivel: "operacao" };
+        return null;
     }
 
 
@@ -707,6 +733,8 @@
         if (/Password should be at least|weak/i.test(m)) return "Senha fraca: use pelo menos 8 caracteres, misturando letras e números.";
         if (/rate limit|too many/i.test(m)) return "Muitas tentativas agora. Espere alguns minutos e tente de novo.";
         if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return "Sem conexão com o servidor.";
+        if (/not valid JSON|Unexpected token/i.test(m)) return "O endereço do Supabase no config.js parece errado. Use a Project URL (https://xxxx.supabase.co).";
+        if (/Invalid API key|No API key/i.test(m)) return "A chave no config.js não é deste projeto. Use a Publishable key (ou a anon key).";
         if (/row-level security|permission denied/i.test(m)) return "Sem permissão para isso.";
         if (/JWT expired/i.test(m)) return "Sua sessão expirou. Entre de novo.";
         return m || "Erro desconhecido.";
@@ -720,7 +748,7 @@
         pode, exigir, podePublicar, papel,
         nomePapel: p => PAPEIS[p] || p,
         PAPEIS,
-        ajustarFrota, plantaDaNuvem,
+        ajustarFrota, plantaDaNuvem, conexaoMqtt,
         salvarMissoes, salvarPlanta, salvarAgv, removerAgv, terminarGravacoes,
         cliente: () => cliente,
         usuario: () => usuario,
