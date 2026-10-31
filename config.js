@@ -12,6 +12,6 @@
    NUNCA coloque aqui a service_role / secret key.
 */
 window.CONFIG_NUVEM = {
-    url: "",
-    chave: ""
+    url: "https://frota-agvs.vercel.app/",
+    chave: "sb_publishable_LW6lbl_ecxl-zzMuU72VBg_P1Y41sFN"
 };
