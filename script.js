@@ -53,7 +53,7 @@ function criarAGV(id, nome) {
 
         orientacao: 0,
 
-        bateria: 100,
+        bateria: null,
         velocidade: 0,
 
         // ========================================================
@@ -101,11 +101,19 @@ function criarAGV(id, nome) {
             },
 
             qtr: {
-                sensores: [],
-                posicao: 0,
-                erro: 0,
-                correcao: 0
-            },
+    sensores: [],
+    posicao: 0,
+    erro: 0,
+    correcao: 0,
+
+    calibracao: {
+        estado: "DESCONHECIDA",
+        calibracaoValida: false,
+        emAndamento: false,
+        mensagem: "Aguardando informações do ESP32",
+        ultimaAtualizacao: 0
+     }
+    },
 
             rfid: {
 
@@ -186,6 +194,18 @@ if (!("sistema" in agv)) {
 if (!Array.isArray(agv.historico)) {
     agv.historico = [];
 }
+
+if (agv.bateria === 100) {
+    agv.bateria = null;
+}
+
+// Estados transitórios não devem sobreviver a um recarregamento.
+agv.carregamentoPendente = null;
+agv.online = false;
+agv.autotesteRodando = null;
+agv._poseDesenho = null;
+agv.qtrCalibVisto = null;
+if (!Array.isArray(agv.rfidHistorico)) agv.rfidHistorico = [];
 if (!agv.sensores) {
     agv.sensores = {
         vl53: {
@@ -221,36 +241,11 @@ if (!agv.sensores) {
    PLANTA
    ============================================================ */
 
-/* ============================================================
-   PLANTA
-   ============================================================ */
-
-const plantaSalva = localStorage.getItem("plantaAGV");
-
-const planta = plantaSalva
-    ? JSON.parse(plantaSalva)
-    : {
-        pontos: [],
-        conexoes: []
-    };
-
-const plantaOperacionalSalva =
-    localStorage.getItem("plantaAGVOperacional");
-
-const plantaOperacional = plantaOperacionalSalva
-    ? JSON.parse(plantaOperacionalSalva)
-    : JSON.parse(JSON.stringify(planta));
 let agvEmEdicao = null;
 let agvSelecionado = null;
 let clienteMQTT = null;
-let timerMissao = null;
 let joystickAtivo = false;
 let rotacaoAtiva = false;
-let modoEdicaoPlanta = false;
-let pontoArrastando = null;
-let modoConexoesPlanta = false;
-let pontoConexaoOrigem = null;
-let conexaoEmConfiguracao = null;
 /* ============================================================
    MISSÕES
    ============================================================ */
@@ -271,13 +266,6 @@ const missoes =
     missoesSalvas
         ? JSON.parse(missoesSalvas)
         : [];
-    /* ============================================================
-   FORMULÁRIOS DA PLANTA
-   ============================================================ */
-
-let rfidsEstacaoEmCadastro = [];
-let rfidsReferenciaEmCadastro = [];
-let pontoEmEdicao = null;
 // ============================================================
 // EXECUÇÃO DAS MISSÕES
 // ============================================================
@@ -285,14 +273,50 @@ let pontoEmEdicao = null;
 // Cada AGV possui sua própria execução
 const execucoesMissoes = {};
 
-// Simulações gráficas independentes por AGV
-const simulacoesAGV = {};
+// ============================================================
+// CONTROLE DE CANCELAMENTO DE MISSÕES
+// ============================================================
 
-// Velocidade visual da simulação.
-// Unidade: aproximadamente % do mapa por segundo.
-const VELOCIDADE_SIMULACAO_MAPA = 15;
+const cancelamentosMissaoPendentes = {};
+
+const TEMPO_LIMITE_CANCELAMENTO_MS = 10000;
+// Grava no máximo uma vez por segundo: o ESP publica dezenas de
+// mensagens por segundo e cada gravação serializa a frota inteira.
+var timerSalvarAgvs = null;
+
+// Grava na hora (ao fechar a página o temporizador não chegaria a rodar)
+function salvarAgvsFrotaAgora() {
+    if (timerSalvarAgvs) {
+        clearTimeout(timerSalvarAgvs);
+        timerSalvarAgvs = null;
+    }
+    try {
+        localStorage.setItem("agvsFrota", JSON.stringify(agvs));
+    } catch (erro) {
+        console.error("Não foi possível salvar a frota:", erro);
+    }
+}
+
+window.addEventListener("pagehide", salvarAgvsFrotaAgora);
+window.addEventListener("beforeunload", salvarAgvsFrotaAgora);
+
 function salvarAgvsFrota() {
-    localStorage.setItem("agvsFrota", JSON.stringify(agvs));
+
+    if (timerSalvarAgvs) {
+        return;
+    }
+
+    timerSalvarAgvs = setTimeout(() => {
+
+        timerSalvarAgvs = null;
+
+        try {
+            localStorage.setItem("agvsFrota", JSON.stringify(agvs));
+        } catch (erro) {
+            console.error("Não foi possível salvar a frota:", erro);
+        }
+
+    }, 1000);
 }
 
 
@@ -322,6194 +346,683 @@ function obterMissaoPorId(id) {
 }
 
 
-function obterExecucaoAGV(agvId) {
-    return execucoesMissoes[agvId] || null;
-}
 
 
-function obterPontoAtualDoAGV(agv) {
 
-    if (!agv || !plantaOperacional) {
-        return null;
-    }
-
-    if (agv.pontoAtual) {
-
-        const ponto = plantaOperacional.pontos.find(
-            p => p.id === agv.pontoAtual
-        );
-
-        if (ponto) {
-            return ponto;
-        }
-    }
-
-    // Compatibilidade com o sistema antigo
-    if (typeof obterPontoEstacaoDoAGV === "function") {
-
-        const ponto = obterPontoEstacaoDoAGV(agv);
-
-        if (ponto) {
-            return ponto;
-        }
-    }
-
-    return null;
-}
-
-
-function atualizarPontoAtualAGV(agv, ponto) {
-
-    if (!agv || !ponto) {
-        return;
-    }
-
-    agv.pontoAtual = ponto.id;
-
-    // Só estação altera a estação atual
-    if (ponto.tipo === "ESTACAO") {
-        agv.estacaoAtual = ponto.id;
-    }
-
-    if (typeof ponto.x === "number") {
-        agv.x = ponto.x;
-    }
-
-    if (typeof ponto.y === "number") {
-        agv.y = ponto.y;
-    }
-}
 
 function gerarIdMissao() {
-
-    if (missoes.length === 0) {
-        return "M001";
-    }
-
-    const numeros =
-        missoes
-            .map(missao =>
-                Number(
-                    missao.id.replace("M", "")
-                )
-            )
-            .filter(numero =>
-                !Number.isNaN(numero)
-            );
-
-    const maior =
-        Math.max(...numeros);
-
+    const numeros = missoes
+        .map(missao => Number(String(missao.id).replace(/^M/, "")))
+        .filter(numero => Number.isFinite(numero));
+    const maior = numeros.length ? Math.max(...numeros) : 0;
     return `M${String(maior + 1).padStart(3, "0")}`;
 }
-function abrirNovaMissao() {
 
-    missaoEmEdicao = {
-        id: gerarIdMissao(),
-        nome: "",
-        etapas: []
-    };
+function salvarMissoesNoNavegador() {
+    try {
+        localStorage.setItem("missoesAGV", JSON.stringify(missoes));
+    } catch (erro) {
+        ui.aviso("Não foi possível salvar as missões neste navegador (espaço cheio).", "erro");
+    }
+}
 
-    document.getElementById(
-        "painelListaMissoes"
-    ).style.display = "none";
 
-    document.getElementById(
-        "painelConstrutorMissao"
-    ).style.display = "grid";
+/* ============================================================
+   DESCRIÇÃO E ESTIMATIVA DE UMA MISSÃO
+   ============================================================ */
 
-    document.getElementById(
-        "tituloConstrutorMissao"
-    ).textContent = "Nova missão";
+const ICONES_ETAPA = {
+    IR_PARA: ["local", "cor-ir", "Ir para"],
+    AGUARDAR: ["relogio", "cor-aguardar", "Aguardar"],
+    AGUARDAR_CONFIRMACAO: ["confirmar", "cor-confirmar", "Confirmação"],
+    CARREGAR: ["subir", "cor-carregar", "Carregar"],
+    DESCARREGAR: ["descer", "cor-descarregar", "Descarregar"]
+};
 
-    document.getElementById(
-        "nomeMissao"
-    ).value = "";
+function nomeCurtoDestino(id) {
+    const planta = plantaPublicada();
+    const estacao = Planta.estacaoPorId(planta, id);
+    if (estacao) return estacao.nome || estacao.id;
+    const no = Planta.noPorId(planta, id);
+    if (no) {
+        const daEstacao = Planta.estacaoDoNo(planta, no);
+        return daEstacao ? (daEstacao.nome || daEstacao.id) : (no.nome || no.id);
+    }
+    return id || "?";
+}
 
+function resumoMissao(missao) {
+    const partes = (missao.etapas || []).map(e => {
+        switch (e.tipo) {
+            case "IR_PARA": return nomeCurtoDestino(e.destino);
+            case "AGUARDAR": return `aguardar ${e.tempo} s`;
+            case "AGUARDAR_CONFIRMACAO": return "confirmar";
+            case "CARREGAR": return "carregar";
+            case "DESCARREGAR": return "descarregar";
+            default: return e.tipo;
+        }
+    });
+    return partes.join(" → ") || "sem etapas";
+}
+
+// Ponto de partida para a estimativa: o AGV selecionado (se a posição é
+// conhecida) ou o primeiro destino da missão.
+function partidaEstimativa(missao) {
+    const planta = plantaPublicada();
+    const agv = agvAtual();
+    if (agv && agv.posicaoConhecida && agv.pontoAtual && Planta.noPorId(planta, agv.pontoAtual)) {
+        return { ponto: agv.pontoAtual, orientacao: Number(agv.orientacao) || 0, texto: `saindo de onde o AGV ${agv.id} está` };
+    }
+    const primeira = (missao.etapas || []).find(e => e.tipo === "IR_PARA");
+    if (!primeira) return null;
+    const candidatos = Planta.candidatosDestino(planta, primeira.destino);
+    const no = candidatos?.nos?.[0];
+    if (!no) return null;
+    return { ponto: no.id, orientacao: no.orientacaoChegada ?? 0, texto: `a partir de ${nomeCurtoDestino(primeira.destino)}` };
+}
+
+function estimarMissao(missao) {
+    const planta = plantaPublicada();
+    const r = { distancia: 0, tempo: 0, manobras: 0, laterais: 0, zonasLentas: [], compilada: null, erro: "", partida: null, etapasCompiladas: [] };
+    if (!missao || !(missao.etapas || []).length) return r;
+    const anda = missao.etapas.some(e => e.tipo === "IR_PARA");
+    const partida = anda ? partidaEstimativa(missao) : { ponto: null, orientacao: 0, texto: "" };
+    r.partida = partida;
+    if (anda && !partida) {
+        r.erro = "Algum destino não existe na planta publicada.";
+        return r;
+    }
+    const resultado = Planta.compilarMissao(planta, missao, partida);
+    if (!resultado.sucesso) {
+        r.erro = resultado.erro;
+        return r;
+    }
+    r.compilada = resultado.pacote;
+    const velocidadePadrao = 0.06;
+    resultado.pacote.etapas.forEach(etapa => {
+        if (etapa.tipo === "MOVIMENTO") {
+            let frente = etapa.orientacaoInicial;
+            etapa.trechos.forEach(t => {
+                const lateral = t.tipo === "LATERAL";
+                const alvo = lateral ? t.orientacao : t.angulo;
+                if (Math.abs(Planta.calcularGiro(frente, alvo)) > 1) {
+                    r.manobras++;
+                    r.tempo += Math.abs(Planta.calcularGiro(frente, alvo)) / 30;
+                }
+                frente = alvo;
+                r.distancia += Number(t.comprimento) || 0;
+                const v = lateral ? 0.03 : (t.velocidade || velocidadePadrao);
+                r.tempo += (Number(t.comprimento) || 0) / v + 2;
+                if (lateral) r.laterais++;
+                if (t.velocidade && t.velocidade < velocidadePadrao) r.zonasLentas.push(t.velocidade);
+            });
+            if (etapa.orientacaoChegada >= 0 && Math.abs(Planta.calcularGiro(frente, etapa.orientacaoChegada)) > 1) {
+                r.manobras++;
+                r.tempo += Math.abs(Planta.calcularGiro(frente, etapa.orientacaoChegada)) / 30;
+            }
+        } else if (etapa.tipo === "AGUARDAR") {
+            r.tempo += Number(etapa.tempo) || 0;
+        } else if (etapa.tipo === "CARREGAR" || etapa.tipo === "DESCARREGAR") {
+            r.tempo += 8;
+        }
+        r.etapasCompiladas[etapa.indice] = etapa;
+    });
+    return r;
+}
+
+function formatarTempoEstimado(segundos) {
+    if (!(segundos > 0)) return "--";
+    if (segundos < 90) return `~${Math.round(segundos)} s`;
+    return `~${Math.round(segundos / 60)} min`;
+}
+
+function usoDaMissao(id) {
+    const usos = [];
+    Object.values(agvs).forEach(agv => {
+        if (agv.missaoAtual === id) usos.push(`em execução no AGV ${agv.id}`);
+        else if (agv.missaoCarregada === id) usos.push(`carregada no AGV ${agv.id}`);
+        else if ((agv.filaMissoes || []).includes(id)) usos.push(`na fila do AGV ${agv.id}`);
+    });
+    return usos;
+}
+
+
+/* ============================================================
+   TELA DE MISSÕES
+   ============================================================ */
+
+let missaoListaSelecionada = null;
+let mapaPreviaMissao = null;
+
+function abrirTelaMissoes() {
+    renderizarListaMissoes();
+    if (missaoEmEdicao) renderizarEditorMissao();
+    else {
+        const id = missaoListaSelecionada && missoes.some(m => m.id === missaoListaSelecionada) ? missaoListaSelecionada : missoes[0]?.id;
+        if (id) editarMissao(id);
+        else mostrarEditorMissao(false);
+    }
+}
+
+function mostrarEditorMissao(visivel) {
+    const editor = document.getElementById("painelConstrutorMissao");
+    const vazio = document.getElementById("missaoEditorVazio");
+    if (editor) editor.style.display = visivel ? "flex" : "none";
+    if (vazio) vazio.style.display = visivel ? "none" : "flex";
+}
+
+function missaoAlterada() {
+    if (!missaoEmEdicao) return false;
+    const salva = missoes.find(m => m.id === missaoEmEdicao.id);
+    const nome = document.getElementById("nomeMissao")?.value.trim() ?? missaoEmEdicao.nome;
+    const atual = Object.assign({}, missaoEmEdicao, { nome });
+    return !salva || JSON.stringify(salva) !== JSON.stringify(atual);
+}
+
+async function podeTrocarDeMissao() {
+    if (!missaoAlterada()) return true;
+    return ui.confirmar({
+        titulo: "Descartar alterações?",
+        texto: `A missão ${missaoEmEdicao.id} tem alterações que ainda não foram salvas.`,
+        confirmar: "Descartar", perigo: true
+    });
+}
+
+async function abrirNovaMissao() {
+    if (!(await podeTrocarDeMissao())) return;
+    missaoEmEdicao = { id: gerarIdMissao(), nome: "", etapas: [] };
+    missaoListaSelecionada = missaoEmEdicao.id;
+    document.getElementById("nomeMissao").value = "";
+    renderizarListaMissoes();
+    renderizarEditorMissao();
+    setTimeout(() => document.getElementById("nomeMissao")?.focus(), 30);
+}
+
+async function editarMissao(id) {
+    const missao = missoes.find(m => m.id === id);
+    if (!missao) return;
+    if (missaoEmEdicao && missaoEmEdicao.id !== id && !(await podeTrocarDeMissao())) return;
+    missaoEmEdicao = JSON.parse(JSON.stringify(missao));
+    missaoListaSelecionada = id;
+    document.getElementById("nomeMissao").value = missao.nome || "";
+    renderizarListaMissoes();
+    renderizarEditorMissao();
+}
+
+function renderizarListaMissoes() {
+    const lista = document.getElementById("listaMissoes");
+    if (!lista) return;
+    const busca = (document.getElementById("buscaMissoes")?.value || "").trim().toLowerCase();
+    const resumo = document.getElementById("missoesResumo");
+    const planta = plantaPublicada();
+    if (resumo) resumo.textContent = `${missoes.length} miss${missoes.length === 1 ? "ão" : "ões"}` +
+        (planta.nos.length ? ` · rotas calculadas na planta revisão ${planta.revisao || 0}` : " · publique a planta para calcular as rotas");
+
+    const novaNaoSalva = missaoEmEdicao && !missoes.some(m => m.id === missaoEmEdicao.id);
+    const todas = novaNaoSalva ? missoes.concat([missaoEmEdicao]) : missoes;
+    const filtradas = todas.filter(m => !busca ||
+        `${m.id} ${m.nome} ${resumoMissao(m)}`.toLowerCase().includes(busca));
+
+    if (!todas.length) {
+        lista.innerHTML = `<div class="vazio">Nenhuma missão cadastrada.<br>Use “+ Nova missão” para criar a primeira.</div>`;
+        return;
+    }
+    if (!filtradas.length) {
+        lista.innerHTML = `<div class="vazio">Nada encontrado para “${escaparHtml(busca)}”.</div>`;
+        return;
+    }
+    ui.trocarHtml(lista, filtradas.map(m => {
+        const fonte = missaoEmEdicao && missaoEmEdicao.id === m.id ? missaoEmEdicao : m;
+        const est = estimarMissao(fonte);
+        const usos = usoDaMissao(m.id);
+        const selecionada = m.id === missaoListaSelecionada;
+        return `
+            <button type="button" class="missao-item ${selecionada ? "selecionada" : ""}" data-missao="${escaparHtml(m.id)}">
+                <span class="missao-item-topo"><h3>${escaparHtml(fonte.nome || "Sem nome")}</h3><span class="mono">${escaparHtml(m.id)}</span></span>
+                <span class="missao-item-resumo">${escaparHtml(resumoMissao(fonte))}</span>
+                <span class="missao-item-dados">
+                    ${est.erro ? `<span class="erro">rota com problema</span>` : `<span class="mono">${est.distancia ? ui.numero(est.distancia, 1) + " m" : est.compilada ? "0 m" : "—"}</span><span class="mono">${formatarTempoEstimado(est.tempo)}</span>`}
+                    <span>${escaparHtml(usos.join(" · ") || (novaNaoSalva && m === missaoEmEdicao ? "não salva" : ""))}</span>
+                </span>
+            </button>`;
+    }).join(""));
+}
+
+function renderizarEditorMissao() {
+    if (!missaoEmEdicao) {
+        mostrarEditorMissao(false);
+        return;
+    }
+    mostrarEditorMissao(true);
+    const nova = !missoes.some(m => m.id === missaoEmEdicao.id);
+    const titulo = document.getElementById("tituloConstrutorMissao");
+    if (titulo) {
+        titulo.textContent = `${missaoEmEdicao.id} · ${nova ? "nova missão, ainda não salva" : missaoAlterada() ? "alterações não salvas" : "salva"}`;
+        titulo.style.color = nova || missaoAlterada() ? "var(--amber)" : "";
+    }
+    ["btnDuplicarMissaoAtual", "btnExcluirMissaoAtual", "btnEnviarMissaoAGV"].forEach(id => {
+        const b = document.getElementById(id);
+        if (b) b.disabled = nova;
+    });
     renderizarEtapasMissao();
 }
-function renderizarEtapasMissao() {
 
+function renderizarEtapasMissao() {
     const lista = document.getElementById("listaEtapasMissao");
     const vazio = document.getElementById("estadoVazioMissao");
-
     if (!lista || !vazio || !missaoEmEdicao) return;
 
-    lista.innerHTML = "";
+    const est = estimarMissao(missaoEmEdicao);
+    const etapas = missaoEmEdicao.etapas;
+    vazio.style.display = etapas.length ? "none" : "block";
 
-    if (missaoEmEdicao.etapas.length === 0) {
-        vazio.style.display = "flex";
-        return;
-    }
-
-    vazio.style.display = "none";
-
-    missaoEmEdicao.etapas.forEach((etapa, indice) => {
-
-        const elemento = document.createElement("div");
-        elemento.className = "missao-etapa";
-
-        let icone = "⚙️";
-        let tipo = "ETAPA";
-        let descricao = "Etapa não configurada";
-
+    lista.innerHTML = etapas.map((etapa, indice) => {
+        const [icone, classe, tipo] = ICONES_ETAPA[etapa.tipo] || ["info", "cor-aguardar", etapa.tipo];
+        let tituloEtapa = "";
+        let detalhe = "";
+        let erro = false;
         switch (etapa.tipo) {
-
-            case "IR_PARA":
-                icone = "📍";
-                tipo = "IR PARA";
-                descricao = obterNomeEstacao(etapa.destino);
+            case "IR_PARA": {
+                tituloEtapa = obterNomeEstacao(etapa.destino);
+                const c = est.etapasCompiladas[indice];
+                if (c) {
+                    const chegada = c.orientacaoChegada >= 0 ? c.orientacaoChegada : c.orientacaoFinal;
+                    const acesso = c.destino && c.estacao && Planta.acessosDaEstacao(plantaPublicada(), c.estacao).length > 1 ? ` · pelo acesso ${c.destino}` : "";
+                    detalhe = `chega virado para ${chegada}° (${ui.direcao(chegada)}) · ${c.trechos.length} trecho${c.trechos.length === 1 ? "" : "s"}${acesso}`;
+                } else if (est.erro && !est.compilada) {
+                    const m = /^Etapa (\d+):/.exec(est.erro);
+                    if (!m || Number(m[1]) === indice + 1) { detalhe = est.erro.replace(/^Etapa \d+: /, ""); erro = true; }
+                    else detalhe = "rota não calculada (veja a etapa com erro)";
+                }
                 break;
-
-            case "AGUARDAR":
-                icone = "⏱";
-                tipo = "AGUARDAR";
-                descricao = `${etapa.tempo} segundos`;
-                break;
-
-            case "AGUARDAR_CONFIRMACAO":
-                icone = "✋";
-                tipo = "AGUARDAR CONFIRMAÇÃO";
-                descricao = etapa.mensagem || "Aguardar confirmação";
-                break;
-
-            case "CARREGAR":
-    icone = "📦";
-    tipo = "CARREGAR";
-    descricao = "Acionar carregamento";
-    break;
-
-            case "DESCARREGAR":
-    icone = "📤";
-    tipo = "DESCARREGAR";
-    descricao = "Descarregamento do kit";
-    break;
-        }
-
-        elemento.innerHTML = `
-
-            <div class="missao-etapa-icone">
-                ${icone}
-            </div>
-
-            <div class="missao-etapa-numero">
-                ${indice + 1}
-            </div>
-
-            <div class="missao-etapa-conteudo">
-
-                <span class="missao-etapa-tipo">
-                    ${tipo}
-                </span>
-
-                <span class="missao-etapa-descricao">
-                    ${descricao}
-                </span>
-
-            </div>
-
-            <div class="missao-etapa-acoes">
-
-                <button
-                    type="button"
-                    title="Editar etapa"
-                    onclick="editarEtapaMissao(${indice})"
-                >
-                    ✎
-                </button>
-
-                <button
-                    type="button"
-                    title="Mover para cima"
-                    onclick="moverEtapaMissao(${indice}, -1)"
-                >
-                    ↑
-                </button>
-
-                <button
-                    type="button"
-                    title="Mover para baixo"
-                    onclick="moverEtapaMissao(${indice}, 1)"
-                >
-                    ↓
-                </button>
-
-                <button
-                    type="button"
-                    class="remover"
-                    title="Excluir etapa"
-                    onclick="removerEtapaMissao(${indice})"
-                >
-                    ×
-                </button>
-
-            </div>
-        `;
-
-        lista.appendChild(elemento);
-    });
-}
-function obterNomeEstacao(id) {
-
-    const ponto =
-        planta.pontos.find(
-            ponto => ponto.id === id
-        );
-
-    if (!ponto) {
-        return id || "Estação não encontrada";
-    }
-
-    return ponto.nome ||
-        ponto.nomeEstacao ||
-        ponto.id;
-}
-function adicionarEtapaMissao() {
-
-    etapaEmEdicao = null;
-
-    abrirModalEtapaMissao();
-
-}
-function abrirModalEtapaMissao() {
-
-    const modal =
-        document.getElementById(
-            "modalEtapaMissao"
-        );
-
-    const titulo =
-        document.getElementById(
-            "tituloModalEtapa"
-        );
-
-    const tipo =
-        document.getElementById(
-            "tipoEtapaMissao"
-        );
-
-    const configuracao =
-        document.getElementById(
-            "configuracaoEtapaMissao"
-        );
-
-    if (!modal || !tipo || !configuracao) {
-        return;
-    }
-
-    titulo.textContent =
-        etapaEmEdicao === null
-            ? "Adicionar etapa"
-            : "Editar etapa";
-
-    tipo.value =
-        etapaEmEdicao === null
-            ? ""
-            : missaoEmEdicao.etapas[
-                etapaEmEdicao
-            ].tipo;
-
-    configuracao.innerHTML = "";
-
-    modal.hidden = false;
-
-    atualizarConfiguracaoEtapa();
-}
-function fecharModalEtapaMissao() {
-
-    const modal =
-        document.getElementById(
-            "modalEtapaMissao"
-        );
-
-    if (modal) {
-        modal.hidden = true;
-    }
-
-    etapaEmEdicao = null;
-}
-function atualizarConfiguracaoEtapa() {
-
-    const tipo =
-        document.getElementById(
-            "tipoEtapaMissao"
-        )?.value;
-
-    const configuracao =
-        document.getElementById(
-            "configuracaoEtapaMissao"
-        );
-
-    if (!configuracao) {
-        return;
-    }
-
-    configuracao.innerHTML = "";
-
-
-    /* ========================================================
-       IR PARA
-       ======================================================== */
-
-    if (tipo === "IR_PARA") {
-
-        const estacoes =
-            planta.pontos.filter(
-                ponto =>
-                    ponto.tipo === "ESTACAO"
-            );
-
-        if (estacoes.length === 0) {
-
-            configuracao.innerHTML = `
-                <div class="missao-aviso">
-                    Nenhuma estação foi cadastrada
-                    na planta.
-                </div>
-            `;
-
-            return;
-        }
-
-        const select =
-            document.createElement("select");
-
-        select.id =
-            "destinoEtapaMissao";
-
-        select.className =
-            "missao-input";
-
-
-        const opcaoInicial =
-            document.createElement("option");
-
-        opcaoInicial.value = "";
-
-        opcaoInicial.textContent =
-            "Selecione a estação";
-
-        select.appendChild(
-            opcaoInicial
-        );
-
-
-        estacoes.forEach(
-            estacao => {
-
-                const option =
-                    document.createElement(
-                        "option"
-                    );
-
-                option.value =
-                    estacao.id;
-
-                option.textContent =
-                    obterNomeEstacao(
-                        estacao.id
-                    );
-
-                select.appendChild(
-                    option
-                );
             }
-        );
-
-
-        configuracao.innerHTML = `
-            <label class="missao-label">
-                Destino
-            </label>
-        `;
-
-        configuracao.appendChild(
-            select
-        );
-
-
-        /* ---------------------------------------------
-           RECUPERA VALOR DURANTE EDIÇÃO
-           --------------------------------------------- */
-
-        if (etapaEmEdicao !== null) {
-
-            const etapa =
-                missaoEmEdicao.etapas[
-                    etapaEmEdicao
-                ];
-
-            select.value =
-                etapa.destino || "";
+            case "AGUARDAR": tituloEtapa = `Esperar ${etapa.tempo} s`; detalhe = "parado no lugar"; break;
+            case "AGUARDAR_CONFIRMACAO": tituloEtapa = "Operador confirma"; detalhe = `“${etapa.mensagem || "Confirmar"}” · no site ou no botão START MISSÃO`; break;
+            case "CARREGAR": tituloEtapa = "Erguer a garra"; detalhe = "curso inteiro"; break;
+            case "DESCARREGAR": tituloEtapa = "Baixar a garra"; detalhe = "até a posição zero"; break;
         }
-
-        return;
-    }
-
-
-    /* ========================================================
-       AGUARDAR
-       ======================================================== */
-
-    if (tipo === "AGUARDAR") {
-
-        configuracao.innerHTML = `
-
-            <label class="missao-label">
-
-                Tempo de espera
-
-                <input
-                    type="number"
-                    id="tempoEtapaMissao"
-                    min="1"
-                    step="1"
-                    placeholder="Ex.: 5"
-                >
-
-                <span>
-                    segundos
-                </span>
-
-            </label>
-        `;
-
-
-        if (etapaEmEdicao !== null) {
-
-            const etapa =
-                missaoEmEdicao.etapas[
-                    etapaEmEdicao
-                ];
-
-            document.getElementById(
-                "tempoEtapaMissao"
-            ).value =
-                etapa.tempo || "";
-        }
-
-        return;
-    }
-
-
-    /* ========================================================
-       AGUARDAR CONFIRMAÇÃO
-       ======================================================== */
-
-    if (
-        tipo ===
-        "AGUARDAR_CONFIRMACAO"
-    ) {
-
-        configuracao.innerHTML = `
-
-            <label class="missao-label">
-
-                Mensagem para o operador
-
-                <input
-                    type="text"
-                    id="mensagemEtapaMissao"
-                    placeholder="Ex.: Confirmar retirada da carga"
-                >
-
-            </label>
-        `;
-
-
-        if (etapaEmEdicao !== null) {
-
-            const etapa =
-                missaoEmEdicao.etapas[
-                    etapaEmEdicao
-                ];
-
-            document.getElementById(
-                "mensagemEtapaMissao"
-            ).value =
-                etapa.mensagem || "";
-        }
-
-        return;
-    }
-
-
-    /* ========================================================
-       CARREGAR
-       ======================================================== */
-
-    if (tipo === "CARREGAR") {
-
-        configuracao.innerHTML = `
-
-            <div class="missao-operacao-info">
-
-                <strong>
-                    CARREGAR
-                </strong>
-
-                <span>
-                    O AGV executará a operação
-                    de carregamento.
-                </span>
-
-            </div>
-
-        `;
-
-        return;
-    }
-
-
-    /* ========================================================
-       DESCARREGAR
-       ======================================================== */
-
-    if (tipo === "DESCARREGAR") {
-
-        configuracao.innerHTML = `
-
-            <div class="missao-operacao-info">
-
-                <strong>
-                    DESCARREGAR
-                </strong>
-
-                <span>
-                    O AGV executará a operação
-                    de descarregamento.
-                </span>
-
-            </div>
-
-        `;
-
-        return;
-    }
+        return `
+            <li class="etapa ${classe}">
+                <div class="etapa-trilho"><span class="etapa-icone">${ui.icone(icone)}</span><span class="etapa-linha"></span></div>
+                <div class="etapa-conteudo">
+                    <div>
+                        <div class="etapa-tipo">${indice + 1} · ${tipo}</div>
+                        <div class="etapa-titulo">${escaparHtml(tituloEtapa)}</div>
+                        <div class="etapa-detalhe ${erro ? "erro" : ""}">${escaparHtml(detalhe)}</div>
+                    </div>
+                    <span class="etapa-acoes">
+                        ${["IR_PARA", "AGUARDAR", "AGUARDAR_CONFIRMACAO"].includes(etapa.tipo) ? `<button type="button" aria-label="Editar etapa ${indice + 1}" title="Editar" onclick="editarEtapaMissao(${indice})">✎</button>` : ""}
+                        <button type="button" aria-label="Subir etapa ${indice + 1}" title="Mover para cima" onclick="moverEtapaMissao(${indice}, -1)" ${indice === 0 ? "disabled" : ""}>↑</button>
+                        <button type="button" aria-label="Descer etapa ${indice + 1}" title="Mover para baixo" onclick="moverEtapaMissao(${indice}, 1)" ${indice === etapas.length - 1 ? "disabled" : ""}>↓</button>
+                        <button type="button" class="remover" aria-label="Excluir etapa ${indice + 1}" title="Excluir" onclick="removerEtapaMissao(${indice})">×</button>
+                    </span>
+                </div>
+            </li>`;
+    }).join("");
+    renderizarPreviaMissao(est);
 }
-function confirmarEtapaMissao() {
 
-    const tipo =
-        document.getElementById(
-            "tipoEtapaMissao"
-        )?.value;
+function renderizarPreviaMissao(est) {
+    const host = document.getElementById("missaoPreviaMapa");
+    if (!host) return;
+    const planta = plantaPublicada();
+    if (!mapaPreviaMissao) {
+        mapaPreviaMissao = MapaSVG.criar(host, { grade: false, rotulos: true, mostrarTags: false, rastro: false, zoomRoda: false });
+    }
+    if (mapaPreviaMissao.planta !== planta) {
+        mapaPreviaMissao.ajustado = false;
+        mapaPreviaMissao.definirPlanta(planta);
+    }
+    const trechos = [];
+    const destinos = new Set();
+    (est.compilada?.etapas || []).forEach(e => {
+        if (e.tipo === "MOVIMENTO") {
+            trechos.push(...e.trechos);
+            if (e.destino) destinos.add(e.destino);
+        }
+    });
+    mapaPreviaMissao.rota = trechos.length ? { trechos, atual: null } : null;
+    mapaPreviaMissao.destinos = destinos;
+    mapaPreviaMissao.desenhar();
 
-    if (!tipo) {
+    const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+    set("previaDistancia", est.distancia ? `${ui.numero(est.distancia, 1)} m` : "--");
+    set("previaTempo", formatarTempoEstimado(est.tempo));
+    set("previaManobras", est.compilada ? String(est.manobras) : "--");
+    set("missaoPreviaOrigem", est.partida?.texto ? `estimativa ${est.partida.texto}` : "");
 
-        alert(
-            "Selecione o tipo de operação."
-        );
+    const itens = [];
+    const ok = texto => itens.push(`<li class="ok">${ui.icone("ok")}${escaparHtml(texto)}</li>`);
+    const aviso = texto => itens.push(`<li class="aviso">${ui.icone("alerta")}${escaparHtml(texto)}</li>`);
+    const erro = texto => itens.push(`<li class="erro">${ui.icone("erro")}${escaparHtml(texto)}</li>`);
+    const etapas = missaoEmEdicao?.etapas || [];
+    if (!planta.nos.length) aviso("Nenhuma planta publicada: desenhe a planta antes de usar IR PARA.");
+    if (!etapas.length) aviso("A missão ainda não tem etapas.");
+    if (est.erro) erro(est.erro);
+    else if (etapas.some(e => e.tipo === "IR_PARA")) {
+        ok("Todos os destinos existem na planta publicada");
+        (est.compilada?.etapas || []).filter(e => e.tipo === "MOVIMENTO" && e.orientacaoChegada >= 0).forEach(e => {
+            ok(`${nomeCurtoDestino(e.estacao || e.destino)}: chega virado para ${e.orientacaoChegada}° (${ui.direcao(e.orientacaoChegada)})`);
+        });
+    }
+    if (est.zonasLentas.length) aviso(`Passa por zona lenta (${ui.numero(Math.min(...est.zonasLentas), 2)} m/s)`);
+    if (est.laterais) ok(`${est.laterais} troca${est.laterais > 1 ? "s" : ""} de faixa lateral (anda de lado, sem fita)`);
+    const ultima = etapas[etapas.length - 1];
+    if (ultima && ultima.tipo === "CARREGAR") aviso("A missão termina com a garra erguida.");
+    if (etapas.length > Planta.LIMITES.etapasPorMissao) erro(`Máximo de ${Planta.LIMITES.etapasPorMissao} etapas por missão.`);
+    const caixa = document.getElementById("previaVerificacoes");
+    if (caixa) caixa.innerHTML = itens.join("");
+}
 
+document.getElementById("listaMissoes")?.addEventListener("click", evento => {
+    const item = evento.target.closest("[data-missao]");
+    if (!item) return;
+    const id = item.dataset.missao;
+    if (missaoEmEdicao && missaoEmEdicao.id === id) return;
+    if (!missoes.some(m => m.id === id)) return;
+    editarMissao(id);
+});
+document.getElementById("buscaMissoes")?.addEventListener("input", renderizarListaMissoes);
+document.getElementById("nomeMissao")?.addEventListener("input", () => {
+    if (!missaoEmEdicao) return;
+    renderizarEditorMissaoTitulo();
+});
+
+function renderizarEditorMissaoTitulo() {
+    const titulo = document.getElementById("tituloConstrutorMissao");
+    if (!titulo || !missaoEmEdicao) return;
+    const nova = !missoes.some(m => m.id === missaoEmEdicao.id);
+    const alterada = missaoAlterada();
+    titulo.textContent = `${missaoEmEdicao.id} · ${nova ? "nova missão, ainda não salva" : alterada ? "alterações não salvas" : "salva"}`;
+    titulo.style.color = nova || alterada ? "var(--amber)" : "";
+}
+
+
+/* ============================================================
+   ETAPAS
+   ============================================================ */
+
+function adicionarEtapaMissao(tipo) {
+    if (!missaoEmEdicao) return;
+    if (tipo === "CARREGAR" || tipo === "DESCARREGAR") {
+        missaoEmEdicao.etapas.push({ tipo });
+        renderizarEditorMissao();
         return;
     }
+    etapaEmEdicao = null;
+    abrirModalEtapaMissao(tipo || "");
+}
 
+function abrirModalEtapaMissao(tipoInicial) {
+    const modal = document.getElementById("modalEtapaMissao");
+    const titulo = document.getElementById("tituloModalEtapa");
+    const tipo = document.getElementById("tipoEtapaMissao");
+    if (!modal || !tipo) return;
+    const editando = etapaEmEdicao !== null;
+    tipo.value = editando ? missaoEmEdicao.etapas[etapaEmEdicao].tipo : (tipoInicial || "");
+    const nome = (ICONES_ETAPA[tipo.value] || [])[2];
+    titulo.textContent = editando ? `Editar etapa ${etapaEmEdicao + 1}` : nome ? `Adicionar: ${nome}` : "Adicionar etapa";
+    document.getElementById("campoTipoEtapa").hidden = Boolean(tipo.value);
+    modal.hidden = false;
+    atualizarConfiguracaoEtapa();
+    setTimeout(() => modal.querySelector("#configuracaoEtapaMissao select, #configuracaoEtapaMissao input, #tipoEtapaMissao")?.focus(), 30);
+}
 
-    let etapa = {
-        tipo: tipo
-    };
+function fecharModalEtapaMissao() {
+    const modal = document.getElementById("modalEtapaMissao");
+    if (modal) modal.hidden = true;
+    etapaEmEdicao = null;
+}
 
-
-    /* ========================================================
-       IR PARA
-       ======================================================== */
+function atualizarConfiguracaoEtapa() {
+    const tipo = document.getElementById("tipoEtapaMissao")?.value;
+    const configuracao = document.getElementById("configuracaoEtapaMissao");
+    if (!configuracao) return;
+    const etapa = etapaEmEdicao !== null ? missaoEmEdicao.etapas[etapaEmEdicao] : {};
 
     if (tipo === "IR_PARA") {
-
-        const destino =
-            document.getElementById(
-                "destinoEtapaMissao"
-            )?.value;
-
-        if (!destino) {
-
-            alert(
-                "Selecione o destino da etapa."
-            );
-
+        const destinos = destinosMissao();
+        if (!destinos.length) {
+            configuracao.innerHTML = `<div class="nota-ambar">Nenhuma estação publicada. Desenhe e publique a planta na tela Planta.</div>`;
             return;
         }
+        const grupo = (tipoNo, rotulo) => {
+            const itens = destinos.filter(d => d.tipo === tipoNo);
+            if (!itens.length) return "";
+            return `<optgroup label="${rotulo}">${itens.map(d => `<option value="${escaparHtml(d.id)}">${escaparHtml(d.nome ? `${d.nome} (${d.id})` : d.id)}${d.acessos > 1 ? ` · ${d.acessos} acessos` : ""}</option>`).join("")}</optgroup>`;
+        };
+        configuracao.innerHTML = `
+            <label class="missao-label">Destino
+                <select id="destinoEtapaMissao"><option value="">Escolha a estação</option>${grupo("ESTACAO", "Estações")}${grupo("ESPERA", "Pontos de espera")}</select>
+            </label>
+            <small>Estação com mais de um acesso: o AGV usa o caminho mais curto até um deles.</small>`;
+        document.getElementById("destinoEtapaMissao").value = etapa.destino || "";
+        return;
+    }
+    if (tipo === "AGUARDAR") {
+        configuracao.innerHTML = `
+            <label class="missao-label">Tempo de espera
+                <div class="editor-com-unidade"><input type="number" id="tempoEtapaMissao" min="1" max="3600" step="1" placeholder="Ex.: 5"><em>s</em></div>
+            </label>`;
+        document.getElementById("tempoEtapaMissao").value = etapa.tempo || "";
+        return;
+    }
+    if (tipo === "AGUARDAR_CONFIRMACAO") {
+        configuracao.innerHTML = `
+            <label class="missao-label">Mensagem para o operador
+                <input type="text" id="mensagemEtapaMissao" maxlength="60" placeholder="Ex.: Kit conferido?">
+            </label>
+            <small>O operador confirma pelo site ou apertando START MISSÃO no AGV (a fita fica ciano piscando).</small>`;
+        document.getElementById("mensagemEtapaMissao").value = etapa.mensagem || "";
+        return;
+    }
+    configuracao.innerHTML = "";
+}
 
+function confirmarEtapaMissao() {
+    const tipo = document.getElementById("tipoEtapaMissao")?.value;
+    if (!tipo) {
+        ui.aviso("Escolha o tipo de operação.", "aviso");
+        return;
+    }
+    const etapa = { tipo };
+    if (tipo === "IR_PARA") {
+        const destino = document.getElementById("destinoEtapaMissao")?.value;
+        if (!destino) { ui.aviso("Escolha o destino da etapa.", "aviso"); return; }
         etapa.destino = destino;
     }
-
-
-    /* ========================================================
-       AGUARDAR
-       ======================================================== */
-
     if (tipo === "AGUARDAR") {
-
-        const tempo =
-            Number(
-                document.getElementById(
-                    "tempoEtapaMissao"
-                )?.value
-            );
-
-        if (
-            !Number.isFinite(tempo) ||
-            tempo <= 0
-        ) {
-
-            alert(
-                "Informe um tempo de espera válido."
-            );
-
-            return;
-        }
-
-        etapa.tempo = tempo;
+        const tempo = Number(document.getElementById("tempoEtapaMissao")?.value);
+        if (!Number.isFinite(tempo) || tempo <= 0) { ui.aviso("Informe um tempo de espera válido.", "aviso"); return; }
+        etapa.tempo = Math.round(tempo);
     }
-
-
-    /* ========================================================
-       AGUARDAR CONFIRMAÇÃO
-       ======================================================== */
-
-    if (
-        tipo ===
-        "AGUARDAR_CONFIRMACAO"
-    ) {
-
-        const mensagem =
-            document.getElementById(
-                "mensagemEtapaMissao"
-            )?.value.trim();
-
-        if (!mensagem) {
-
-            alert(
-                "Informe a mensagem de confirmação."
-            );
-
-            return;
-        }
-
+    if (tipo === "AGUARDAR_CONFIRMACAO") {
+        const mensagem = document.getElementById("mensagemEtapaMissao")?.value.trim();
+        if (!mensagem) { ui.aviso("Escreva a mensagem que o operador vai ver.", "aviso"); return; }
         etapa.mensagem = mensagem;
     }
-
-
-    /* ========================================================
-       INSERE OU ALTERA
-       ======================================================== */
-
-    if (etapaEmEdicao === null) {
-
-        missaoEmEdicao.etapas.push(
-            etapa
-        );
-
-    } else {
-
-        missaoEmEdicao.etapas[
-            etapaEmEdicao
-        ] = etapa;
-    }
-
-
+    if (etapaEmEdicao === null) missaoEmEdicao.etapas.push(etapa);
+    else missaoEmEdicao.etapas[etapaEmEdicao] = etapa;
     fecharModalEtapaMissao();
-
-    renderizarEtapasMissao();
+    renderizarEditorMissao();
+    renderizarListaMissoes();
 }
+
 function editarEtapaMissao(indice) {
-
-    if (
-        !missaoEmEdicao ||
-        !missaoEmEdicao.etapas[indice]
-    ) {
-        return;
-    }
-
+    if (!missaoEmEdicao || !missaoEmEdicao.etapas[indice]) return;
     etapaEmEdicao = indice;
-
     abrirModalEtapaMissao();
 }
-function moverEtapaMissao(
-    indice,
-    direcao
-) {
 
-    if (!missaoEmEdicao) {
-        return;
-    }
-
-
-    const novoIndice =
-        indice + direcao;
-
-
-    if (
-        novoIndice < 0 ||
-        novoIndice >=
-            missaoEmEdicao.etapas.length
-    ) {
-        return;
-    }
-
-
-    const temp =
-        missaoEmEdicao.etapas[indice];
-
-
-    missaoEmEdicao.etapas[indice] =
-        missaoEmEdicao.etapas[novoIndice];
-
-
-    missaoEmEdicao.etapas[novoIndice] =
-        temp;
-
-
-    renderizarEtapasMissao();
+function moverEtapaMissao(indice, direcao) {
+    if (!missaoEmEdicao) return;
+    const novoIndice = indice + direcao;
+    if (novoIndice < 0 || novoIndice >= missaoEmEdicao.etapas.length) return;
+    const temp = missaoEmEdicao.etapas[indice];
+    missaoEmEdicao.etapas[indice] = missaoEmEdicao.etapas[novoIndice];
+    missaoEmEdicao.etapas[novoIndice] = temp;
+    renderizarEditorMissao();
+    renderizarListaMissoes();
 }
+
 function removerEtapaMissao(indice) {
-
-    if (!missaoEmEdicao) {
-        return;
-    }
-
-
-    missaoEmEdicao.etapas.splice(
-        indice,
-        1
-    );
-
-
-    renderizarEtapasMissao();
+    if (!missaoEmEdicao) return;
+    missaoEmEdicao.etapas.splice(indice, 1);
+    renderizarEditorMissao();
+    renderizarListaMissoes();
 }
+
 function salvarMissao() {
-
-    if (!missaoEmEdicao) {
-        return;
-    }
-
-
-    const nome =
-        document.getElementById(
-            "nomeMissao"
-        ).value.trim();
-
-
+    if (!missaoEmEdicao) return;
+    const nome = document.getElementById("nomeMissao").value.trim();
     if (!nome) {
-
-        alert(
-            "Informe um nome para a missão."
-        );
-
+        ui.aviso("Dê um nome para a missão.", "aviso");
+        document.getElementById("nomeMissao").focus();
         return;
     }
-
-
-    if (
-        missaoEmEdicao.etapas.length === 0
-    ) {
-
-        alert(
-            "Adicione pelo menos uma etapa."
-        );
-
+    if (!missaoEmEdicao.etapas.length) {
+        ui.aviso("Adicione pelo menos uma etapa.", "aviso");
         return;
     }
-
-
-    missaoEmEdicao.nome =
-        nome;
-
-
-    const indice =
-        missoes.findIndex(
-            missao =>
-                missao.id ===
-                missaoEmEdicao.id
-        );
-
-
-    if (indice >= 0) {
-
-        missoes[indice] =
-            JSON.parse(
-                JSON.stringify(
-                    missaoEmEdicao
-                )
-            );
-
-    } else {
-
-        missoes.push(
-            JSON.parse(
-                JSON.stringify(
-                    missaoEmEdicao
-                )
-            )
-        );
-    }
-
-
-    localStorage.setItem(
-        "missoesAGV",
-        JSON.stringify(missoes)
-    );
-
-
-    missaoEmEdicao = null;
-
-
-    voltarListaMissoes();
+    missaoEmEdicao.nome = nome;
+    const copia = JSON.parse(JSON.stringify(missaoEmEdicao));
+    const indice = missoes.findIndex(m => m.id === missaoEmEdicao.id);
+    if (indice >= 0) missoes[indice] = copia;
+    else missoes.push(copia);
+    salvarMissoesNoNavegador();
+    missaoListaSelecionada = copia.id;
+    renderizarListaMissoes();
+    renderizarEditorMissao();
+    renderizarControleFilaAGV();
+    ui.aviso(`Missão ${copia.id} salva.`, "sucesso");
 }
+
+async function descartarEdicaoMissao() {
+    if (!missaoEmEdicao) return;
+    if (missaoAlterada() && !(await ui.confirmar({ titulo: "Descartar alterações?", texto: "As mudanças feitas nesta missão serão perdidas.", confirmar: "Descartar", perigo: true }))) return;
+    const salva = missoes.find(m => m.id === missaoEmEdicao.id);
+    missaoEmEdicao = null;
+    if (salva) editarMissao(salva.id);
+    else {
+        missaoListaSelecionada = missoes[0]?.id || null;
+        if (missaoListaSelecionada) editarMissao(missaoListaSelecionada);
+        else { renderizarListaMissoes(); mostrarEditorMissao(false); }
+    }
+}
+
 function voltarListaMissoes() {
-
-    missaoEmEdicao = null;
-
-    document.getElementById(
-        "painelConstrutorMissao"
-    ).style.display = "none";
-
-    document.getElementById(
-        "painelListaMissoes"
-    ).style.display = "block";
-
-    renderizarListaMissoes();
-}
-function renderizarListaMissoes() {
-
-    const lista =
-        document.getElementById(
-            "listaMissoes"
-        );
-
-    if (!lista) {
-        return;
-    }
-
-
-    lista.innerHTML = "";
-
-
-    if (missoes.length === 0) {
-
-        lista.innerHTML = `
-
-            <div class="card missao-vazia">
-
-                <strong>
-                    Nenhuma missão cadastrada
-                </strong>
-
-                <span>
-                    Clique em "+ NOVA MISSÃO"
-                    para criar a primeira.
-                </span>
-
-            </div>
-
-        `;
-
-        return;
-    }
-
-
-    missoes.forEach(missao => {
-
-        const card =
-            document.createElement("div");
-
-        card.className =
-            "missao-card";
-
-
-        const sequencia =
-            missao.etapas
-                .map((etapa, indice) => {
-
-                    let conteudo = "";
-
-
-                    if (
-                        etapa.tipo ===
-                        "IR_PARA"
-                    ) {
-
-                        conteudo = `
-                            <div class="missao-sequencia-ponto">
-                                ${etapa.destino}
-                            </div>
-                        `;
-
-                    } else if (
-                        etapa.tipo ===
-                        "AGUARDAR"
-                    ) {
-
-                        conteudo = `
-                            <div
-                                class="missao-sequencia-evento"
-                                title="Aguardar ${etapa.tempo}s"
-                            >
-                                ⏱
-                            </div>
-                        `;
-
-                    } else if (
-                        etapa.tipo ===
-                        "AGUARDAR_CONFIRMACAO"
-                    ) {
-
-                        conteudo = `
-                            <div
-                                class="missao-sequencia-evento"
-                                title="${etapa.mensagem}"
-                            >
-                                ✓
-                            </div>
-                        `;
-                    
-                    } else if (
-    etapa.tipo ===
-    "CARREGAR")
- {
-
-    conteudo = `
-        <div
-            class="missao-sequencia-evento"
-            title="Carregar"
-        >
-            📦
-        </div>
-    `;
-
-} else if (
-    etapa.tipo ===
-    "DESCARREGAR"
-) {
-
-    conteudo = `
-        <div
-            class="missao-sequencia-evento"
-            title="Descarregar"
-        >
-            📤
-        </div>
-    `;
+    descartarEdicaoMissao();
 }
 
-
-                    return `
-
-                        <div class="missao-sequencia-item">
-
-                            ${conteudo}
-
-                            ${
-                                indice <
-                                missao.etapas.length - 1
-                                    ? `<span class="missao-sequencia-seta">→</span>`
-                                    : ""
-                            }
-
-                        </div>
-
-                    `;
-                })
-                .join("");
-
-
-        card.innerHTML = `
-
-            <div class="missao-card-header">
-
-                <div class="missao-card-identificacao">
-
-                    <span class="missao-card-id">
-                        ${missao.id}
-                    </span>
-
-                    <span class="missao-card-nome">
-                        ${missao.nome}
-                    </span>
-
-                </div>
-
-                <span class="missao-card-status">
-                    CADASTRADA
-                </span>
-
-            </div>
-
-
-            <div class="missao-sequencia">
-
-                ${sequencia}
-
-            </div>
-
-
-            <div class="missao-card-acoes">
-
-                <button
-                    type="button"
-                    onclick="editarMissao('${missao.id}')"
-                >
-                    EDITAR
-                </button>
-
-                <button
-                    type="button"
-                    onclick="duplicarMissao('${missao.id}')"
-                >
-                    DUPLICAR
-                </button>
-
-                <button
-                    type="button"
-                    class="excluir"
-                    onclick="excluirMissao('${missao.id}')"
-                >
-                    EXCLUIR
-                </button>
-
-            </div>
-
-        `;
-
-
-        lista.appendChild(card);
-    });
-}
-function editarMissao(id) {
-
-    const missao =
-        missoes.find(
-            missao =>
-                missao.id === id
-        );
-
-    if (!missao) {
-        return;
-    }
-
-
-    missaoEmEdicao =
-        JSON.parse(
-            JSON.stringify(missao)
-        );
-
-
-    document.getElementById(
-        "painelListaMissoes"
-    ).style.display = "none";
-
-
-    document.getElementById(
-        "painelConstrutorMissao"
-    ).style.display = "grid";
-
-
-    document.getElementById(
-        "tituloConstrutorMissao"
-    ).textContent =
-        `Editar missão ${missao.id}`;
-
-
-    document.getElementById(
-        "nomeMissao"
-    ).value =
-        missao.nome;
-
-
-    renderizarEtapasMissao();
-}
-function duplicarMissao(id) {
-
-    const missao =
-        missoes.find(
-            missao =>
-                missao.id === id
-        );
-
-    if (!missao) {
-        return;
-    }
-
-
-    const copia =
-        JSON.parse(
-            JSON.stringify(missao)
-        );
-
-
-    copia.id =
-        gerarIdMissao();
-
-
-    copia.nome =
-        `${copia.nome} - CÓPIA`;
-
-
+async function duplicarMissao(id) {
+    const missao = missoes.find(m => m.id === id);
+    if (!missao) return;
+    if (!(await podeTrocarDeMissao())) return;
+    const copia = JSON.parse(JSON.stringify(missao));
+    copia.id = gerarIdMissao();
+    copia.nome = `${copia.nome} (cópia)`;
     missoes.push(copia);
+    salvarMissoesNoNavegador();
+    missaoEmEdicao = null;
+    editarMissao(copia.id);
+    ui.aviso(`Missão copiada como ${copia.id}.`, "sucesso");
+}
 
+async function excluirMissao(id) {
+    const missao = missoes.find(m => m.id === id);
+    if (!missao) return;
+    const usos = usoDaMissao(id);
+    const ok = await ui.confirmar({
+        titulo: `Excluir ${missao.id}?`,
+        texto: `“${missao.nome}” será apagada deste navegador.${usos.length ? `\n\nAtenção: ${usos.join(", ")}.` : ""}`,
+        confirmar: "Excluir", perigo: true
+    });
+    if (!ok) return;
+    missoes.splice(missoes.findIndex(m => m.id === id), 1);
+    salvarMissoesNoNavegador();
+    if (missaoEmEdicao && missaoEmEdicao.id === id) missaoEmEdicao = null;
+    missaoListaSelecionada = missoes[0]?.id || null;
+    if (missaoListaSelecionada) editarMissao(missaoListaSelecionada);
+    else { renderizarListaMissoes(); mostrarEditorMissao(false); }
+    renderizarControleFilaAGV();
+}
 
-    localStorage.setItem(
-        "missoesAGV",
-        JSON.stringify(missoes)
-    );
-
-
+// Escolhe um AGV e carrega a missão nele (ou põe na fila se ele estiver ocupado)
+async function enviarMissaoParaAGV() {
+    if (!missaoEmEdicao) return;
+    if (missaoAlterada()) {
+        ui.aviso("Salve a missão antes de enviar.", "aviso");
+        return;
+    }
+    const id = missaoEmEdicao.id;
+    const lista = Object.values(agvs);
+    if (!lista.length) { ui.aviso("Nenhum AGV cadastrado.", "aviso"); return; }
+    const escolhido = await new Promise(resolver => {
+        const fundo = document.createElement("div");
+        fundo.className = "modal-overlay ativo";
+        fundo.innerHTML = `
+            <div class="modal" role="dialog" aria-modal="true" aria-labelledby="enviarMissaoTitulo">
+                <div class="modal-cabecalho"><div><h2 id="enviarMissaoTitulo">Enviar ${escaparHtml(id)} para…</h2><p>Se o AGV estiver ocupado, a missão vai para a fila dele.</p></div></div>
+                <div class="modal-corpo"><fieldset class="opcoes-radio">${lista.map((agv, i) => {
+                    const cat = categoriaEstadoAGV(agv);
+                    return `<label class="opcao-radio"><input type="radio" name="agvDestino" value="${escaparHtml(agv.id)}" ${i === 0 ? "checked" : ""}>
+                        <span><strong>AGV ${escaparHtml(agv.id)} · ${escaparHtml(agv.nome)}</strong><small>${cat.texto}${agv.online ? " · " + escaparHtml(descreverPosicaoAGV(agv)) : ""}</small></span></label>`;
+                }).join("")}</fieldset></div>
+                <div class="modal-acoes"><button type="button" class="btn" data-r="0">Voltar</button><button type="button" class="btn btn-primario" data-r="1">Enviar</button></div>
+            </div>`;
+        const fechar = valor => { fundo.remove(); resolver(valor); };
+        fundo.addEventListener("click", e => {
+            if (e.target === fundo) fechar(null);
+            const b = e.target.closest("[data-r]");
+            if (b) fechar(b.dataset.r === "1" ? fundo.querySelector('input[name="agvDestino"]:checked')?.value : null);
+        });
+        document.body.appendChild(fundo);
+    });
+    if (!escolhido) return;
+    const agv = agvs[escolhido];
+    if (podeCarregarMissao(agv) && !["CARREGADA"].includes(agv.estadoMissao)) {
+        if (iniciarMissaoPorId(agv.id, id)) ui.aviso(`Missão ${id} enviada ao AGV ${agv.id}. Aperte START MISSÃO no AGV para começar.`, "sucesso");
+    } else {
+        if (!(agv.filaMissoes || []).includes(id)) agv.filaMissoes.push(id);
+        salvarAgvsFrota();
+        ui.aviso(`AGV ${agv.id} ocupado: ${id} entrou na fila (posição ${agv.filaMissoes.length}).`, "info");
+    }
     renderizarListaMissoes();
 }
-function excluirMissao(id) {
 
-    const missao =
-        missoes.find(
-            missao =>
-                missao.id === id
-        );
-
-    if (!missao) {
-        return;
-    }
-
-
-    const confirmar =
-        confirm(
-            `Deseja excluir a missão ${missao.id} - ${missao.nome}?`
-        );
-
-
-    if (!confirmar) {
-        return;
-    }
-
-
-    const indice =
-        missoes.findIndex(
-            missao =>
-                missao.id === id
-        );
-
-
-    missoes.splice(
-        indice,
-        1
-    );
-
-
-    localStorage.setItem(
-        "missoesAGV",
-        JSON.stringify(missoes)
-    );
-
-
-    renderizarListaMissoes();
-}
-document.getElementById(
-    "btnNovaMissao"
-)?.addEventListener(
-    "click",
-    abrirNovaMissao
-);
-document
-    .getElementById("tipoEtapaMissao")
-    ?.addEventListener(
-        "change",
-        atualizarConfiguracaoEtapa
-    );
-
-document
-    .getElementById("btnConfirmarEtapa")
-    ?.addEventListener(
-        "click",
-        confirmarEtapaMissao
-    );
-
-document
-    .getElementById("btnCancelarEtapa")
-    ?.addEventListener(
-        "click",
-        fecharModalEtapaMissao
-    );
-
-document
-    .getElementById("btnFecharModalEtapa")
-    ?.addEventListener(
-        "click",
-        fecharModalEtapaMissao
-    );
-
-
-document.getElementById(
-    "btnVoltarMissoes"
-)?.addEventListener(
-    "click",
-    voltarListaMissoes
-);
-
-
-document.getElementById(
-    "btnCancelarMissao"
-)?.addEventListener(
-    "click",
-    voltarListaMissoes
-);
-
-
-document.getElementById(
-    "btnAdicionarEtapa"
-)?.addEventListener(
-    "click",
-    adicionarEtapaMissao
-);
-
-
-document.getElementById(
-    "btnSalvarMissao"
-)?.addEventListener(
-    "click",
-    salvarMissao
-);
-/* ============================================================
-   ESTAÇÃO
-   ============================================================ */
-
-function abrirFormEstacao() {
-
-    const formulario =
-        document.getElementById("formEstacao");
-
-    if (!formulario) return;
-
-    pontoEmEdicao = null;
-
-    formulario.hidden = false;
-
-    document.getElementById("nomeEstacao").value = "";
-
-    rfidsEstacaoEmCadastro = [];
-
-    const botao =
-        document.getElementById("cadastrarEstacao");
-
-    if (botao) {
-        botao.textContent = "CADASTRAR ESTAÇÃO";
-    }
-
-    renderizarRfidsEstacaoCadastro();
-
-    document
-        .getElementById("novoRfidEstacao")
-        ?.focus();
-}
-
-
-function fecharFormEstacao() {
-
-    const formulario =
-        document.getElementById("formEstacao");
-
-    if (!formulario) {
-        return;
-    }
-
-    formulario.hidden = true;
-}
-
-
-/* ============================================================
-   ADICIONAR RFID À ESTAÇÃO
-   ============================================================ */
-
-function adicionarRfidEstacao() {
-
-    const input =
-        document.getElementById("novoRfidEstacao");
-
-    if (!input) {
-        return;
-    }
-
-    const rfid =
-        input.value.trim();
-
-    if (!rfid) {
-
-        alert("Informe o código RFID.");
-
-        return;
-    }
-
-    const rfidExisteNaPlanta =
-        planta.pontos.some(
-            ponto =>
-                obterRfidsPonto(ponto).includes(rfid)
-        );
-
-    if (rfidExisteNaPlanta) {
-
-        alert(
-            "Este código RFID já está cadastrado na planta."
-        );
-
-        return;
-    }
-
-    if (rfidsEstacaoEmCadastro.includes(rfid)) {
-
-        alert(
-            "Este RFID já foi adicionado à estação."
-        );
-
-        return;
-    }
-
-    rfidsEstacaoEmCadastro.push(rfid);
-
-    input.value = "";
-
-    renderizarRfidsEstacaoCadastro();
-
-    input.focus();
-}
-
-
-/* ============================================================
-   MOSTRAR RFIDS DA ESTAÇÃO DURANTE O CADASTRO
-   ============================================================ */
-
-function renderizarRfidsEstacaoCadastro() {
-
-    const lista =
-        document.getElementById("listaRfidsEstacao");
-
-    if (!lista) {
-        return;
-    }
-
-    lista.innerHTML = "";
-
-    if (rfidsEstacaoEmCadastro.length === 0) {
-
-        lista.innerHTML = `
-            <div class="empty-state">
-                Nenhum RFID adicionado.
-            </div>
-        `;
-
-        return;
-    }
-
-    rfidsEstacaoEmCadastro.forEach(
-        (rfid, indice) => {
-
-            const item =
-                document.createElement("div");
-
-            item.className =
-                "plant-rfid-item";
-
-            item.innerHTML = `
-                <span>${rfid}</span>
-
-                <button
-    type="button"
-    class="btn-remover-rfid"
-    data-indice="${indice}"
->
-    REMOVER
-</button>
-            `;
-
-            lista.appendChild(item);
-        }
-    );
-}
-
-
-/* ============================================================
-   REFERÊNCIA
-   ============================================================ */
-
-function abrirFormReferencia() {
-
-    const formulario =
-        document.getElementById("formReferencia");
-
-    if (!formulario) return;
-
-    pontoEmEdicao = null;
-
-    formulario.hidden = false;
-
-    rfidsReferenciaEmCadastro = [];
-
-    const botao =
-        document.getElementById("cadastrarReferencia");
-
-    if (botao) {
-        botao.textContent = "CADASTRAR REFERÊNCIA";
-    }
-
-    renderizarRfidsReferenciaCadastro();
-
-    document
-        .getElementById("novoRfidReferencia")
-        ?.focus();
-}
-
-function fecharFormReferencia() {
-
-    const formulario =
-        document.getElementById("formReferencia");
-
-    if (!formulario) {
-        return;
-    }
-
-    formulario.hidden = true;
-}
-
-
-/* ============================================================
-   ADICIONAR RFID À REFERÊNCIA
-   ============================================================ */
-
-function adicionarRfidReferencia() {
-
-    const input =
-        document.getElementById("novoRfidReferencia");
-
-    if (!input) {
-        return;
-    }
-
-    const rfid =
-        input.value.trim();
-
-    if (!rfid) {
-
-        alert("Informe o código RFID.");
-
-        return;
-    }
-
-    const rfidExisteNaPlanta =
-        planta.pontos.some(
-            ponto =>
-                obterRfidsPonto(ponto).includes(rfid)
-        );
-
-    if (rfidExisteNaPlanta) {
-
-        alert(
-            "Este código RFID já está cadastrado na planta."
-        );
-
-        return;
-    }
-
-    if (rfidsReferenciaEmCadastro.includes(rfid)) {
-
-        alert(
-            "Este RFID já foi adicionado à referência."
-        );
-
-        return;
-    }
-
-    rfidsReferenciaEmCadastro.push(rfid);
-
-    input.value = "";
-
-    renderizarRfidsReferenciaCadastro();
-
-    input.focus();
-}
-
-
-/* ============================================================
-   MOSTRAR RFIDS DA REFERÊNCIA DURANTE O CADASTRO
-   ============================================================ */
-
-function renderizarRfidsReferenciaCadastro() {
-
-    const lista =
-        document.getElementById("listaRfidsReferencia");
-
-    if (!lista) {
-        return;
-    }
-
-    lista.innerHTML = "";
-
-    if (rfidsReferenciaEmCadastro.length === 0) {
-
-        lista.innerHTML = `
-            <div class="empty-state">
-                Nenhum RFID adicionado.
-            </div>
-        `;
-
-        return;
-    }
-
-    rfidsReferenciaEmCadastro.forEach(
-        (rfid, indice) => {
-
-            const item =
-                document.createElement("div");
-
-            item.className =
-                "plant-rfid-item";
-
-            item.innerHTML = `
-                <span>${rfid}</span>
-
-                <button
-                    type="button"
-                    class="btn-remover-rfid-referencia"
-                    data-indice="${indice}"
-                >
-                    REMOVER
-                </button>
-            `;
-
-            lista.appendChild(item);
-        }
-    );
-}
-document.addEventListener(
-    "click",
-    function(event) {
-
-        // ====================================================
-        // REMOVER RFID DE ESTAÇÃO
-        // ====================================================
-
-        const botaoEstacao =
-            event.target.closest(".btn-remover-rfid");
-
-        if (botaoEstacao) {
-
-            const indice =
-                Number(botaoEstacao.dataset.indice);
-
-            removerRfidEstacao(indice);
-
-            return;
-        }
-
-
-        // ====================================================
-        // REMOVER RFID DE REFERÊNCIA
-        // ====================================================
-
-        const botaoReferencia =
-            event.target.closest(
-                ".btn-remover-rfid-referencia"
-            );
-
-        if (botaoReferencia) {
-
-            const indice =
-                Number(botaoReferencia.dataset.indice);
-
-            removerRfidReferencia(indice);
-
-            return;
-        }
-
-    }
-);
-function removerRfidEstacao(indice) {
-
-    const rfid =
-        rfidsEstacaoEmCadastro[indice];
-
-    if (!rfid) {
-        return;
-    }
-
-    if (rfidEstaEmUsoEmConexao(rfid)) {
-
-        alert(
-            `O RFID ${rfid} está sendo utilizado em uma conexão e não pode ser removido.`
-        );
-
-        return;
-    }
-
-    rfidsEstacaoEmCadastro.splice(
-        indice,
-        1
-    );
-
-    renderizarRfidsEstacaoCadastro();
-}
-function rfidEstaEmUsoEmConexao(rfid) {
-
-    if (!planta || !Array.isArray(planta.conexoes)) {
-        return false;
-    }
-
-    return planta.conexoes.some(conexao => {
-
-        if (!conexao.rfids) {
-            return false;
-        }
-
-        return Object.values(conexao.rfids).some(relacao => {
-
-            if (!relacao) {
-                return false;
-            }
-
-            return (
-                relacao.origem === rfid ||
-                relacao.destino === rfid
-            );
-        });
-    });
-}
-
-/* ============================================================
-   REMOVER RFID DA REFERÊNCIA
-   ============================================================ */
-
-function removerRfidReferencia(indice) {
-
-    const rfid =
-        rfidsReferenciaEmCadastro[indice];
-
-    if (!rfid) {
-        return;
-    }
-
-    if (rfidEstaEmUsoEmConexao(rfid)) {
-
-        alert(
-            `O RFID ${rfid} está sendo utilizado em uma conexão e não pode ser removido.`
-        );
-
-        return;
-    }
-
-    rfidsReferenciaEmCadastro.splice(
-        indice,
-        1
-    );
-
-    renderizarRfidsReferenciaCadastro();
-}
-
-/* ============================================================
-   EDIÇÃO DE PONTO
-   ============================================================ */
-
-function abrirEdicaoPonto(id) {
-
-    const ponto =
-        planta.pontos.find(
-            ponto => ponto.id === id
-        );
-
-    if (!ponto) return;
-
-    pontoEmEdicao = id;
-
-    if (ponto.tipo === "ESTACAO") {
-
-        const formulario =
-            document.getElementById("formEstacao");
-
-        if (!formulario) return;
-
-        formulario.hidden = false;
-
-        document.getElementById("nomeEstacao").value =
-            ponto.nome || "";
-
-        rfidsEstacaoEmCadastro =
-            [...obterRfidsPonto(ponto)];
-
-        const botao =
-            document.getElementById("cadastrarEstacao");
-
-        if (botao) {
-            botao.textContent =
-                "SALVAR ALTERAÇÕES";
-        }
-
-        renderizarRfidsEstacaoCadastro();
-
-        document
-            .getElementById("novoRfidEstacao")
-            ?.focus();
-
-        return;
-    }
-
-    if (ponto.tipo === "REFERENCIA") {
-
-        const formulario =
-            document.getElementById("formReferencia");
-
-        if (!formulario) return;
-
-        formulario.hidden = false;
-
-        rfidsReferenciaEmCadastro =
-            [...obterRfidsPonto(ponto)];
-
-        const botao =
-            document.getElementById("cadastrarReferencia");
-
-        if (botao) {
-            botao.textContent =
-                "SALVAR ALTERAÇÕES";
-        }
-
-        renderizarRfidsReferenciaCadastro();
-
-        document
-            .getElementById("novoRfidReferencia")
-            ?.focus();
-    }
-}
-
-
-
-function gerarNovoId(tipo) {
-    const prefixo =
-        tipo === "ESTACAO"
-            ? "E"
-            : "R";
-
-    let numero = 1;
-
-    while (
-        planta.pontos.some(
-            ponto =>
-                ponto.id ===
-                prefixo +
-                numero.toString().padStart(2, "0")
-        )
-    ) {
-        numero++;
-    }
-
-    return prefixo +
-        numero.toString().padStart(2, "0");
-}
-
-
-
-function cadastrarEstacao() {
-
-    const nome =
-        document
-            .getElementById("nomeEstacao")
-            .value
-            .trim();
-
-    if (!nome) {
-        alert("Informe o nome da estação.");
-        return;
-    }
-
-    if (
-        rfidsEstacaoEmCadastro.length === 0
-    ) {
-        alert("Adicione pelo menos um RFID.");
-        return;
-    }
-
-    /* ========================================================
-       MODO EDIÇÃO
-       ======================================================== */
-
-    if (pontoEmEdicao) {
-
-        const ponto =
-            planta.pontos.find(
-                ponto =>
-                    ponto.id === pontoEmEdicao
-            );
-
-        if (!ponto) return;
-
-        ponto.nome = nome;
-
-        ponto.rfids =
-            [...rfidsEstacaoEmCadastro];
-
-        localStorage.setItem(
-            "plantaAGV",
-            JSON.stringify(planta)
-        );
-
-        pontoEmEdicao = null;
-        rfidsEstacaoEmCadastro = [];
-
-        fecharFormEstacao();
-
-        renderizarPontos();
-
-        return;
-    }
-
-    /* ========================================================
-       NOVO CADASTRO
-       ======================================================== */
-
-    const novaEstacao = {
-
-        id: gerarNovoId("ESTACAO"),
-
-        tipo: "ESTACAO",
-
-        nome: nome,
-
-        rfids:
-            [...rfidsEstacaoEmCadastro],
-
-        /*
-         * Ainda não foi colocada no mapa.
-         * O operador irá arrastá-la da lista.
-         */
-        x: null,
-        y: null
-    };
-
-    planta.pontos.push(
-        novaEstacao
-    );
-
-    localStorage.setItem(
-        "plantaAGV",
-        JSON.stringify(planta)
-    );
-
-    fecharFormEstacao();
-
-    rfidsEstacaoEmCadastro = [];
-
-    renderizarPontos();
-}
-function cadastrarReferencia() {
-
-    if (
-        rfidsReferenciaEmCadastro.length === 0
-    ) {
-
-        alert("Adicione pelo menos um RFID.");
-
-        return;
-    }
-
-    /* ========================================================
-       MODO EDIÇÃO
-       ======================================================== */
-
-    if (pontoEmEdicao) {
-
-        const ponto =
-            planta.pontos.find(
-                ponto =>
-                    ponto.id === pontoEmEdicao
-            );
-
-        if (!ponto) return;
-
-        ponto.rfids =
-            [...rfidsReferenciaEmCadastro];
-
-        localStorage.setItem(
-            "plantaAGV",
-            JSON.stringify(planta)
-        );
-
-        pontoEmEdicao = null;
-        rfidsReferenciaEmCadastro = [];
-
-        fecharFormReferencia();
-
-        renderizarPontos();
-
-        return;
-    }
-
-    /* ========================================================
-       NOVO CADASTRO
-       ======================================================== */
-
-    const novaReferencia = {
-
-        id: gerarNovoId("REFERENCIA"),
-
-        tipo: "REFERENCIA",
-
-        rfids:
-            [...rfidsReferenciaEmCadastro],
-
-        /*
-         * Ainda não foi colocada no mapa.
-         */
-        x: null,
-        y: null
-    };
-
-    planta.pontos.push(
-        novaReferencia
-    );
-
-    localStorage.setItem(
-        "plantaAGV",
-        JSON.stringify(planta)
-    );
-
-    fecharFormReferencia();
-
-    rfidsReferenciaEmCadastro = [];
-
-    renderizarPontos();
-}
-const btnEditarMapa =
-    document.getElementById("btnEditarMapa");
-
-btnEditarMapa?.addEventListener(
-    "click",
-    () => {
-
-        if (modoEdicaoPlanta) {
-            salvarMapa();
-        } else {
-            ativarEdicaoMapa();
-        }
-
-    }
-);
-const btnConexoes =
-    document.getElementById("btnConexoes");
-
-btnConexoes?.addEventListener(
-    "click",
-    ativarConexoesPlanta
-);
-document.addEventListener(
-    "click",
-    function(event) {
-
-
-        if (
-    event.target.closest(".btn-excluir-ponto")
-) {
-const id =
-    event.target.closest(".btn-excluir-ponto").dataset.id;
-
-
-            excluirPonto(id);
-
-        }
-
-    }
-);
-document.addEventListener("click", function(event) {
-
-    const botao =
-        event.target.closest(".btn-editar-ponto");
-
-    if (!botao) {
-        return;
-    }
-
-    const id =
-        botao.dataset.id;
-
-    abrirEdicaoPonto(id);
+document.getElementById("btnNovaMissao")?.addEventListener("click", abrirNovaMissao);
+document.getElementById("tipoEtapaMissao")?.addEventListener("change", atualizarConfiguracaoEtapa);
+document.getElementById("btnConfirmarEtapa")?.addEventListener("click", confirmarEtapaMissao);
+document.getElementById("btnCancelarEtapa")?.addEventListener("click", fecharModalEtapaMissao);
+document.getElementById("btnFecharModalEtapa")?.addEventListener("click", fecharModalEtapaMissao);
+document.getElementById("modalEtapaMissao")?.addEventListener("keydown", evento => {
+    if (evento.key === "Enter" && evento.target.matches("input")) { evento.preventDefault(); confirmarEtapaMissao(); }
+    if (evento.key === "Escape") fecharModalEtapaMissao();
 });
-
-document.addEventListener("dragstart", function(event) {
-
-    if (
-        event.target.closest(".btn-editar-ponto") ||
-        event.target.closest(".btn-excluir-ponto")
-    ) {
-
-        event.preventDefault();
-
-    }
+document.getElementById("btnCancelarMissao")?.addEventListener("click", descartarEdicaoMissao);
+document.getElementById("btnSalvarMissao")?.addEventListener("click", salvarMissao);
+document.getElementById("btnDuplicarMissaoAtual")?.addEventListener("click", () => missaoEmEdicao && duplicarMissao(missaoEmEdicao.id));
+document.getElementById("btnExcluirMissaoAtual")?.addEventListener("click", () => missaoEmEdicao && excluirMissao(missaoEmEdicao.id));
+document.getElementById("btnEnviarMissaoAGV")?.addEventListener("click", enviarMissaoParaAGV);
+document.getElementById("adicionarEtapa")?.addEventListener("click", evento => {
+    const botao = evento.target.closest("[data-nova-etapa]");
+    if (botao) adicionarEtapaMissao(botao.dataset.novaEtapa);
 });
-const btnCadastrarEstacao =
-    document.getElementById("cadastrarEstacao");
-
-const btnCadastrarReferencia =
-    document.getElementById("cadastrarReferencia");
-
-
-btnCadastrarEstacao?.addEventListener(
-    "click",
-    cadastrarEstacao
-);
-
-btnCadastrarReferencia?.addEventListener(
-    "click",
-    cadastrarReferencia
-);
-/* ============================================================
-   EVENTOS DOS FORMULÁRIOS DA PLANTA
-   ============================================================ */
-
-const btnAdicionarEstacao =
-    document.getElementById("btnAdicionarEstacao");
-
-const btnAdicionarReferencia =
-    document.getElementById("btnAdicionarReferencia");
-
-const fecharFormEstacaoBtn =
-    document.getElementById("fecharFormEstacao");
-
-const cancelarFormEstacaoBtn =
-    document.getElementById("cancelarFormEstacao");
-
-const fecharFormReferenciaBtn =
-    document.getElementById("fecharFormReferencia");
-
-const cancelarFormReferenciaBtn =
-    document.getElementById("cancelarFormReferencia");
-
-const btnAdicionarRfidEstacao =
-    document.getElementById("adicionarRfidEstacao");
-
-const btnAdicionarRfidReferencia =
-    document.getElementById("adicionarRfidReferencia");
-
-
-/* ============================================================
-   ABRIR FORMULÁRIOS
-   ============================================================ */
-
-btnAdicionarEstacao?.addEventListener(
-    "click",
-    abrirFormEstacao
-);
-
-btnAdicionarReferencia?.addEventListener(
-    "click",
-    abrirFormReferencia
-);
-
-
-/* ============================================================
-   FECHAR FORMULÁRIO ESTAÇÃO
-   ============================================================ */
-
-fecharFormEstacaoBtn?.addEventListener(
-    "click",
-    fecharFormEstacao
-);
-
-cancelarFormEstacaoBtn?.addEventListener(
-    "click",
-    fecharFormEstacao
-);
-
-
-/* ============================================================
-   FECHAR FORMULÁRIO REFERÊNCIA
-   ============================================================ */
-
-fecharFormReferenciaBtn?.addEventListener(
-    "click",
-    fecharFormReferencia
-);
-
-cancelarFormReferenciaBtn?.addEventListener(
-    "click",
-    fecharFormReferencia
-);
-const fecharFormConexaoBtn =
-    document.getElementById(
-        "fecharFormConexao"
-    );
-
-const cancelarFormConexaoBtn =
-    document.getElementById(
-        "cancelarFormConexao"
-    );
-
-const salvarFormConexaoBtn =
-    document.getElementById(
-        "salvarFormConexao"
-    );
-
-fecharFormConexaoBtn?.addEventListener(
-    "click",
-    fecharFormConexao
-);
-
-cancelarFormConexaoBtn?.addEventListener(
-    "click",
-    fecharFormConexao
-);
-
-salvarFormConexaoBtn?.addEventListener(
-    "click",
-    salvarConexaoConfigurada
-);
-
-document
-    .querySelectorAll(
-        'input[name="tipoConexao"]'
-    )
-    .forEach(
-        radio => {
-
-            radio.addEventListener(
-                "change",
-                function() {
-
-                    if (
-                        conexaoEmConfiguracao
-                    ) {
-
-                        conexaoEmConfiguracao.circulacao =
-                            this.value;
-                    }
-
-                    atualizarConfiguracaoConexao();
-                }
-            );
-        }
-    );
-
-/* ============================================================
-   ADICIONAR RFID
-   ============================================================ */
-
-btnAdicionarRfidEstacao?.addEventListener(
-    "click",
-    adicionarRfidEstacao
-);
-
-btnAdicionarRfidReferencia?.addEventListener(
-    "click",
-    adicionarRfidReferencia
-);
-/* ============================================================
-   DESENHAR CONEXÕES
-   ============================================================ */
-
-/* ============================================================
-   CONEXÕES DA PLANTA
-   ============================================================ */
-
-
-/* ============================================================
-   CRIAR SETA DA CONEXÃO
-   ============================================================ */
-
-function criarSetaConexao(
-    linha,
-    angulo,
-    percentual
-) {
-    const seta = document.createElement("span");
-
-    seta.className =
-        "plant-connection-arrow";
-
-    seta.textContent = "➤";
-
-    /*
-       Linha horizontal
-    */
-    if (
-        linha.classList.contains(
-            "conexao-horizontal"
-        )
-    ) {
-        seta.style.left =
-            `${percentual}%`;
-
-        seta.style.top =
-            "50%";
-    }
-
-    /*
-       Linha vertical
-    */
-    else {
-        seta.style.left =
-            "50%";
-
-        seta.style.top =
-            `${percentual}%`;
-    }
-
-    seta.style.transform =
-        `translate(-50%, -50%) rotate(${-angulo}deg)`;
-
-    /*
-       A seta não bloqueia o mouse.
-       O evento será recebido pela linha.
-    */
-    seta.style.pointerEvents =
-        "none";
-
-    linha.appendChild(seta);
-}
-
-
-/* ============================================================
-   CRIAR LINHA DA CONEXÃO
-   ============================================================ */
-
-function criarLinhaConexao(
-    pontoA,
-    pontoB,
-    angulo,
-    offset = 0
-) {
-    const linha =
-        document.createElement("div");
-
-    /*
-       Verifica se a conexão é horizontal.
-       Tolerância de 0.5% para pequenas diferenças.
-    */
-    const horizontal =
-        Math.abs(
-            pontoB.y - pontoA.y
-        ) <= 0.5;
-
-
-    /*
-       Classe base + orientação
-    */
-    linha.className =
-        "plant-connection-line " +
-        (
-            horizontal
-                ? "conexao-horizontal"
-                : "conexao-vertical"
-        );
-
-
-    /*
-       Permite interação com o mouse.
-    */
-    linha.style.pointerEvents =
-        "auto";
-
-    linha.style.cursor =
-        "pointer";
-
-
-    /* ========================================================
-       CONEXÃO HORIZONTAL
-       ======================================================== */
-
-    if (horizontal) {
-
-        linha.style.left =
-            `${Math.min(
-                pontoA.x,
-                pontoB.x
-            )}%`;
-
-        linha.style.top =
-            `${pontoA.y + offset}%`;
-
-        linha.style.width =
-            `${Math.abs(
-                pontoB.x - pontoA.x
-            )}%`;
-
-        linha.style.height =
-            "2px";
-    }
-
-
-    /* ========================================================
-       CONEXÃO VERTICAL
-       ======================================================== */
-
-    else {
-
-        linha.style.left =
-            `${pontoA.x + offset}%`;
-
-        linha.style.top =
-            `${Math.min(
-                pontoA.y,
-                pontoB.y
-            )}%`;
-
-        linha.style.width =
-            "2px";
-
-        linha.style.height =
-            `${Math.abs(
-                pontoB.y - pontoA.y
-            )}%`;
-    }
-
-
-    /*
-       Cria a seta central.
-       Nas conexões de mão dupla e dupla faixa
-       ela será complementada depois.
-    */
-    criarSetaConexao(
-        linha,
-        angulo,
-        50
-    );
-
-
-    return linha;
-}
-
-
-/* ============================================================
-   CRIAR BOTÃO REMOVER CONEXÃO
-   ============================================================ */
-
-function criarBotaoRemoverConexao(
-    indice
-) {
-    const botao =
-        document.createElement("button");
-
-    botao.type =
-        "button";
-
-    botao.className =
-    "btn-remover-conexao-mapa";
-
-    botao.textContent =
-        "×";
-
-    botao.title =
-        "Remover conexão";
-
-
-    botao.addEventListener(
-        "click",
-        function (event) {
-
-            /*
-               Impede que o clique no botão
-               seja interpretado como clique
-               na conexão.
-            */
-            event.stopPropagation();
-
-            excluirConexao(
-                indice
-            );
-        }
-    );
-
-
-    return botao;
-}
-
-
-/* ============================================================
-   RENDERIZAR CONEXÕES
-   ============================================================ */
-
-function renderizarConexoes() {
-
-    const camada =
-        document.getElementById("conexoesPlanta");
-
-    const camadaPontos =
-        document.getElementById("estacoesPlanta");
-
-    if (!camada || !camadaPontos) {
-        return;
-    }
-
-
-    // ========================================================
-    // LIMPA AS CONEXÕES EXISTENTES
-    // ========================================================
-
-    camada.innerHTML = "";
-
-
-    // ========================================================
-    // TOOLTIP DAS CONEXÕES
-    // ========================================================
-
-    let tooltip =
-        document.getElementById("tooltipConexaoPlanta");
-
-    if (!tooltip) {
-
-        tooltip =
-            document.createElement("div");
-
-        tooltip.id =
-            "tooltipConexaoPlanta";
-
-        tooltip.className =
-            "tooltip-conexao-planta";
-
-        document.body.appendChild(tooltip);
-    }
-
-
-    // ========================================================
-    // CONFIGURA HOVER DA CONEXÃO
-    // ========================================================
-
-    function configurarHoverConexao(
-        elemento,
-        conexao,
-        pontoA,
-        pontoB
-    ) {
-
-        elemento.addEventListener(
-            "mouseenter",
-            function () {
-
-                const circulacao =
-                    conexao.circulacao ||
-                    "NÃO CONFIGURADA";
-
-
-                // ------------------------------------------------
-                // NOME DO TIPO DE CONEXÃO
-                // ------------------------------------------------
-
-                let textoTipo;
-
-                switch (circulacao) {
-
-                    case "MAO_DUPLA":
-                        textoTipo = "MÃO DUPLA";
-                        break;
-
-                    case "SENTIDO_UNICO":
-                        textoTipo = "SENTIDO ÚNICO";
-                        break;
-
-                    case "DUPLA_FAIXA":
-                        textoTipo = "DUPLA FAIXA";
-                        break;
-
-                    default:
-                        textoTipo = circulacao;
-                        break;
-                }
-
-
-                // ------------------------------------------------
-                // RFID ORIGEM → DESTINO
-                // ------------------------------------------------
-
-                const relacaoOrigemDestino =
-                    conexao.rfids?.origemDestino;
-
-
-                // ------------------------------------------------
-                // RFID DESTINO → ORIGEM
-                // ------------------------------------------------
-
-                const relacaoDestinoOrigem =
-                    conexao.rfids?.destinoOrigem;
-
-
-                let html = `
-                    <div class="tooltip-conexao-titulo">
-                        ${textoTipo}
-                    </div>
-
-                    <div class="tooltip-conexao-pontos">
-                        ${pontoA.id} ↔ ${pontoB.id}
-                    </div>
-                `;
-
-
-                // =================================================
-                // MÃO DUPLA
-                // =================================================
-
-                if (circulacao === "MAO_DUPLA") {
-
-                    html += `
-                        <div class="tooltip-conexao-rfid">
-                            <strong>${pontoA.id} → ${pontoB.id}</strong>
-                            <span>
-                                ${
-                                    relacaoOrigemDestino
-                                        ? `${relacaoOrigemDestino.origem} → ${relacaoOrigemDestino.destino}`
-                                        : "RFID não configurado"
-                                }
-                            </span>
-                        </div>
-
-                        <div class="tooltip-conexao-rfid">
-                            <strong>${pontoB.id} → ${pontoA.id}</strong>
-                            <span>
-                                ${
-                                    relacaoDestinoOrigem
-                                        ? `${relacaoDestinoOrigem.origem} → ${relacaoDestinoOrigem.destino}`
-                                        : "RFID não configurado"
-                                }
-                            </span>
-                        </div>
-                    `;
-                }
-
-
-                // =================================================
-                // SENTIDO ÚNICO
-                // =================================================
-
-                else if (circulacao === "SENTIDO_UNICO") {
-
-                    const origemDestino =
-                        conexao.sentidoUnico === "ORIGEM_DESTINO";
-
-
-                    const relacao =
-                        origemDestino
-                            ? relacaoOrigemDestino
-                            : relacaoDestinoOrigem;
-
-
-                    const pontoOrigem =
-                        origemDestino
-                            ? pontoA
-                            : pontoB;
-
-
-                    const pontoDestino =
-                        origemDestino
-                            ? pontoB
-                            : pontoA;
-
-
-                    html += `
-                        <div class="tooltip-conexao-rfid">
-                            <strong>
-                                ${pontoOrigem.id} → ${pontoDestino.id}
-                            </strong>
-
-                            <span>
-                                ${
-                                    relacao
-                                        ? `${relacao.origem} → ${relacao.destino}`
-                                        : "RFID não configurado"
-                                }
-                            </span>
-                        </div>
-                    `;
-                }
-
-
-                // =================================================
-                // DUPLA FAIXA
-                // =================================================
-
-                else if (circulacao === "DUPLA_FAIXA") {
-
-                    html += `
-                        <div class="tooltip-conexao-rfid">
-                            <strong>${pontoA.id} → ${pontoB.id}</strong>
-                            <span>
-                                ${
-                                    relacaoOrigemDestino
-                                        ? `${relacaoOrigemDestino.origem} → ${relacaoOrigemDestino.destino}`
-                                        : "RFID não configurado"
-                                }
-                            </span>
-                        </div>
-
-                        <div class="tooltip-conexao-rfid">
-                            <strong>${pontoB.id} → ${pontoA.id}</strong>
-                            <span>
-                                ${
-                                    relacaoDestinoOrigem
-                                        ? `${relacaoDestinoOrigem.origem} → ${relacaoDestinoOrigem.destino}`
-                                        : "RFID não configurado"
-                                }
-                            </span>
-                        </div>
-                    `;
-                }
-
-
-                tooltip.innerHTML = html;
-
-                tooltip.style.display = "block";
-            }
-        );
-
-
-        elemento.addEventListener(
-            "mousemove",
-            function (event) {
-
-                tooltip.style.left =
-                    `${event.clientX + 15}px`;
-
-                tooltip.style.top =
-                    `${event.clientY + 15}px`;
-            }
-        );
-
-
-        elemento.addEventListener(
-            "mouseleave",
-            function () {
-
-                tooltip.style.display =
-                    "none";
-            }
-        );
-    }
-
-
-    // ========================================================
-    // DESENHA TODAS AS CONEXÕES
-    // ========================================================
-
-    planta.conexoes.forEach(
-    function (conexao, indice) {
-
-            // ----------------------------------------------------
-            // LOCALIZA OS PONTOS
-            // ----------------------------------------------------
-
-            const pontoA =
-                planta.pontos.find(
-                    ponto =>
-                        ponto.id === conexao.origem
-                );
-
-
-            const pontoB =
-                planta.pontos.find(
-                    ponto =>
-                        ponto.id === conexao.destino
-                );
-
-
-            if (!pontoA || !pontoB) {
-                return;
-            }
-
-
-            // ----------------------------------------------------
-            // TIPO DE CONEXÃO
-            // ----------------------------------------------------
-
-            const tipo =
-                conexao.circulacao ||
-                "MAO_DUPLA";
-
-
-            // ----------------------------------------------------
-            // ÂNGULOS
-            // ----------------------------------------------------
-
-            const anguloOrigemDestino =
-                Number(
-                    conexao.anguloOrigemDestino ?? 0
-                );
-
-
-            const anguloDestinoOrigem =
-                Number(
-                    conexao.anguloDestinoOrigem ??
-                    (anguloOrigemDestino + 180)
-                );
-
-
-            // ====================================================
-            // MÃO DUPLA
-            // ====================================================
-
-            if (tipo === "MAO_DUPLA") {
-
-                const linha =
-                    criarLinhaConexao(
-                        pontoA,
-                        pontoB,
-                        anguloOrigemDestino
-                    );
-
-
-                // Remove a seta automática criada
-                linha.innerHTML = "";
-
-
-                // Seta A → B
-                criarSetaConexao(
-                    linha,
-                    anguloOrigemDestino,
-                    35
-                );
-
-
-                // Seta B → A
-                criarSetaConexao(
-                    linha,
-                    anguloDestinoOrigem,
-                    65
-                );
-
-
-                configurarHoverConexao(
-                    linha,
-                    conexao,
-                    pontoA,
-                    pontoB
-                );
-
-
-                camada.appendChild(linha);
-
-/* -------------------------------------------------
-   BOTÃO EXCLUIR CONEXÃO
-   ------------------------------------------------- */
-
-if (
-    modoEdicaoPlanta &&
-    !modoConexoesPlanta
-) {
-
-    const botao =
-        criarBotaoRemoverConexao(
-            indice
-        );
-
-    botao.style.left =
-        `${(pontoA.x + pontoB.x) / 2}%`;
-
-    botao.style.top =
-        `${(pontoA.y + pontoB.y) / 2}%`;
-
-    camadaPontos.appendChild(
-        botao
-    );
-}
-
-return;
-            }
-
-
-            // ====================================================
-            // SENTIDO ÚNICO
-            // ====================================================
-
-            if (tipo === "SENTIDO_UNICO") {
-
-                const linha =
-                    criarLinhaConexao(
-                        pontoA,
-                        pontoB,
-                        anguloOrigemDestino
-                    );
-
-
-                linha.innerHTML = "";
-
-
-                const anguloSeta =
-                    conexao.sentidoUnico ===
-                    "ORIGEM_DESTINO"
-
-                        ? anguloOrigemDestino
-
-                        : anguloDestinoOrigem;
-
-
-                criarSetaConexao(
-                    linha,
-                    anguloSeta,
-                    50
-                );
-
-
-                configurarHoverConexao(
-                    linha,
-                    conexao,
-                    pontoA,
-                    pontoB
-                );
-
-
-                camada.appendChild(linha);
-
-/* -------------------------------------------------
-   BOTÃO EXCLUIR CONEXÃO
-   ------------------------------------------------- */
-
-if (
-    modoEdicaoPlanta &&
-    !modoConexoesPlanta
-) {
-
-    const botao =
-        criarBotaoRemoverConexao(
-            indice
-        );
-
-    botao.style.left =
-        `${(pontoA.x + pontoB.x) / 2}%`;
-
-    botao.style.top =
-        `${(pontoA.y + pontoB.y) / 2}%`;
-
-    camadaPontos.appendChild(
-        botao
-    );
-}
-
-return;
-            }
-
-
-            // ====================================================
-            // DUPLA FAIXA
-            // ====================================================
-
-            if (tipo === "DUPLA_FAIXA") {
-
-                // -----------------------------------------------
-                // FAIXA A → B
-                // -----------------------------------------------
-
-                const linhaIda =
-                    criarLinhaConexao(
-                        pontoA,
-                        pontoB,
-                        anguloOrigemDestino,
-                        -1
-                    );
-
-
-                // -----------------------------------------------
-                // FAIXA B → A
-                // -----------------------------------------------
-
-                const linhaVolta =
-                    criarLinhaConexao(
-                        pontoA,
-                        pontoB,
-                        anguloDestinoOrigem,
-                        1
-                    );
-
-
-                linhaIda.innerHTML = "";
-                linhaVolta.innerHTML = "";
-
-
-                // Seta A → B
-                criarSetaConexao(
-                    linhaIda,
-                    anguloOrigemDestino,
-                    50
-                );
-
-
-                // Seta B → A
-                criarSetaConexao(
-                    linhaVolta,
-                    anguloDestinoOrigem,
-                    50
-                );
-
-
-                configurarHoverConexao(
-                    linhaIda,
-                    conexao,
-                    pontoA,
-                    pontoB
-                );
-
-
-                configurarHoverConexao(
-                    linhaVolta,
-                    conexao,
-                    pontoA,
-                    pontoB
-                );
-
-
-                camada.appendChild(linhaIda);
-camada.appendChild(linhaVolta);
-
-/* -------------------------------------------------
-   BOTÃO EXCLUIR CONEXÃO
-   ------------------------------------------------- */
-
-if (
-    modoEdicaoPlanta &&
-    !modoConexoesPlanta
-) {
-
-    const botao =
-        criarBotaoRemoverConexao(
-            indice
-        );
-
-    botao.style.left =
-        `${(pontoA.x + pontoB.x) / 2}%`;
-
-    botao.style.top =
-        `${(pontoA.y + pontoB.y) / 2}%`;
-
-    camadaPontos.appendChild(
-        botao
-    );
-}
-
-return;
-            }
-        }
-    );
-}
-
-/* ============================================================
-   LISTA DE CONEXÕES
-   ============================================================ */
-
-function renderizarListaConexoes() {
-
-    const lista =
-        document.getElementById(
-            "listaConexoes"
-        );
-
-    const contador =
-        document.getElementById(
-            "contadorConexoes"
-        );
-
-    if (!lista || !contador) {
-        return;
-    }
-
-    contador.textContent =
-        planta.conexoes.length;
-
-    lista.innerHTML = "";
-
-    if (
-        planta.conexoes.length === 0
-    ) {
-
-        lista.innerHTML = `
-            <div class="empty-state">
-                Nenhuma conexão cadastrada.
-            </div>
-        `;
-
-        return;
-    }
-
-    planta.conexoes.forEach(
-        (conexao, indice) => {
-
-            const item =
-                document.createElement(
-                    "div"
-                );
-
-            item.className =
-                "plant-connection-item";
-
-            const circulacao =
-                conexao.circulacao ||
-                "NÃO CONFIGURADA";
-
-            const seta =
-                circulacao ===
-                    "SENTIDO_UNICO"
-                    ? (
-                        conexao.sentidoUnico ===
-                        "ORIGEM_DESTINO"
-                            ? "→"
-                            : "←"
-                    )
-                    : "↔";
-
-            item.innerHTML = `
-
-                <div>
-
-                    <div class="plant-connection-points">
-
-                        <strong>
-                            ${conexao.origem}
-                        </strong>
-
-                        <span>
-                            ${seta}
-                        </span>
-
-                        <strong>
-                            ${conexao.destino}
-                        </strong>
-
-                    </div>
-
-                    <div class="plant-connection-details">
-
-                        <span>
-                            ${circulacao}
-                        </span>
-
-                        <span>
-                            ${conexao.anguloOrigemDestino ?? "--"}°
-                            /
-                            ${conexao.anguloDestinoOrigem ?? "--"}°
-                        </span>
-
-                    </div>
-
-                </div>
-
-                <button
-                    type="button"
-                    class="btn-excluir-conexao"
-                    data-indice="${indice}"
-                >
-                    EXCLUIR
-                </button>
-            `;
-
-            lista.appendChild(
-                item
-            );
-        }
-    );
-}
-function excluirConexao(indice) {
-
-    const conexao =
-        planta.conexoes[indice];
-
-    if (!conexao) {
-        return;
-    }
-
-    const confirmar =
-        confirm(
-            `Deseja excluir a conexão ` +
-            `${conexao.origem} ↔ ${conexao.destino}?`
-        );
-
-    if (!confirmar) {
-        return;
-    }
-
-    planta.conexoes.splice(
-        indice,
-        1
-    );
-
-    localStorage.setItem(
-        "plantaAGV",
-        JSON.stringify(planta)
-    );
-
-    renderizarPontos();
-}
-
-
-document.addEventListener(
-    "click",
-    function(event) {
-
-        const botao =
-            event.target.closest(
-                ".btn-excluir-conexao"
-            );
-
-        if (!botao) {
-            return;
-        }
-
-        excluirConexao(
-            Number(
-                botao.dataset.indice
-            )
-        );
-    }
-);
-function excluirPonto(id) {
-
-    const ponto = planta.pontos.find(
-        ponto => ponto.id === id
-    );
-
-    if (!ponto) {
-        return;
-    }
-
-    const confirmar = confirm(
-        `Deseja realmente excluir o ponto ${ponto.id}?`
-    );
-
-    if (!confirmar) {
-        return;
-    }
-
-    // Remove o ponto
-    planta.pontos = planta.pontos.filter(
-        ponto => ponto.id !== id
-    );
-
-    // Remove todas as conexões desse ponto
-    planta.conexoes = planta.conexoes.filter(
-        conexao =>
-            conexao.origem !== id &&
-            conexao.destino !== id
-    );
-
-    // Se esse ponto estava selecionado para criar conexão,
-    // limpa a seleção
-    if (
-        pontoConexaoOrigem &&
-        pontoConexaoOrigem.id === id
-    ) {
-        pontoConexaoOrigem = null;
-    }
-
-    // Salva a nova planta
-    localStorage.setItem(
-        "plantaAGV",
-        JSON.stringify(planta)
-    );
-
-    // Atualiza a tela
-    renderizarPontos();
-}
-/* ============================================================
-   REMOVER PONTO DO MAPA
-   ============================================================ */
-
-function removerPontoDoMapa(id) {
-
-    const ponto =
-        planta.pontos.find(
-            ponto => ponto.id === id
-        );
-
-    if (!ponto) {
-        return;
-    }
-
-    /* --------------------------------------------------------
-       VERIFICA SE O PONTO POSSUI CONEXÕES
-       -------------------------------------------------------- */
-
-    const possuiConexoes =
-        planta.conexoes.some(
-            conexao =>
-                conexao.origem === id ||
-                conexao.destino === id
-        );
-
-    /* --------------------------------------------------------
-       CONFIRMA A REMOÇÃO DAS CONEXÕES
-       -------------------------------------------------------- */
-
-    if (possuiConexoes) {
-
-        const confirmar =
-            confirm(
-                `O ponto ${ponto.id} possui conexões.\n\n` +
-                `Ao removê-lo do mapa, essas conexões também serão removidas.\n\n` +
-                `Deseja continuar?`
-            );
-
-        if (!confirmar) {
-            return;
-        }
-
-        planta.conexoes =
-            planta.conexoes.filter(
-                conexao =>
-                    conexao.origem !== id &&
-                    conexao.destino !== id
-            );
-    }
-
-    /* --------------------------------------------------------
-       REMOVE APENAS A POSIÇÃO DO MAPA
-       -------------------------------------------------------- */
-
-    ponto.x = null;
-    ponto.y = null;
-
-    /* --------------------------------------------------------
-       LIMPA SELEÇÃO DE CONEXÃO, SE NECESSÁRIO
-       -------------------------------------------------------- */
-
-    if (
-        pontoConexaoOrigem &&
-        pontoConexaoOrigem.id === id
-    ) {
-        pontoConexaoOrigem = null;
-    }
-
-    /* --------------------------------------------------------
-       SALVA A PLANTA EM EDIÇÃO
-       -------------------------------------------------------- */
-
-    localStorage.setItem(
-        "plantaAGV",
-        JSON.stringify(planta)
-    );
-
-    /* --------------------------------------------------------
-       ATUALIZA O MAPA
-       -------------------------------------------------------- */
-
-    renderizarPontos();
-}
-
-function renderizarPontos() {
-
-    const listaEstacoes =
-        document.getElementById("listaEstacoes");
-
-    const listaReferencias =
-        document.getElementById("listaReferencias");
-
-    const mapa =
-        document.getElementById("estacoesPlanta");
-
-    const contadorEstacoes =
-        document.getElementById("contadorEstacoes");
-
-    const contadorReferencias =
-        document.getElementById("contadorReferencias");
-
-
-    if (
-        !listaEstacoes ||
-        !listaReferencias ||
-        !mapa ||
-        !contadorEstacoes ||
-        !contadorReferencias
-    ) {
-        return;
-    }
-
-
-    /* ========================================================
-       SEPARA OS PONTOS POR TIPO
-       ======================================================== */
-
-    const estacoes =
-        planta.pontos.filter(
-            ponto => ponto.tipo === "ESTACAO"
-        );
-
-
-    const referencias =
-        planta.pontos.filter(
-            ponto => ponto.tipo === "REFERENCIA"
-        );
-
-
-    /* ========================================================
-       ATUALIZA OS CONTADORES
-       ======================================================== */
-
-    contadorEstacoes.textContent =
-        estacoes.length;
-
-
-    contadorReferencias.textContent =
-        referencias.length;
-
-
-    /* ========================================================
-       LIMPA AS LISTAS
-       ======================================================== */
-
-    listaEstacoes.innerHTML = "";
-
-    listaReferencias.innerHTML = "";
-
-
-        /* ========================================================
-       LISTA DE ESTAÇÕES
-       ======================================================== */
-
-    if (estacoes.length === 0) {
-
-        listaEstacoes.innerHTML = `
-            <div class="empty-state">
-                Nenhuma estação cadastrada.
-            </div>
-        `;
-
-    } else {
-
-        estacoes.forEach(estacao => {
-
-            const item = document.createElement("div");
-
-item.className = "station-item";
-
-item.draggable = true;
-
-item.dataset.id = estacao.id;
-item.addEventListener(
-    "dragstart",
-    iniciarArrasteLista
-);
-
-item.addEventListener(
-    "dragend",
-    () => {
-        item.classList.remove("arrastando");
-    }
-);
-
-item.innerHTML = `
-    <div class="station-info">
-
-        <strong>${estacao.id}</strong>
-
-        <span>${estacao.nome}</span>
-
-        <small>
-            ${obterRfidsPonto(estacao).join(", ")}
-        </small>
-
-        <small>
-            ESTAÇÃO
-        </small>
-
-    </div>
-
-    <div class="station-actions">
-
-        <button
-            type="button"
-            class="btn-editar-ponto"
-            data-id="${estacao.id}"
-        >
-            EDITAR
-        </button>
-
-        <button
-            type="button"
-            class="btn-excluir-ponto"
-            data-id="${estacao.id}"
-        >
-            EXCLUIR
-        </button>
-
-    </div>
-`;
-            listaEstacoes.appendChild(item);
-
-        });
-
-    }
-
-
-    /* ========================================================
-       LISTA DE REFERÊNCIAS
-       ======================================================== */
-
-    if (referencias.length === 0) {
-
-        listaReferencias.innerHTML = `
-            <div class="empty-state">
-                Nenhuma referência cadastrada.
-            </div>
-        `;
-
-    } else {
-
-        referencias.forEach(referencia => {
-
-            const item = document.createElement("div");
-
-item.className = "station-item";
-
-item.draggable = true;
-
-item.dataset.id = referencia.id;
-item.addEventListener(
-    "dragstart",
-    iniciarArrasteLista
-);
-
-item.addEventListener(
-    "dragend",
-    () => {
-        item.classList.remove("arrastando");
-    }
-);
-
-item.innerHTML = `
-    <div class="station-info">
-
-        <strong>${referencia.id}</strong>
-
-        <span>
-            RFID: ${obterRfidsPonto(referencia).join(", ")}
-        </span>
-
-        <small>
-            REFERÊNCIA
-        </small>
-
-    </div>
-
-    <div class="station-actions">
-
-        <button
-            type="button"
-            class="btn-editar-ponto"
-            data-id="${referencia.id}"
-        >
-            EDITAR
-        </button>
-
-        <button
-            type="button"
-            class="btn-excluir-ponto"
-            data-id="${referencia.id}"
-        >
-            EXCLUIR
-        </button>
-
-    </div>
-`;
-
-            listaReferencias.appendChild(item);
-
-        });
-
-    }
-    /* ========================================================
-       RENDERIZAÇÃO DOS PONTOS NO MAPA
-       ======================================================== */
-
-    mapa.innerHTML = "";
-
-
-    planta.pontos.forEach(ponto => {
-
-        if (
-            ponto.x === null ||
-            ponto.y === null
-        ) {
-            return;
-        }
-
-
-        const elemento =
-            document.createElement("div");
-
-
-        elemento.className =
-            ponto.tipo === "ESTACAO"
-                ? "plant-station"
-                : "plant-reference";
-
-
-        elemento.dataset.id =
-            ponto.id;
-    if (
-    modoEdicaoPlanta &&
-    !modoConexoesPlanta
-) {    
-
-    elemento.addEventListener(
-        "pointerdown",
-        iniciarArrastePonto
-    );
-
-    elemento.addEventListener(
-        "pointermove",
-        moverPonto
-    );
-
-    elemento.addEventListener(
-        "pointerup",
-        finalizarArrastePonto
-    );
-
-}
-
-if (modoConexoesPlanta) {
-
-    elemento.addEventListener(
-        "click",
-        selecionarPontoConexao
-    );
-
-}
-
-
-        elemento.style.left =
-            `${ponto.x}%`;
-
-
-        elemento.style.top =
-            `${ponto.y}%`;
-        elemento.innerHTML = `
-    <span>${ponto.id}</span>
-`;
-
-if (
-    modoEdicaoPlanta &&
-    !modoConexoesPlanta
-) {
-
-    const botaoRemover =
-        document.createElement("button");
-
-    botaoRemover.type = "button";
-
-    botaoRemover.className =
-        "btn-remover-ponto-mapa";
-
-    botaoRemover.dataset.id =
-        ponto.id;
-
-    botaoRemover.textContent = "×";
-
-    botaoRemover.addEventListener(
-        "pointerdown",
-        event => {
-            event.stopPropagation();
-        }
-    );
-
-    botaoRemover.addEventListener(
-        "click",
-        event => {
-
-            event.stopPropagation();
-
-            removerPontoDoMapa(
-                ponto.id
-            );
-        }
-    );
-
-    elemento.appendChild(
-        botaoRemover
-    );
-}
-
-mapa.appendChild(elemento);
-
-    });
-renderizarConexoes();
-renderizarListaConexoes();
-}
-function renderizarMapaVisaoGeral() {
-
-    const containerPontos = document.getElementById("pontosMapaVisaoGeral");
-    const containerConexoes = document.getElementById("conexoesMapaVisaoGeral");
-
-    if (!containerPontos || !containerConexoes) return;
-
-    containerPontos.innerHTML = "";
-    containerConexoes.innerHTML = "";
-
-    if (
-        !plantaOperacional ||
-        !Array.isArray(plantaOperacional.pontos) ||
-        !Array.isArray(plantaOperacional.conexoes)
-    ) {
-        return;
-    }
-
-    /* ============================================================
-       PONTOS DA PLANTA
-       ============================================================ */
-
-    plantaOperacional.pontos.forEach(ponto => {
-
-        if (ponto.x === null || ponto.y === null) return;
-
-        const elemento = document.createElement("div");
-
-        if (ponto.tipo === "ESTACAO") {
-            elemento.className = "plant-station";
-        } else {
-            elemento.className = "plant-reference";
-        }
-
-        elemento.style.left = `${ponto.x}%`;
-        elemento.style.top = `${ponto.y}%`;
-
-        elemento.innerHTML = `
-            <span>${ponto.id}</span>
-        `;
-
-        containerPontos.appendChild(elemento);
-    });
-
-
-    /* ============================================================
-       CONEXÕES DA PLANTA
-       ============================================================ */
-
-    plantaOperacional.conexoes.forEach(conexao => {
-
-        const pontoA = plantaOperacional.pontos.find(
-            ponto => ponto.id === conexao.origem
-        );
-
-        const pontoB = plantaOperacional.pontos.find(
-            ponto => ponto.id === conexao.destino
-        );
-
-        if (!pontoA || !pontoB) return;
-
-        if (
-            pontoA.x === null ||
-            pontoA.y === null ||
-            pontoB.x === null ||
-            pontoB.y === null
-        ) {
-            return;
-        }
-
-        const angulo = conexao.anguloOrigemDestino;
-
-        /* ========================================================
-           DUPLA FAIXA
-           ======================================================== */
-
-        if (conexao.circulacao === "DUPLA_FAIXA") {
-
-            criarLinhaConexaoVisaoGeral(
-                pontoA,
-                pontoB,
-                angulo,
-                -0.8,
-                containerConexoes
-            );
-
-            criarLinhaConexaoVisaoGeral(
-                pontoA,
-                pontoB,
-                angulo,
-                0.8,
-                containerConexoes
-            );
-
-            criarSetaConexaoVisaoGeral(
-                pontoA,
-                pontoB,
-                angulo,
-                65,
-                containerConexoes
-            );
-
-            criarSetaConexaoVisaoGeral(
-                pontoB,
-                pontoA,
-                conexao.anguloDestinoOrigem,
-                65,
-                containerConexoes
-            );
-
-            return;
-        }
-
-
-        /* ========================================================
-           SENTIDO ÚNICO
-           ======================================================== */
-
-        if (conexao.circulacao === "SENTIDO_UNICO") {
-
-            criarLinhaConexaoVisaoGeral(
-                pontoA,
-                pontoB,
-                angulo,
-                0,
-                containerConexoes
-            );
-
-            if (conexao.sentidoUnico === "ORIGEM_DESTINO") {
-
-                criarSetaConexaoVisaoGeral(
-                    pontoA,
-                    pontoB,
-                    conexao.anguloOrigemDestino,
-                    65,
-                    containerConexoes
-                );
-
-            } else {
-
-                criarSetaConexaoVisaoGeral(
-                    pontoB,
-                    pontoA,
-                    conexao.anguloDestinoOrigem,
-                    65,
-                    containerConexoes
-                );
-            }
-
-            return;
-        }
-
-
-        /* ========================================================
-           MÃO DUPLA
-           ======================================================== */
-
-        criarLinhaConexaoVisaoGeral(
-            pontoA,
-            pontoB,
-            angulo,
-            0,
-            containerConexoes
-        );
-
-        criarSetaConexaoVisaoGeral(
-            pontoA,
-            pontoB,
-            conexao.anguloOrigemDestino,
-            65,
-            containerConexoes
-        );
-
-        criarSetaConexaoVisaoGeral(
-            pontoB,
-            pontoA,
-            conexao.anguloDestinoOrigem,
-            35,
-            containerConexoes
-        );
-    });
-
-
-    /* ============================================================
-       AGV SELECIONADO
-       ============================================================ */
-
-    renderizarAGVMapaVisaoGeral();
-}
-function criarLinhaConexaoVisaoGeral(
-    pontoA,
-    pontoB,
-    angulo,
-    offset = 0,
-    container
-) {
-
-    const linha = document.createElement("div");
-
-    linha.className = "plant-connection-line";
-
-    const x1 = pontoA.x;
-    const y1 = pontoA.y;
-
-    const x2 = pontoB.x;
-    const y2 = pontoB.y;
-
-    if (
-        Math.abs(y1 - y2) < 0.5
-    ) {
-
-        const esquerda = Math.min(x1, x2);
-        const largura = Math.abs(x2 - x1);
-
-        linha.style.left = `${esquerda}%`;
-        linha.style.top = `calc(${y1}% + ${offset}px)`;
-        linha.style.width = `${largura}%`;
-        linha.style.height = "2px";
-
-    } else {
-
-        const topo = Math.min(y1, y2);
-        const altura = Math.abs(y2 - y1);
-
-        linha.style.left = `calc(${x1}% + ${offset}px)`;
-        linha.style.top = `${topo}%`;
-        linha.style.width = "2px";
-        linha.style.height = `${altura}%`;
-    }
-
-    container.appendChild(linha);
-}
-function criarSetaConexaoVisaoGeral(
-    pontoA,
-    pontoB,
-    angulo,
-    percentual,
-    container
-) {
-
-    const seta = document.createElement("div");
-
-    seta.className = "plant-connection-arrow";
-
-    const x = pontoA.x + (pontoB.x - pontoA.x) * (percentual / 100);
-    const y = pontoA.y + (pontoB.y - pontoA.y) * (percentual / 100);
-
-    seta.style.left = `${x}%`;
-    seta.style.top = `${y}%`;
-
-    seta.style.transform = `translate(-50%, -50%) rotate(${-angulo}deg)`;
-
-    container.appendChild(seta);
-}
-function renderizarAGVMapaVisaoGeral() {
-
-    const container =
-        document.getElementById("agvsMapaVisaoGeral");
-
-    if (!container) {
-        return;
-    }
-
-
-    if (!agvSelecionado) {
-
-        container.innerHTML = "";
-
-        return;
-    }
-
-
-    const agv =
-        agvs[agvSelecionado];
-
-
-    if (!agv) {
-        return;
-    }
-
-
-    if (
-        typeof agv.x !== "number" ||
-        typeof agv.y !== "number"
-    ) {
-        return;
-    }
-
-
-    // --------------------------------------------------------
-    // Procura AGV já desenhado
-    // --------------------------------------------------------
-
-    let elemento =
-        container.querySelector(".mapa-agv");
-
-
-    // --------------------------------------------------------
-    // Cria somente se ainda não existir
-    // --------------------------------------------------------
-
-    if (!elemento) {
-
-        elemento =
-            document.createElement("div");
-
-
-        elemento.className =
-            "mapa-agv selecionado";
-
-
-        elemento.innerHTML = `
-
-            <div class="mapa-agv-corpo">
-
-                <div class="mapa-agv-frente"></div>
-
-                <div class="mapa-agv-cabeca">
-                    AGV
-                </div>
-
-                <div class="mapa-agv-id"></div>
-
-            </div>
-
-        `;
-
-
-        elemento.addEventListener(
-            "click",
-            () => selecionarAGV(agv.id)
-        );
-
-
-        container.appendChild(elemento);
-    }
-
-
-    // --------------------------------------------------------
-    // Atualiza dados
-    // --------------------------------------------------------
-
-    elemento.dataset.id =
-        agv.id;
-
-
-    elemento.style.left =
-        `${agv.x}%`;
-
-
-    elemento.style.top =
-        `${agv.y}%`;
-
-
-    const elementoId =
-        elemento.querySelector(".mapa-agv-id");
-
-
-    if (elementoId) {
-
-        elementoId.textContent =
-            agv.id;
-    }
-}
-/* ============================================================
-   MODO DE EDIÇÃO DA PLANTA
-   ============================================================ */
-
-function ativarEdicaoMapa() {
-
-    /* =========================================
-       SE JÁ ESTÁ EDITANDO:
-       O BOTÃO AGORA É "SALVAR MAPA"
-       ========================================= */
-
-    if (modoEdicaoPlanta) {
-
-        salvarMapa();
-
-        return;
-    }
-
-
-    /* =========================================
-       ENTRAR NO MODO DE EDIÇÃO
-       ========================================= */
-
-    modoEdicaoPlanta = true;
-    modoConexoesPlanta = false;
-    pontoConexaoOrigem = null;
-
-
-    const mapa =
-        document.getElementById("mapaPlanta");
-
-    const botao =
-        document.getElementById("btnEditarMapa");
-
-    const botaoConexoes =
-        document.getElementById("btnConexoes");
-
-    const modo =
-        document.getElementById("modoPlanta");
-
-
-    if (!mapa || !botao) {
-        return;
-    }
-
-
-    /* =========================================
-       MAPA
-       ========================================= */
-
-    mapa.classList.add(
-        "modo-edicao"
-    );
-
-    mapa.classList.remove(
-        "modo-conexoes"
-    );
-
-
-    /* =========================================
-       BOTÃO PRINCIPAL
-       ========================================= */
-
-    botao.textContent =
-        "SALVAR MAPA";
-
-
-    /* =========================================
-       BOTÃO CONEXÕES
-       ========================================= */
-
-    if (botaoConexoes) {
-
-        botaoConexoes.disabled = false;
-
-        botaoConexoes.textContent =
-            "CONEXÕES";
-
-    }
-
-
-    /* =========================================
-       TEXTO DO MODO
-       ========================================= */
-
-    if (modo) {
-
-        modo.textContent =
-            "EDITANDO MAPA";
-
-    }
-
-
-    renderizarPontos();
-}
-/* ============================================================
-   MODO DE CONEXÕES
-   ============================================================ */
-
-function ativarConexoesPlanta() {
-
-    /*
-     * CONEXÕES só pode ser ativado
-     * dentro do modo de edição.
-     */
-
-    if (!modoEdicaoPlanta) {
-        return;
-    }
-
-    modoConexoesPlanta =
-        !modoConexoesPlanta;
-
-    pontoConexaoOrigem = null;
-
-    const mapa =
-        document.getElementById("mapaPlanta");
-
-    const botao =
-        document.getElementById("btnConexoes");
-
-    const modo =
-        document.getElementById("modoPlanta");
-
-    if (!mapa || !botao) {
-        return;
-    }
-
-    mapa.classList.toggle(
-        "modo-conexoes",
-        modoConexoesPlanta
-    );
-
-    botao.textContent =
-        modoConexoesPlanta
-            ? "SAIR DAS CONEXÕES"
-            : "CONEXÕES";
-
-    if (modo) {
-
-        modo.textContent =
-            modoConexoesPlanta
-                ? "EDITANDO CONEXÕES"
-                : "EDITANDO MAPA";
-    }
-
-    renderizarPontos();
-}
-/* ============================================================
-   SELEÇÃO DE PONTOS PARA CONEXÃO
-   ============================================================ */
-
-function selecionarPontoConexao(event) {
-
-    if (!modoConexoesPlanta) {
-        return;
-    }
-
-    const elemento =
-        event.currentTarget;
-
-    const id =
-        elemento.dataset.id;
-
-    const ponto =
-        planta.pontos.find(
-            p => p.id === id
-        );
-
-    if (!ponto) {
-        return;
-    }
-
-    /* PRIMEIRO PONTO */
-
-    if (!pontoConexaoOrigem) {
-
-        pontoConexaoOrigem = ponto;
-
-        elemento.classList.add(
-            "conexao-selecionada"
-        );
-
-        return;
-    }
-
-    /* CLICOU NOVAMENTE NO MESMO PONTO */
-
-    if (
-        pontoConexaoOrigem.id === ponto.id
-    ) {
-
-        pontoConexaoOrigem = null;
-
-        elemento.classList.remove(
-            "conexao-selecionada"
-        );
-
-        return;
-    }
-
-    /* SEGUNDO PONTO */
-
-    criarConexao(
-        pontoConexaoOrigem,
-        ponto
-    );
-}
-function obterRfidsPonto(ponto) {
-    if (Array.isArray(ponto.rfids)) {
-        return ponto.rfids;
-    }
-
-    if (ponto.rfid) {
-        return [ponto.rfid];
-    }
-
-    return [];
-}
-/* ============================================================
-   CRIAÇÃO DE CONEXÃO
-   ============================================================ */
-function calcularAnguloConexao(pontoA, pontoB) {
-
-    const dx = pontoB.x - pontoA.x;
-    const dy = pontoB.y - pontoA.y;
-
-    const tolerancia = 0.5;
-
-    const horizontal =
-        Math.abs(dy) <= tolerancia;
-
-    const vertical =
-        Math.abs(dx) <= tolerancia;
-
-    if (horizontal) {
-
-        return dx > 0
-            ? 0
-            : 180;
-    }
-
-    if (vertical) {
-
-        return dy < 0
-            ? 90
-            : 270;
-    }
-
-    return null;
-}
-
-
-/* ============================================================
-   RFIDS LIVRES
-   ============================================================ */
-
-function obterRfidsUsados() {
-
-    const usados = new Set();
-
-    planta.conexoes.forEach(conexao => {
-
-        if (!conexao.rfids) {
-            return;
-        }
-
-        Object.values(conexao.rfids).forEach(relacao => {
-
-            if (!relacao) {
-                return;
-            }
-
-            if (relacao.origem) {
-                usados.add(relacao.origem);
-            }
-
-            if (relacao.destino) {
-                usados.add(relacao.destino);
-            }
-
-        });
-
-    });
-
-    return usados;
-}
-
-
-function obterRfidsLivresPonto(ponto) {
-
-    return obterRfidsPonto(ponto);
-
-}
-function contarRfidsLivresPonto(ponto) {
-    return obterRfidsLivresPonto(ponto).length;
-}
-
-/* ============================================================
-   CRIAÇÃO DE CONEXÃO
-   ============================================================ */
-
-function criarConexao(pontoA, pontoB) {
-
-    const dx =
-        pontoB.x - pontoA.x;
-
-    const dy =
-        pontoB.y - pontoA.y;
-
-    const tolerancia = 0.5;
-
-    const horizontal =
-        Math.abs(dy) <= tolerancia;
-
-    const vertical =
-        Math.abs(dx) <= tolerancia;
-
-    if (!horizontal && !vertical) {
-
-        alert(
-            "Conexão inválida.\n\n" +
-            "Os pontos precisam estar " +
-            "alinhados horizontalmente " +
-            "ou verticalmente."
-        );
-
-        pontoConexaoOrigem = null;
-
-        renderizarPontos();
-
-        return;
-    }
-
-    const conexaoExiste =
-        planta.conexoes.some(
-            conexao =>
-                (
-                    conexao.origem === pontoA.id &&
-                    conexao.destino === pontoB.id
-                ) ||
-                (
-                    conexao.origem === pontoB.id &&
-                    conexao.destino === pontoA.id
-                )
-        );
-
-    if (conexaoExiste) {
-
-        alert(
-            "Essa conexão já existe."
-        );
-
-        pontoConexaoOrigem = null;
-
-        renderizarPontos();
-
-        return;
-    }
-
-    const anguloOrigemDestino =
-        calcularAnguloConexao(
-            pontoA,
-            pontoB
-        );
-
-    const anguloDestinoOrigem =
-        calcularAnguloConexao(
-            pontoB,
-            pontoA
-        );
-
-    conexaoEmConfiguracao = {
-
-        origem: pontoA.id,
-
-        destino: pontoB.id,
-
-        tipo:
-            horizontal
-                ? "HORIZONTAL"
-                : "VERTICAL",
-
-        anguloOrigemDestino:
-            anguloOrigemDestino,
-
-        anguloDestinoOrigem:
-            anguloDestinoOrigem,
-
-        circulacao: "MAO_DUPLA",
-
-        sentidoUnico:
-            "ORIGEM_DESTINO",
-
-        rfids: {
-
-            origemDestino: null,
-
-            destinoOrigem: null
-
-        }
-
-    };
-
-    pontoConexaoOrigem = null;
-
-    renderizarPontos();
-
-    abrirFormConexao();
-}
-/* ============================================================
-   FORMULÁRIO DE CONFIGURAÇÃO DA CONEXÃO
-   ============================================================ */
-
-function abrirFormConexao() {
-
-    const formulario =
-        document.getElementById("formConexao");
-
-    if (
-        !formulario ||
-        !conexaoEmConfiguracao
-    ) {
-        return;
-    }
-
-    const pontoA =
-        planta.pontos.find(
-            ponto =>
-                ponto.id ===
-                conexaoEmConfiguracao.origem
-        );
-
-    const pontoB =
-        planta.pontos.find(
-            ponto =>
-                ponto.id ===
-                conexaoEmConfiguracao.destino
-        );
-
-    if (!pontoA || !pontoB) {
-        return;
-    }
-
-
-    /* ========================================================
-       IDENTIFICAÇÃO DOS PONTOS
-       ======================================================== */
-
-    document.getElementById(
-        "conexaoPontoA"
-    ).textContent = pontoA.id;
-
-    document.getElementById(
-        "conexaoPontoB"
-    ).textContent = pontoB.id;
-
-    document.getElementById(
-        "conexaoPontoBResumo"
-    ).textContent = pontoB.id;
-
-
-    /* ========================================================
-       ÂNGULOS
-       ======================================================== */
-
-    document.getElementById(
-        "conexaoAnguloAB"
-    ).textContent =
-        conexaoEmConfiguracao
-            .anguloOrigemDestino + "°";
-
-    document.getElementById(
-        "conexaoAnguloBA"
-    ).textContent =
-        conexaoEmConfiguracao
-            .anguloDestinoOrigem + "°";
-
-
-    /* ========================================================
-       RFIDS LIVRES
-       ======================================================== */
-
-    const rfidsA =
-        obterRfidsLivresPonto(pontoA);
-
-    const rfidsB =
-        obterRfidsLivresPonto(pontoB);
-
-
-    /* ========================================================
-       DISPONIBILIDADE
-       ======================================================== */
-
-    const disponibilidade =
-        document.getElementById(
-            "disponibilidadeRfidsConexao"
-        );
-
-    if (disponibilidade) {
-
-        disponibilidade.textContent =
-            `${pontoA.id}: ${rfidsA.length} RFID(s) livre(s) | ` +
-            `${pontoB.id}: ${rfidsB.length} RFID(s) livre(s)`;
-
-        disponibilidade.classList.toggle(
-            "rfid-insuficiente",
-            rfidsA.length < 1 ||
-            rfidsB.length < 1
-        );
-    }
-
-
-    /* ========================================================
-       VERIFICA DUPLA FAIXA
-       ======================================================== */
-
-    const radioDuplaFaixa =
-        document.querySelector(
-            'input[name="tipoConexao"][value="DUPLA_FAIXA"]'
-        );
-
-    const labelDuplaFaixa =
-        document.querySelector(
-            'label[for="tipoDuplaFaixa"]'
-        );
-
-    const duplaFaixaDisponivel =
-        rfidsA.length >= 2 &&
-        rfidsB.length >= 2;
-
-
-    if (radioDuplaFaixa) {
-
-        radioDuplaFaixa.disabled =
-            !duplaFaixaDisponivel;
-
-        if (
-            !duplaFaixaDisponivel &&
-            conexaoEmConfiguracao.circulacao ===
-                "DUPLA_FAIXA"
-        ) {
-
-            conexaoEmConfiguracao.circulacao =
-                "MAO_DUPLA";
-        }
-    }
-
-
-    if (labelDuplaFaixa) {
-
-        labelDuplaFaixa.classList.toggle(
-            "opcao-desabilitada",
-            !duplaFaixaDisponivel
-        );
-    }
-
-
-    /* ========================================================
-       VERIFICA SE EXISTE RFID PARA A CONEXÃO
-       ======================================================== */
-
-    if (
-        rfidsA.length < 1 ||
-        rfidsB.length < 1
-    ) {
-
-        if (disponibilidade) {
-
-            disponibilidade.textContent +=
-                " — Não há RFID livre suficiente para criar esta conexão.";
-        }
-    }
-
-
-    /* ========================================================
-       TIPO DA CONEXÃO
-       ======================================================== */
-
-    const radioSelecionado =
-        document.querySelector(
-            `input[name="tipoConexao"][value="${conexaoEmConfiguracao.circulacao}"]`
-        );
-
-    if (radioSelecionado) {
-        radioSelecionado.checked = true;
-    }
-
-
-    /* ========================================================
-       SENTIDO ÚNICO
-       ======================================================== */
-
-    document.querySelectorAll(
-        'input[name="sentidoUnico"]'
-    ).forEach(
-        radio => {
-
-            radio.checked =
-                radio.value ===
-                conexaoEmConfiguracao.sentidoUnico;
-        }
-    );
-
-
-    /* ========================================================
-       MOSTRA O FORMULÁRIO
-       ======================================================== */
-
-    formulario.hidden = false;
-
-    atualizarConfiguracaoConexao();
-}
-
-
-function atualizarConfiguracaoConexao() {
-
-    if (!conexaoEmConfiguracao) {
-        return;
-    }
-
-    const tipo =
-        document.querySelector(
-            'input[name="tipoConexao"]:checked'
-        )?.value;
-
-    if (!tipo) {
-        return;
-    }
-
-    conexaoEmConfiguracao.circulacao =
-        tipo;
-
-    const blocoSentido =
-        document.getElementById(
-            "blocoSentidoUnico"
-        );
-
-    if (blocoSentido) {
-
-        blocoSentido.hidden =
-            tipo !== "SENTIDO_UNICO";
-    }
-
-    renderizarRfidsConexao();
-}
-
-
-/* ============================================================
-   RFIDS DA CONEXÃO
-   ============================================================ */
-
-function criarSelectRfid(
-    id,
-    label,
-    rfids,
-    valorSelecionado
-) {
-
-    const valor =
-        valorSelecionado &&
-        rfids.includes(valorSelecionado)
-            ? valorSelecionado
-            : (rfids[0] || "");
-
-    return `
-        <label
-            class="conexao-rfid-field"
-            for="${id}"
-        >
-            <span>${label}</span>
-
-            <select
-                id="${id}"
-                data-rfid-conexao="true"
-            >
-                <option value="">
-                    Selecione
-                </option>
-
-                ${rfids.map(rfid => `
-                    <option
-                        value="${rfid}"
-                        ${rfid === valor ? "selected" : ""}
-                    >
-                        ${rfid}
-                    </option>
-                `).join("")}
-
-            </select>
-        </label>
-    `;
-}
-
-
-function renderizarRfidsConexao() {
-
-    const container =
-        document.getElementById(
-            "rfidConfiguracaoConexao"
-        );
-
-    if (
-        !container ||
-        !conexaoEmConfiguracao
-    ) {
-        return;
-    }
-
-    const pontoA =
-        planta.pontos.find(
-            ponto =>
-                ponto.id ===
-                conexaoEmConfiguracao.origem
-        );
-
-    const pontoB =
-        planta.pontos.find(
-            ponto =>
-                ponto.id ===
-                conexaoEmConfiguracao.destino
-        );
-
-    if (!pontoA || !pontoB) {
-        return;
-    }
-
-    const rfidsA =
-        obterRfidsLivresPonto(pontoA);
-
-    const rfidsB =
-        obterRfidsLivresPonto(pontoB);
-
-    const tipo =
-        conexaoEmConfiguracao.circulacao;
-
-    if (tipo === "DUPLA_FAIXA") {
-
-        container.innerHTML = `
-
-            <div class="conexao-faixa">
-
-                <strong>FAIXA 1 — A → B</strong>
-
-                <div class="conexao-rfid-grid">
-
-                    ${criarSelectRfid(
-                        "rfidFaixa1A",
-                        pontoA.id,
-                        rfidsA,
-                        conexaoEmConfiguracao
-                            .rfids
-                            .origemDestino
-                            ?.origem
-                    )}
-
-                    ${criarSelectRfid(
-                        "rfidFaixa1B",
-                        pontoB.id,
-                        rfidsB,
-                        conexaoEmConfiguracao
-                            .rfids
-                            .origemDestino
-                            ?.destino
-                    )}
-
-                </div>
-
-            </div>
-
-            <div class="conexao-faixa">
-
-                <strong>FAIXA 2 — B → A</strong>
-
-                <div class="conexao-rfid-grid">
-
-                    ${criarSelectRfid(
-                        "rfidFaixa2B",
-                        pontoB.id,
-                        rfidsB,
-                        conexaoEmConfiguracao
-                            .rfids
-                            .destinoOrigem
-                            ?.origem
-                    )}
-
-                    ${criarSelectRfid(
-                        "rfidFaixa2A",
-                        pontoA.id,
-                        rfidsA,
-                        conexaoEmConfiguracao
-                            .rfids
-                            .destinoOrigem
-                            ?.destino
-                    )}
-
-                </div>
-
-            </div>
-        `;
-
-        return;
-    }
-
-    container.innerHTML = `
-
-        <div class="conexao-faixa">
-
-            <strong>
-                RFID DA CONEXÃO
-            </strong>
-
-            <div class="conexao-rfid-grid">
-
-                ${criarSelectRfid(
-                    "rfidConexaoA",
-                    pontoA.id,
-                    rfidsA,
-                    conexaoEmConfiguracao
-                        .rfids
-                        .origemDestino
-                        ?.origem
-                )}
-
-                ${criarSelectRfid(
-                    "rfidConexaoB",
-                    pontoB.id,
-                    rfidsB,
-                    conexaoEmConfiguracao
-                        .rfids
-                        .origemDestino
-                        ?.destino
-                )}
-
-            </div>
-
-            <small>
-                O mesmo par de RFIDs será utilizado
-                nos dois sentidos.
-            </small>
-
-        </div>
-    `;
-}
-
-
-/* ============================================================
-   SALVAR CONEXÃO
-   ============================================================ */
-
-function salvarConexaoConfigurada() {
-
-    if (!conexaoEmConfiguracao) {
-        return;
-    }
-
-
-    /* ========================================================
-       TIPO DA CONEXÃO
-       ======================================================== */
-
-    const tipo =
-        document.querySelector(
-            'input[name="tipoConexao"]:checked'
-        )?.value;
-
-    if (!tipo) {
-
-        alert(
-            "Selecione o tipo da conexão."
-        );
-
-        return;
-    }
-
-
-    /* ========================================================
-       LOCALIZA OS PONTOS
-       ======================================================== */
-
-    const pontoA =
-        planta.pontos.find(
-            ponto =>
-                ponto.id ===
-                conexaoEmConfiguracao.origem
-        );
-
-    const pontoB =
-        planta.pontos.find(
-            ponto =>
-                ponto.id ===
-                conexaoEmConfiguracao.destino
-        );
-
-    if (!pontoA || !pontoB) {
-        return;
-    }
-
-
-    /* ========================================================
-       RFIDS LIVRES
-       ======================================================== */
-
-    const rfidsA =
-        obterRfidsLivresPonto(pontoA);
-
-    const rfidsB =
-        obterRfidsLivresPonto(pontoB);
-
-
-    /* ========================================================
-       REGRA MÍNIMA
-       
-       Toda conexão precisa de pelo menos:
-       - 1 RFID livre em A
-       - 1 RFID livre em B
-       ======================================================== */
-
-    if (
-        rfidsA.length < 1 ||
-        rfidsB.length < 1
-    ) {
-
-        alert(
-            `Não é possível criar a conexão.\n\n` +
-            `${pontoA.id}: ${rfidsA.length} RFID(s) livre(s)\n` +
-            `${pontoB.id}: ${rfidsB.length} RFID(s) livre(s)\n\n` +
-            `É necessário pelo menos 1 RFID livre em cada ponto.`
-        );
-
-        return;
-    }
-
-
-    /* ========================================================
-       DUPLA FAIXA
-       
-       Precisa de:
-       - 2 RFIDs em A
-       - 2 RFIDs em B
-       ======================================================== */
-
-    if (tipo === "DUPLA_FAIXA") {
-
-        if (
-            rfidsA.length < 2 ||
-            rfidsB.length < 2
-        ) {
-
-            alert(
-                `Não é possível criar uma conexão de dupla faixa.\n\n` +
-                `${pontoA.id}: ${rfidsA.length} RFID(s) livre(s)\n` +
-                `${pontoB.id}: ${rfidsB.length} RFID(s) livre(s)\n\n` +
-                `São necessários pelo menos 2 RFIDs livres em cada ponto.`
-            );
-
-            return;
-        }
-
-
-        const a1 =
-            document.getElementById(
-                "rfidFaixa1A"
-            )?.value;
-
-        const b1 =
-            document.getElementById(
-                "rfidFaixa1B"
-            )?.value;
-
-        const b2 =
-            document.getElementById(
-                "rfidFaixa2B"
-            )?.value;
-
-        const a2 =
-            document.getElementById(
-                "rfidFaixa2A"
-            )?.value;
-
-
-        if (
-            !a1 ||
-            !b1 ||
-            !b2 ||
-            !a2
-        ) {
-
-            alert(
-                "Selecione os quatro RFIDs da dupla faixa."
-            );
-
-            return;
-        }
-
-
-        /* ----------------------------------------------------
-           IMPOSSIBILITA REUTILIZAÇÃO NO MESMO PONTO
-           ---------------------------------------------------- */
-
-        if (a1 === a2) {
-
-            alert(
-                `Os dois sentidos não podem usar ` +
-                `o mesmo RFID de ${pontoA.id}.`
-            );
-
-            return;
-        }
-
-
-        if (b1 === b2) {
-
-            alert(
-                `Os dois sentidos não podem usar ` +
-                `o mesmo RFID de ${pontoB.id}.`
-            );
-
-            return;
-        }
-
-
-        conexaoEmConfiguracao.rfids = {
-
-            origemDestino: {
-
-                origem: a1,
-                destino: b1
-
-            },
-
-            destinoOrigem: {
-
-                origem: b2,
-                destino: a2
-
-            }
-
-        };
-    }
-
-
-    /* ========================================================
-       MÃO DUPLA / SENTIDO ÚNICO
-       ======================================================== */
-
-    else {
-
-        const rfidA =
-            document.getElementById(
-                "rfidConexaoA"
-            )?.value;
-
-        const rfidB =
-            document.getElementById(
-                "rfidConexaoB"
-            )?.value;
-
-
-        if (
-            !rfidA ||
-            !rfidB
-        ) {
-
-            alert(
-                "Selecione os RFIDs dos dois pontos."
-            );
-
-            return;
-        }
-
-
-        conexaoEmConfiguracao.rfids = {
-
-            origemDestino: {
-
-                origem: rfidA,
-                destino: rfidB
-
-            },
-
-            destinoOrigem: {
-
-                origem: rfidB,
-                destino: rfidA
-
-            }
-
-        };
-    }
-
-
-    /* ========================================================
-       SENTIDO ÚNICO
-       ======================================================== */
-
-    if (tipo === "SENTIDO_UNICO") {
-
-        const sentidoSelecionado =
-            document.querySelector(
-                'input[name="sentidoUnico"]:checked'
-            )?.value;
-
-
-        if (!sentidoSelecionado) {
-
-            alert(
-                "Selecione o sentido da conexão."
-            );
-
-            return;
-        }
-
-
-        conexaoEmConfiguracao.sentidoUnico =
-            sentidoSelecionado;
-
-
-        if (
-            sentidoSelecionado ===
-            "ORIGEM_DESTINO"
-        ) {
-
-            conexaoEmConfiguracao.rfids.destinoOrigem =
-                null;
-
-        } else {
-
-            conexaoEmConfiguracao.rfids.origemDestino =
-                null;
-        }
-
-    } else {
-
-        conexaoEmConfiguracao.sentidoUnico =
-            null;
-    }
-
-
-    /* ========================================================
-       SALVA O TIPO
-       ======================================================== */
-
-    conexaoEmConfiguracao.circulacao =
-        tipo;
-
-
-    /* ========================================================
-       ADICIONA À PLANTA
-       ======================================================== */
-
-    planta.conexoes.push(
-        conexaoEmConfiguracao
-    );
-
-
-    localStorage.setItem(
-        "plantaAGV",
-        JSON.stringify(planta)
-    );
-
-
-    /* ========================================================
-       FECHA E ATUALIZA
-       ======================================================== */
-
-    fecharFormConexao();
-
-    renderizarPontos();
-}
-
-
-/* ============================================================
-   FECHAR FORMULÁRIO
-   ============================================================ */
-
-function fecharFormConexao() {
-
-    const formulario =
-        document.getElementById(
-            "formConexao"
-        );
-
-    if (formulario) {
-        formulario.hidden = true;
-    }
-
-    conexaoEmConfiguracao = null;
-
-    pontoConexaoOrigem = null;
-}
-
-function construirGrafoPlanta() {
-
-    const grafo = {};
-
-    plantaOperacional.pontos.forEach(
-        ponto => {
-
-            grafo[ponto.id] = [];
-        }
-    );
-
-    plantaOperacional.conexoes.forEach(
-        conexao => {
-
-            const origem =
-                conexao.origem;
-
-            const destino =
-                conexao.destino;
-
-            const circulacao =
-                conexao.circulacao ||
-                "MAO_DUPLA";
-
-            /* ---------------------------------------------
-               SENTIDO ÚNICO
-               --------------------------------------------- */
-
-            if (
-                circulacao ===
-                "SENTIDO_UNICO"
-            ) {
-
-                if (
-                    conexao.sentidoUnico ===
-                    "ORIGEM_DESTINO"
-                ) {
-
-                    grafo[origem].push(
-                        destino
-                    );
-
-                } else {
-
-                    grafo[destino].push(
-                        origem
-                    );
-                }
-
-                return;
-            }
-
-            /* ---------------------------------------------
-               MÃO DUPLA / DUPLA FAIXA
-               --------------------------------------------- */
-
-            grafo[origem].push(
-                destino
-            );
-
-            grafo[destino].push(
-                origem
-            );
-        }
-    );
-
-    return grafo;
-}
-function calcularRota(origem, destino) {
-
-    const grafo = construirGrafoPlanta();
-
-    // Verifica se origem e destino existem
-    if (
-        !grafo[origem] ||
-        !grafo[destino]
-    ) {
-        return null;
-    }
-
-    // Se origem e destino forem iguais
-    if (origem === destino) {
-        return [origem];
-    }
-
-    // Fila de pontos que serão visitados
-    const fila = [origem];
-
-    // Registra os pontos já visitados
-    const visitados = new Set();
-
-    visitados.add(origem);
-
-    // Guarda de onde cada ponto foi alcançado
-    const anterior = {};
-
-    // Busca em Largura (BFS)
-    while (fila.length > 0) {
-
-        const pontoAtual = fila.shift();
-
-        // Percorre os vizinhos do ponto atual
-        for (
-            const vizinho of grafo[pontoAtual]
-        ) {
-
-            // Ignora pontos já visitados
-            if (visitados.has(vizinho)) {
-                continue;
-            }
-
-            visitados.add(vizinho);
-
-            anterior[vizinho] = pontoAtual;
-
-            // Encontrou o destino
-            if (vizinho === destino) {
-
-                const rota = [];
-                let ponto = destino;
-
-                // Reconstrói a rota de trás para frente
-                while (ponto !== undefined) {
-
-                    rota.unshift(ponto);
-
-                    ponto = anterior[ponto];
-
-                }
-
-                return rota;
-            }
-
-            // Adiciona o vizinho à fila
-            fila.push(vizinho);
-        }
-    }
-
-    // Não existe caminho entre origem e destino
-    return null;
-}
-/* ============================================================
-   CONEXÃO ENTRE DOIS PONTOS
-   ============================================================ */
-
-/* ============================================================
-   CONEXÃO ENTRE DOIS PONTOS — PLANTA OPERACIONAL
-   ============================================================ */
-
-function obterConexaoEntre(
-    pontoA,
-    pontoB
-) {
-
-    return plantaOperacional.conexoes.find(
-        conexao => {
-
-            const mesmaDirecao =
-                conexao.origem === pontoA &&
-                conexao.destino === pontoB;
-
-            const direcaoContraria =
-                conexao.origem === pontoB &&
-                conexao.destino === pontoA;
-
-            if (
-                !mesmaDirecao &&
-                !direcaoContraria
-            ) {
-                return false;
-            }
-
-            if (
-                conexao.circulacao ===
-                "SENTIDO_UNICO"
-            ) {
-
-                if (
-                    conexao.sentidoUnico ===
-                    "ORIGEM_DESTINO"
-                ) {
-
-                    return mesmaDirecao;
-
-                } else {
-
-                    return direcaoContraria;
-                }
-            }
-
-            return true;
-        }
-    );
-}
-
-
-/* ============================================================
-   ÂNGULO DO SENTIDO DA CONEXÃO
-   ============================================================ */
-
-function obterAnguloPercurso(
-    conexao,
-    pontoA,
-    pontoB
-) {
-
-    if (
-        conexao.origem === pontoA &&
-        conexao.destino === pontoB
-    ) {
-
-        return conexao
-            .anguloOrigemDestino;
-    }
-
-    return conexao
-        .anguloDestinoOrigem;
-}
-
-
-/* ============================================================
-   NORMALIZAR ÂNGULO
-   ============================================================ */
-
-function normalizarAngulo(angulo) {
-
-    return (
-        (angulo % 360) + 360
-    ) % 360;
-}
-
-
-/* ============================================================
-   MANOBRA ENTRE DUAS ORIENTAÇÕES
-   ============================================================ */
-
-function calcularManobra(anguloEntrada, anguloSaida) {
-    const delta =
-        normalizarAngulo(anguloSaida - anguloEntrada + 180) - 180;
-
-    if (delta === 0) {
-        return null;
-    }
-
-    if (delta === 90) {
-        return {
-            tipo: "ESQUERDA",
-            giro: 90
-        };
-    }
-
-    if (delta === -90) {
-        return {
-            tipo: "DIREITA",
-            giro: -90
-        };
-    }
-
-    if (Math.abs(delta) === 180) {
-        return {
-            tipo: "RETORNO",
-            giro: 180
-        };
-    }
-
-    return {
-        tipo: "ROTACAO",
-        giro: delta
-    };
-}
-
-
-/* ============================================================
-   GERAR ETAPAS DE UMA ROTA
-   ============================================================ */
-
-function gerarEtapasRota(rota, orientacaoInicial = null) {
-
-    if (!Array.isArray(rota) || rota.length < 2) {
-        return [];
-    }
-
-    const etapas = [];
-
-    for (let i = 0; i < rota.length - 1; i++) {
-
-        const pontoAtual = rota[i];
-        const proximoPonto = rota[i + 1];
-
-        const conexao = obterConexaoEntre(
-            pontoAtual,
-            proximoPonto
-        );
-
-        if (!conexao) {
-            return null;
-        }
-
-        const angulo = obterAnguloPercurso(
-            conexao,
-            pontoAtual,
-            proximoPonto
-        );
-
-        etapas.push({
-            pontoSaida: pontoAtual,
-            pontoChegada: proximoPonto,
-            conexao: conexao,
-            angulo: normalizarAngulo(angulo),
-            manobra: null
-        });
-    }
-
-    /*
-     * PRIMEIRO TRECHO
-     *
-     * Agora usamos a orientação real/lógica
-     * do AGV como entrada.
-     */
-    if (orientacaoInicial !== null) {
-
-        const primeiraManobra = calcularManobra(
-            normalizarAngulo(orientacaoInicial),
-            etapas[0].angulo
-        );
-
-        etapas[0].manobra = primeiraManobra;
-    }
-
-    /*
-     * DEMAIS TRECHOS
-     *
-     * A orientação de entrada passa a ser
-     * o ângulo do trecho anterior.
-     */
-    for (let i = 1; i < etapas.length; i++) {
-
-        const entrada = etapas[i - 1].angulo;
-        const saida = etapas[i].angulo;
-
-        etapas[i].manobra =
-            calcularManobra(entrada, saida);
-    }
-
-    return etapas;
-}
-function obterPontoEstacaoDoAGV(agv) {
-
-    if (!agv || !agv.estacaoAtual) {
-        return null;
-    }
-
-    const valor = String(agv.estacaoAtual);
-
-    let ponto = plantaOperacional.pontos.find(
-        ponto => ponto.id === valor
-    );
-
-    if (ponto) {
-        return ponto;
-    }
-
-    ponto = plantaOperacional.pontos.find(
-        ponto =>
-            ponto.tipo === "ESTACAO" &&
-            (
-                ponto.rfid === valor ||
-                (Array.isArray(ponto.rfids) &&
-                 ponto.rfids.includes(valor))
-            )
-    );
-
-    if (ponto) {
-        return ponto;
-    }
-
-    const numero = valor.replace(/\D/g, "");
-
-    if (numero) {
-
-        ponto = plantaOperacional.pontos.find(
-            ponto =>
-                ponto.tipo === "ESTACAO" &&
-                String(ponto.id)
-                    .replace(/\D/g, "") === numero
-        );
-
-        if (ponto) {
-            return ponto;
-        }
-    }
-
-    return null;
-}
-function atualizarEstacaoAGV(agv, ponto) {
-
-    if (!agv || !ponto) {
-        return;
-    }
-
-    agv.estacaoAtual = ponto.id;
-
-    if (ponto.x !== undefined) {
-        agv.x = ponto.x;
-    }
-
-    if (ponto.y !== undefined) {
-        agv.y = ponto.y;
-    }
-}
-function calcularOrientacaoFinal(
-    orientacaoInicial,
-    etapasRota
-) {
-
-    if (
-        !Array.isArray(etapasRota) ||
-        etapasRota.length === 0
-    ) {
-        return normalizarAngulo(orientacaoInicial);
-    }
-
-    return normalizarAngulo(
-        etapasRota[etapasRota.length - 1].angulo
-    );
-}
-function gerarInstrucaoMovimento(
-    rota,
-    orientacaoInicial
-) {
-
-    const etapasRota = gerarEtapasRota(
-        rota,
-        orientacaoInicial
-    );
-
-    if (!etapasRota) {
-        return null;
-    }
-
-    const rfids = [];
-
-    etapasRota.forEach((etapa) => {
-
-        const rfidsPercurso =
-            obterRfidsPercurso(etapa);
-
-        if (!rfidsPercurso) {
-            return;
-        }
-
-        rfidsPercurso.forEach(rfid => {
-
-            if (
-                rfids.length === 0 ||
-                rfids[rfids.length - 1] !== rfid
-            ) {
-                rfids.push(rfid);
-            }
-        });
-    });
-
-    const manobras = etapasRota
-        .filter(etapa => etapa.manobra !== null)
-        .map(etapa => ({
-            ponto: etapa.pontoSaida,
-            tipo: etapa.manobra.tipo,
-            giro: etapa.manobra.giro
-        }));
-
-
-    /*
-     * ============================================================
-     * TRECHOS DA ROTA
-     * ============================================================
-     *
-     * Cada conexão da rota vira um trecho.
-     *
-     * Exemplo:
-     *
-     * E01 → R01
-     *
-     * RFID origem  = RFID de E01
-     * RFID destino = RFID de R01
-     *
-     * Depois:
-     *
-     * R01 → R02
-     *
-     * RFID origem  = RFID de R01
-     * RFID destino = RFID de R02
-     */
-
-    const trechos = etapasRota.map(etapa => {
-
-        const rfidsTrecho =
-            obterRfidsPercurso(etapa);
-
-        let rfidOrigem = null;
-        let rfidDestino = null;
-
-        if (
-            Array.isArray(rfidsTrecho) &&
-            rfidsTrecho.length >= 2
-        ) {
-
-            rfidOrigem = rfidsTrecho[0];
-            rfidDestino = rfidsTrecho[1];
-        }
-
-        return {
-
-            origem: etapa.pontoSaida,
-
-            destino: etapa.pontoChegada,
-
-            angulo: etapa.angulo,
-
-            rfidOrigem: rfidOrigem,
-
-            rfidDestino: rfidDestino,
-
-            manobraAntes:
-                etapa.manobra
-                    ? {
-                        tipo: etapa.manobra.tipo,
-                        giro: etapa.manobra.giro
-                    }
-                    : null
-        };
-    });
-
-
-    return {
-
-        tipo: "MOVIMENTO",
-
-        rota: rota,
-
-        trechos: trechos,
-
-        /*
-         * Mantemos temporariamente os campos antigos.
-         *
-         * Eles serão removidos depois que confirmarmos
-         * que o novo formato está funcionando.
-         */
-        rfids: rfids,
-
-        etapasRota: etapasRota,
-
-        manobras: manobras,
-
-        orientacaoInicial:
-            normalizarAngulo(orientacaoInicial),
-
-        orientacaoFinal:
-            calcularOrientacaoFinal(
-                orientacaoInicial,
-                etapasRota
-            )
-    };
-}
-function obterRfidsPercurso(etapa) {
-
-    if (!etapa || !etapa.conexao) {
-        return null;
-    }
-
-    const conexao = etapa.conexao;
-
-    if (
-        conexao.origem === etapa.pontoSaida &&
-        conexao.destino === etapa.pontoChegada
-    ) {
-
-        if (!conexao.rfids?.origemDestino) {
-            return null;
-        }
-
-        return [
-            conexao.rfids.origemDestino.origem,
-            conexao.rfids.origemDestino.destino
-        ].filter(Boolean);
-    }
-
-    if (
-        conexao.origem === etapa.pontoChegada &&
-        conexao.destino === etapa.pontoSaida
-    ) {
-
-        if (!conexao.rfids?.destinoOrigem) {
-            return null;
-        }
-
-        return [
-            conexao.rfids.destinoOrigem.origem,
-            conexao.rfids.destinoOrigem.destino
-        ].filter(Boolean);
-    }
-
-    return null;
-}
-
-function prepararEtapaIrPara(agv, etapaMissao) {
-
-    if (!agv || !etapaMissao) {
-        return {
-            sucesso: false,
-            erro: "AGV ou etapa inválida."
-        };
-    }
-
-    const destino = etapaMissao.destino;
-
-    const pontoAtual =
-        obterPontoEstacaoDoAGV(agv);
-
-    if (!pontoAtual) {
-        return {
-            sucesso: false,
-            erro: "Não foi possível identificar a estação atual do AGV."
-        };
-    }
-
-    const pontoDestino =
-        plantaOperacional.pontos.find(
-            ponto => ponto.id === destino
-        );
-
-    if (!pontoDestino) {
-        return {
-            sucesso: false,
-            erro: `Estação de destino não encontrada: ${destino}`
-        };
-    }
-
-    /*
-     * Já está no destino.
-     */
-    if (pontoAtual.id === pontoDestino.id) {
-
-        return {
-            sucesso: true,
-            concluidaImediatamente: true,
-
-            contexto: {
-                origem: pontoAtual.id,
-                destino: pontoDestino.id,
-                rota: [pontoAtual.id],
-                orientacaoInicial: agv.orientacao,
-                orientacaoFinal: agv.orientacao
-            }
-        };
-    }
-
-    const rota = calcularRota(
-        pontoAtual.id,
-        pontoDestino.id
-    );
-
-    if (!rota) {
-
-        return {
-            sucesso: false,
-            erro:
-                `Não existe rota entre ${pontoAtual.id} e ${pontoDestino.id}.`
-        };
-    }
-
-    const instrucao =
-        gerarInstrucaoMovimento(
-            rota,
-            agv.orientacao
-        );
-
-    if (!instrucao) {
-
-        return {
-            sucesso: false,
-            erro:
-                "Não foi possível gerar a instrução física da rota."
-        };
-    }
-
-    return {
-        sucesso: true,
-
-        concluidaImediatamente: false,
-
-        contexto: {
-            origem: pontoAtual.id,
-            destino: pontoDestino.id,
-            rota: rota,
-
-            instrucao: instrucao,
-
-            orientacaoInicial:
-                agv.orientacao,
-
-            orientacaoFinal:
-                instrucao.orientacaoFinal
-        }
-    };
-}
-
-/* ============================================================
-   DRAG & DROP — LISTA LATERAL → MAPA
-   ============================================================ */
-
-function iniciarArrasteLista(event) {
-
-    if (
-        !modoEdicaoPlanta ||
-        modoConexoesPlanta
-    ) {
-        event.preventDefault();
-        return;
-    }
-
-    const item = event.currentTarget;
-    const id = item.dataset.id;
-
-    if (!id) {
-        event.preventDefault();
-        return;
-    }
-
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", id);
-
-    item.classList.add("arrastando");
-}
-
-
-/* ============================================================
-   PERMITIR SOLTAR NO MAPA
-   ============================================================ */
-
-function permitirDropMapa(event) {
-
-    if (
-        !modoEdicaoPlanta ||
-        modoConexoesPlanta
-    ) {
-        return;
-    }
-
-    event.preventDefault();
-
-    event.dataTransfer.dropEffect = "move";
-}
-
-
-/* ============================================================
-   SOLTAR PONTO NO MAPA
-   ============================================================ */
-
-function soltarPontoMapa(event) {
-
-    if (
-        !modoEdicaoPlanta ||
-        modoConexoesPlanta
-    ) {
-        return;
-    }
-
-    event.preventDefault();
-
-    const id =
-        event.dataTransfer.getData("text/plain");
-
-    if (!id) {
-        return;
-    }
-
-    const ponto =
-        planta.pontos.find(
-            p => p.id === id
-        );
-
-    if (!ponto) {
-        return;
-    }
-
-    const mapa =
-        document.getElementById("mapaPlanta");
-
-    if (!mapa) {
-        return;
-    }
-
-    const rect =
-        mapa.getBoundingClientRect();
-
-
-    /* --------------------------------------------------------
-       CONVERTE A POSIÇÃO DO MOUSE PARA %
-       -------------------------------------------------------- */
-
-    let x =
-        ((event.clientX - rect.left) /
-            rect.width) * 100;
-
-    let y =
-        ((event.clientY - rect.top) /
-            rect.height) * 100;
-
-
-    /* --------------------------------------------------------
-       LIMITA O PONTO DENTRO DO MAPA
-       -------------------------------------------------------- */
-
-    x = Math.max(2, Math.min(98, x));
-    y = Math.max(2, Math.min(98, y));
-
-
-    /* --------------------------------------------------------
-       SALVA A POSIÇÃO DO PONTO
-       -------------------------------------------------------- */
-
-    ponto.x = x;
-    ponto.y = y;
-
-
-    /* --------------------------------------------------------
-       PERSISTÊNCIA
-       -------------------------------------------------------- */
-
-    localStorage.setItem(
-        "plantaAGV",
-        JSON.stringify(planta)
-    );
-
-
-    /* --------------------------------------------------------
-       ATUALIZA A PLANTA
-       -------------------------------------------------------- */
-
-    renderizarPontos();
-}
-/* ============================================================
-   INÍCIO DO ARRASTE
-   ============================================================ */
-
-function iniciarArrastePonto(event) {
-
-    if (!modoEdicaoPlanta) {
-        return;
-    }
-
-    const elemento = event.currentTarget;
-
-    const id = elemento.dataset.id;
-
-    const ponto = planta.pontos.find(
-        p => p.id === id
-    );
-
-    if (!ponto) {
-        return;
-    }
-
-    pontoArrastando = ponto;
-
-    elemento.setPointerCapture(event.pointerId);
-
-    event.preventDefault();
-}
-
-
-/* ============================================================
-   MOVIMENTO DO PONTO
-   ============================================================ */
-
-function moverPonto(event) {
-
-    if (
-        !modoEdicaoPlanta ||
-        !pontoArrastando
-    ) {
-        return;
-    }
-
-    const mapa =
-        document.getElementById("mapaPlanta");
-
-    if (!mapa) {
-        return;
-    }
-
-    const rect =
-        mapa.getBoundingClientRect();
-
-    let x =
-        ((event.clientX - rect.left) / rect.width) * 100;
-
-    let y =
-        ((event.clientY - rect.top) / rect.height) * 100;
-
-
-    /* --------------------------------------------------------
-       LIMITA O PONTO DENTRO DO MAPA
-       -------------------------------------------------------- */
-
-    x = Math.max(2, Math.min(98, x));
-    y = Math.max(2, Math.min(98, y));
-
-
-    pontoArrastando.x = x;
-    pontoArrastando.y = y;
-
-
-    /* --------------------------------------------------------
-       ATUALIZA A POSIÇÃO VISUAL
-       -------------------------------------------------------- */
-
-    const elemento =
-        document.querySelector(
-            `[data-id="${pontoArrastando.id}"]`
-        );
-
-    if (elemento) {
-
-        elemento.style.left =
-            `${x}%`;
-
-        elemento.style.top =
-            `${y}%`;
-
-    }
-}
-
-/* ============================================================
-   VALIDAR CONEXÕES APÓS MOVER UM PONTO
-   ============================================================ */
-
-function validarConexoes() {
-
-    const tolerancia = 0.5;
-
-    planta.conexoes =
-        planta.conexoes.filter(
-            conexao => {
-
-                const pontoA =
-                    planta.pontos.find(
-                        ponto =>
-                            ponto.id ===
-                            conexao.origem
-                    );
-
-                const pontoB =
-                    planta.pontos.find(
-                        ponto =>
-                            ponto.id ===
-                            conexao.destino
-                    );
-
-                if (!pontoA || !pontoB) {
-                    return false;
-                }
-
-                const dx =
-                    pontoB.x - pontoA.x;
-
-                const dy =
-                    pontoB.y - pontoA.y;
-
-                const horizontal =
-                    Math.abs(dy) <= tolerancia;
-
-                const vertical =
-                    Math.abs(dx) <= tolerancia;
-
-                if (
-                    !horizontal &&
-                    !vertical
-                ) {
-
-                    return false;
-                }
-
-                conexao.tipo =
-                    horizontal
-                        ? "HORIZONTAL"
-                        : "VERTICAL";
-
-                conexao.anguloOrigemDestino =
-                    calcularAnguloConexao(
-                        pontoA,
-                        pontoB
-                    );
-
-                conexao.anguloDestinoOrigem =
-                    calcularAnguloConexao(
-                        pontoB,
-                        pontoA
-                    );
-
-                return true;
-            }
-        );
-
-    localStorage.setItem(
-        "plantaAGV",
-        JSON.stringify(planta)
-    );
-}
-/* ============================================================
-   FINALIZA O ARRASTE
-   ============================================================ */
-
-function finalizarArrastePonto() {
-
-    if (!pontoArrastando) {
-        return;
-    }
-
-    validarConexoes();
-
-    pontoArrastando = null;
-
-    localStorage.setItem(
-        "plantaAGV",
-        JSON.stringify(planta)
-    );
-
-    renderizarPontos();
-}
-
-
-
 
 
 const STATUS_LIGADO = ["LIGADO", "DESLIGADO"];
-const ESTADOS_MAQUINA = ["DESLIGADO", "PRONTO", "MANUAL", "AUTOMATICO", "MISSAO", "PARADO", "EMERGENCIA", "AGUARDANDO_REARME", "AGUARDANDO_OBSTACULO"];
+const ESTADOS_MAQUINA = [
+    "DESLIGADO",
+    "PRONTO",
+    "MANUAL",
+    "AUTOMATICO",
+    "MISSAO",
+    "PARADO",
+    "EMERGENCIA",
+    "AGUARDANDO_REARME",
+    "AGUARDANDO_OBSTACULO",
+    "AGUARDANDO_MODO"
+];
 const MODOS = ["MANUAL", "AUTOMATICO"];
 const ESTADOS_MISSAO = [
     "AGUARDANDO",
@@ -6524,7 +1037,7 @@ const ESTADOS_MISSAO = [
 const STATUS_STOP = ["NORMAL", "ACIONADO"];
 const STATUS_EMERGENCIA = ["NORMAL", "ACIONADA"];
 const STATUS_REARME = ["LIBERADO", "NECESSARIO"];
-const STATUS_BARREIRA = ["LIVRE", "INVADIDA"];
+const STATUS_BARREIRA = ["LIVRE", "INVADIDA", "FALHA_LEITURA"];
 const TOPICOS = {
 
     // ============================================================
@@ -6599,16 +1112,28 @@ const TOPICOS = {
     // COMANDOS
     // ============================================================
 
-    comando: {
+    
+   comando: {
     start: "comando/start",
     stop: "comando/stop",
     rearme: "comando/rearme",
     modo: "comando/modo",
     manual: "comando/manual",
 
+    configuracao: "comando/configuracao",
+
     garraMovimento: "comando/garra/movimento",
-    garraParar: "comando/garra/parar"
-},
+    garraParar: "comando/garra/parar",
+    carregarMissao: "comando/carregar_missao",
+    confirmarEtapa: "comando/confirmar_etapa",
+    cancelarMissao: "comando/cancelar_missao",
+    definirPosicao: "comando/definir_posicao",
+    calibracaoQtr: "comando/calibracao_qtr",
+    calibracaoMecanica: "comando/calibracao_mecanica",
+    ota: "comando/ota",
+    autoteste: "comando/autoteste"
+   },
+
 
     // ============================================================
     // ESP → FRONTEND
@@ -6665,8 +1190,7 @@ function atualizarOnline() {
         agv.online = agv.ultimoHeartbeat > 0 && (agora - agv.ultimoHeartbeat < 5000);
     });
     renderizarFrota();
-    atualizarPainel();
-    renderizarAGVMapaVisaoGeral();
+    agendarAtualizacaoTela();
 }
 
 /* ============================================================
@@ -6676,9 +1200,7 @@ function atualizarOnline() {
 function conectarMQTT() {
 
     if (!window.mqtt) {
-
         console.error("Biblioteca MQTT não carregada.");
-
         return;
     }
 
@@ -6687,7 +1209,8 @@ function conectarMQTT() {
         {
             username: mqttConfig.username,
             password: mqttConfig.password,
-            clientId: `painel-frota-${Math.random().toString(16).slice(2)}`
+            clientId: `painel-frota-${Math.random().toString(16).slice(2)}`,
+            reconnectPeriod: 3000
         }
     );
 
@@ -6697,107 +1220,35 @@ function conectarMQTT() {
 
         atualizarIndicadorMQTT(true);
 
-
-        // ========================================================
-        // STATUS
-        // ========================================================
-
-        clienteMQTT.subscribe(
+        // O ESP publica eventos em agv/<id>/evento/missao, por isso
+        // a assinatura precisa do curinga "#" (antes era só agv/+/evento).
+        [
             "agv/+/status/#",
-            erro => {
-
-                if (erro) {
-
-                    console.error(
-                        "Erro na inscrição MQTT de status:",
-                        erro
-                    );
-
-                } else {
-
-                    console.log(
-                        "Inscrito em agv/+/status/#"
-                    );
-                }
-            }
-        );
-
-
-        // ========================================================
-        // EVENTOS
-        // ========================================================
-
-        clienteMQTT.subscribe(
             "agv/+/evento",
-            erro => {
+            "agv/+/evento/#",
+            "agv/+/sistema/#"
+        ].forEach(topico => {
 
+            clienteMQTT.subscribe(topico, { qos: 1 }, erro => {
                 if (erro) {
-
-                    console.error(
-                        "Erro na inscrição MQTT de eventos:",
-                        erro
-                    );
-
-                } else {
-
-                    console.log(
-                        "Inscrito em agv/+/evento"
-                    );
+                    console.error("Erro na inscrição MQTT:", topico, erro);
                 }
-            }
-        );
+            });
+        });
 
-
-        // ========================================================
-        // SISTEMA
-        // ========================================================
-
-        clienteMQTT.subscribe(
-            "agv/+/sistema/#",
-            erro => {
-
-                if (erro) {
-
-                    console.error(
-                        "Erro na inscrição MQTT de sistema:",
-                        erro
-                    );
-
-                } else {
-
-                    console.log(
-                        "Inscrito em agv/+/sistema/#"
-                    );
-                }
-            }
-        );
-
+        atualizarPainelCalibracaoQTR();
     });
-
-
-    // ============================================================
-    // MENSAGENS RECEBIDAS
-    // ============================================================
 
     clienteMQTT.on("message", (topico, mensagem) => {
-
-        processarMensagemMQTT(
-            topico,
-            mensagem.toString()
-        );
+        processarMensagemMQTT(topico, mensagem.toString());
     });
 
-
     clienteMQTT.on("error", erro => {
-
         console.error("Erro MQTT:", erro);
-
         atualizarIndicadorMQTT(false);
     });
 
-
     clienteMQTT.on("close", () => {
-
         atualizarIndicadorMQTT(false);
     });
 }
@@ -6813,10 +1264,11 @@ function atualizarIndicadorMQTT(conectado) {
         el.classList.toggle("vermelho", !conectado);
     });
     if (status) status.textContent = conectado ? "CONECTADO" : "DESCONECTADO";
-    if (sideText) sideText.textContent = conectado ? "MQTT CONECTADO" : "MQTT DESCONECTADO";
+    if (sideText) sideText.textContent = conectado ? "MQTT conectado" : "MQTT desconectado";
 
     Object.values(agvs).forEach(agv => agv.mqttConectado = conectado);
     atualizarPainel();
+    atualizarPainelCalibracaoQTR();
 }
 
 function processarMensagemMQTT(topico, valor) {
@@ -6824,10 +1276,7 @@ function processarMensagemMQTT(topico, valor) {
     const partes = topico.split("/");
 
     // agv/{id}/{caminho}
-    if (
-        partes.length < 3 ||
-        partes[0] !== "agv"
-    ) {
+    if (partes.length < 3 || partes[0] !== "agv") {
         return;
     }
 
@@ -6840,23 +1289,36 @@ function processarMensagemMQTT(topico, valor) {
 
     const caminho = partes.slice(2).join("/");
 
+    const lerJSON = () => {
+        try {
+            return JSON.parse(valor);
+        } catch (_) {
+            console.error("JSON inválido em", topico, valor);
+            return null;
+        }
+    };
+
 
     // ========================================================
     // EVENTOS
     // ========================================================
 
-    if (caminho === "evento") {
+    if (caminho === "evento" || caminho.startsWith("evento/")) {
 
-        processarEventoMissao(
-            agv.id,
-            valor
-        );
+        const eventoCancelamento =
+            processarConfirmacaoCancelamentoMissao(agv.id, valor);
 
-        registrarEventoHistorico(
-            agv.id,
-            valor
-        );
+        if (!eventoCancelamento) {
+            processarEventoMissao(agv.id, valor);
+        }
 
+        registrarEventoHistorico(agv.id, valor, caminho);
+        try {
+            processarEventoPainel(agv, JSON.parse(valor));
+        } catch (_) {
+            // evento em texto simples
+        }
+        agendarAtualizacaoTela();
         return;
     }
 
@@ -6867,17 +1329,14 @@ function processarMensagemMQTT(topico, valor) {
 
     if (caminho.startsWith("sistema/")) {
 
-        const parametro =
-            caminho.replace("sistema/", "");
-
         if (!agv.sistema) {
             agv.sistema = {};
         }
 
-        agv.sistema[parametro] = valor;
+        agv.sistema[caminho.replace("sistema/", "")] = valor;
 
         salvarAgvsFrota();
-
+        agendarAtualizacaoTela();
         return;
     }
 
@@ -6887,6 +1346,19 @@ function processarMensagemMQTT(topico, valor) {
     // ========================================================
 
     switch (caminho) {
+
+        case "status/conexao":
+
+            agv.conexao = valor;
+
+            // LWT: o broker avisa na hora quando o ESP cai.
+            if (valor === "OFFLINE") {
+                agv.online = false;
+                agv.ultimoHeartbeat = 0;
+            }
+
+            break;
+
 
         case "status/ligado":
 
@@ -6918,15 +1390,7 @@ function processarMensagemMQTT(topico, valor) {
         case "status/bateria":
 
             if (!isNaN(Number(valor))) {
-
-                agv.bateria =
-                    Math.max(
-                        0,
-                        Math.min(
-                            100,
-                            Number(valor)
-                        )
-                    );
+                agv.bateria = Math.max(0, Math.min(100, Number(valor)));
             }
 
             break;
@@ -6935,90 +1399,63 @@ function processarMensagemMQTT(topico, valor) {
         case "status/velocidade":
 
             if (!isNaN(Number(valor))) {
-
-                agv.velocidade =
-                    Math.max(
-                        0,
-                        Number(valor)
-                    );
+                agv.velocidade = Math.max(0, Number(valor));
             }
-
-            break;
-
-
-        case "status/estacao": {
-
-    agv.estacaoAtual = valor;
-    agv.pontoAtual = valor;
-
-    const ponto = plantaOperacional.pontos.find(
-        p => p.id === valor
-    );
-
-    if (ponto) {
-
-        agv.x = ponto.x;
-        agv.y = ponto.y;
-
-        renderizarAGVMapaVisaoGeral();
-    }
-
-    break;
-}
-
-
-        case "status/destino":
-
-            agv.destino = valor;
 
             break;
 
 
         case "status/heartbeat":
 
+            // O ESP envia o tempo ligado, em segundos.
             if (!isNaN(Number(valor))) {
-
-                agv.heartbeat =
-                    Number(valor);
-
+                agv.heartbeat = Number(valor);
+                agv.uptime = Number(valor);
                 marcarHeartbeat(id);
             }
 
             break;
 
 
+        case "status/missao":
+
+            processarStatusMissao(agv, lerJSON());
+            break;
+
+
+        case "status/posicao":
+
+            processarPosicaoAGV(agv, lerJSON());
+            break;
+
+
         case "status/progresso":
 
-            if (!isNaN(Number(valor))) {
+            processarProgressoAGV(agv, lerJSON());
+            agendarAtualizacaoTela();
+            return;
 
-                agv.progresso =
-                    Math.max(
-                        0,
-                        Math.min(
-                            100,
-                            Number(valor)
-                        )
-                    );
+
+        // Compatibilidade com firmwares antigos.
+        case "status/estacao": {
+
+            agv.estacaoAtual = valor;
+            agv.pontoAtual = valor;
+            agv.posicaoConhecida = Boolean(valor);
+            break;
+        }
+
+
+        case "status/garra": {
+
+            const garra = lerJSON();
+
+            if (garra) {
+                agv.garra = garra;
             }
 
             break;
-
-
-        case "status/estado_missao":
-
-            if (ESTADOS_MISSAO.includes(valor)) {
-
-                agv.estadoMissao = valor;
-
-                // Quando o ESP confirma que a missão
-                // terminou, não mantemos a missão como atual.
-                if (valor === "CONCLUIDA") {
-
-                    agv.missaoAtual = null;
-                }
-            }
-
-            break;
+        }
 
 
         // ====================================================
@@ -7037,9 +1474,10 @@ function processarMensagemMQTT(topico, valor) {
         case "status/seguranca/emergencia":
 
             if (STATUS_EMERGENCIA.includes(valor)) {
-
-                agv.emergencia =
-                    valor === "ACIONADA";
+                const acionada = valor === "ACIONADA";
+                if (acionada && !agv.emergencia) agv.emergenciaDesde = Date.now();
+                if (!acionada) agv.emergenciaDesde = null;
+                agv.emergencia = acionada;
             }
 
             break;
@@ -7048,9 +1486,7 @@ function processarMensagemMQTT(topico, valor) {
         case "status/seguranca/rearme":
 
             if (STATUS_REARME.includes(valor)) {
-
-                agv.aguardandoRearme =
-                    valor === "NECESSARIO";
+                agv.aguardandoRearme = valor === "NECESSARIO";
             }
 
             break;
@@ -7059,34 +1495,8 @@ function processarMensagemMQTT(topico, valor) {
         case "status/seguranca/barreira":
 
             if (STATUS_BARREIRA.includes(valor)) {
-
                 agv.barreira = valor;
             }
-
-            break;
-
-
-        // ====================================================
-        // POSIÇÃO
-        // ====================================================
-
-        
-
-
-        // ====================================================
-        // MISSÃO
-        // ====================================================
-
-        case "status/missao/id":
-
-            agv.missaoCarregada = valor;
-
-            break;
-
-
-        case "status/missao/etapa":
-
-            agv.etapaMissao = valor;
 
             break;
 
@@ -7097,191 +1507,173 @@ function processarMensagemMQTT(topico, valor) {
 
         case "status/configuracao":
 
-    try {
-
-        const configuracao =
-            JSON.parse(valor);
+            processarConfiguracaoESP(agv, lerJSON());
+            break;
 
 
-        // ====================================================
-        // ESP CONFIRMOU A CONFIGURAÇÃO
-        // ====================================================
+        case "status/configuracao/esquema":
 
-        if (
-            configuracao.status === "OK"
-        ) {
-
-            agv.configuracao = {
-
-                kpQtr:
-                    Number(
-                        configuracao.kpQtr
-                    ),
-
-                kiQtr:
-                    Number(
-                        configuracao.kiQtr
-                    ),
-
-                kdQtr:
-                    Number(
-                        configuracao.kdQtr
-                    ),
-
-                velocidadeMaxima:
-                    Number(
-                        configuracao.velocidadeMaxima
-                    )
-            };
-
-
-            salvarAgvsFrota();
-
-
-            // Atualiza os campos somente
-            // com o valor confirmado pelo ESP.
-
-            if (
-                id === agvSelecionado
-            ) {
-
-                atualizarCamposConfiguracao();
-            }
-
-
-            console.log(
-                "Configuração confirmada pelo ESP:",
-                agv.configuracao
-            );
-
-        }
-
-
-        // ====================================================
-        // ESP REJEITOU A CONFIGURAÇÃO
-        // ====================================================
-
-        else if (
-            configuracao.status === "ERRO"
-        ) {
-
-            console.error(
-                "ESP rejeitou configuração:",
-                configuracao
-            );
-
-
-            alert(
-                "O ESP rejeitou a alteração de configuração.\n\n" +
-                "Parâmetro: " +
-                (configuracao.parametro || "--") +
-                "\nMotivo: " +
-                (configuracao.motivo || "Erro desconhecido.")
-            );
-
-        }
-
-
-        // ====================================================
-        // FORMATO DESCONHECIDO
-        // ====================================================
-
-        else {
-
-            console.warn(
-                "Status de configuração desconhecido:",
-                configuracao
-            );
-        }
-
-    } catch (_) {
-
-        console.error(
-            "Configuração MQTT inválida:",
-            valor
-        );
-    }
-
-    break;
+            processarEsquemaESP(agv, lerJSON());
+            break;
 
 
         // ====================================================
         // SENSORES
         // ====================================================
 
-        case "status/sensores/qtr":
+        case "status/sensores/qtr": {
 
-            try {
+            const dadosQTR = lerJSON();
 
-                agv.sensores.qtr =
-                    JSON.parse(valor);
+            if (dadosQTR) {
 
-            } catch (_) {
+                const calibracaoAtual =
+                    agv.sensores.qtr?.calibracao || {
+                        estado: "DESCONHECIDA",
+                        calibracaoValida: false,
+                        emAndamento: false,
+                        mensagem: "Aguardando informações do ESP32",
+                        ultimaAtualizacao: 0
+                    };
 
-                console.error(
-                    "Dados QTR inválidos:",
-                    valor
-                );
+                agv.sensores.qtr = {
+                    ...agv.sensores.qtr,
+                    ...dadosQTR,
+                    calibracao: calibracaoAtual
+                };
+                registrarLeituraCalibracaoQTR(agv);
+            }
+            // leituras rápidas: só a tela aberta precisa redesenhar
+            agendarAtualizacaoTela();
+            return;
+
+            break;
+        }
+
+
+        case "status/qtr/calibracao": {
+
+            const dadosCalibracao = lerJSON();
+
+            if (dadosCalibracao) {
+
+                const estavaCalibrando = agv.sensores.qtr?.calibracao?.emAndamento === true;
+                if (dadosCalibracao.emAndamento === true && (!estavaCalibrando || !agv.qtrCalibVisto)) {
+                    agv.qtrCalibVisto = { min: Array(8).fill(4095), max: Array(8).fill(0), desde: Date.now() };
+                }
+                agv.sensores.qtr.calibracao = {
+                    estado: String(dadosCalibracao.estado || "DESCONHECIDA"),
+                    calibracaoValida: dadosCalibracao.calibracaoValida === true,
+                    emAndamento: dadosCalibracao.emAndamento === true,
+                    mensagem: String(dadosCalibracao.mensagem || "Status recebido do ESP32"),
+                    ultimaAtualizacao: Date.now()
+                };
             }
 
             break;
+        }
 
 
-        case "status/sensores/vl53/1":
+        case "status/sensores/vl53": {
 
-            agv.sensores.vl53.sensor1 =
-                Number(valor);
+            const dadosVL53 = lerJSON();
 
-            break;
-
-
-        case "status/sensores/vl53/2":
-
-            agv.sensores.vl53.sensor2 =
-                Number(valor);
-
-            break;
-
-
-        case "status/sensores/rfid":
-
-            try {
-
-                agv.sensores.rfid =
-                    JSON.parse(valor);
-
-            } catch (_) {
-
-                console.error(
-                    "Dados RFID inválidos:",
-                    valor
-                );
+            if (dadosVL53) {
+                agv.sensores.vl53 = dadosVL53;
             }
 
             break;
+        }
+
+
+        case "status/sensores/rfid": {
+
+            const dadosRFID = lerJSON();
+
+            if (dadosRFID && dadosRFID.codigo) {
+
+                const ponto = obterPontoPorRfid(dadosRFID.codigo);
+
+                const nova = agv.sensores.rfid?.sequencia !== dadosRFID.sequencia || agv.sensores.rfid?.ultimo !== dadosRFID.codigo;
+                agv.sensores.rfid = {
+                    status: "ONLINE",
+                    ultimo: dadosRFID.codigo,
+                    sequencia: dadosRFID.sequencia,
+                    horario: new Date().toLocaleTimeString("pt-BR"),
+                    quando: Date.now(),
+                    resultado: ponto ? "CADASTRADO" : "NÃO CADASTRADO",
+                    estacao: ponto ? ponto.id : "--"
+                };
+                if (nova) {
+                    if (!Array.isArray(agv.rfidHistorico)) agv.rfidHistorico = [];
+                    agv.rfidHistorico.unshift({ codigo: dadosRFID.codigo, quando: Date.now() });
+                    agv.rfidHistorico.length = Math.min(agv.rfidHistorico.length, 20);
+                }
+            }
+
+            break;
+        }
+
+
+        // ====================================================
+        // FIRMWARE 0.7: LEDS, PAINEL, DIAGNÓSTICO E AUTOTESTE
+        // ====================================================
+
+        case "status/leds":
+
+            agv.leds = valor;
+            break;
+
+
+        case "status/entradas":
+
+            agv.entradas = Number(valor);
+            break;
+
+
+        case "status/diagnostico": {
+
+            const diagnostico = lerJSON();
+
+            if (diagnostico) {
+                agv.diagnostico = diagnostico;
+                agv.diagnosticoRecebido = Date.now();
+                guardarHistoricoDiagnostico(agv, diagnostico);
+                if (typeof diagnostico.leds === "string") agv.leds = diagnostico.leds;
+                if (typeof diagnostico.entradas === "number") agv.entradas = diagnostico.entradas;
+            }
+
+            break;
+        }
+
+
+        case "status/autoteste": {
+
+            const autoteste = lerJSON();
+
+            if (autoteste && Array.isArray(autoteste.itens)) {
+                const esperado = Boolean(agv.autotesteRodando);
+                agv.autoteste = Object.assign(autoteste, { recebido: Date.now() });
+                agv.autotesteRodando = null;
+                if (esperado) {
+                    const r = autoteste.resultado;
+                    ui.aviso(`Autoteste do AGV ${agv.id}: ${r === "FALHA" ? "reprovado" : r === "AVISO" ? "aprovado com avisos" : "aprovado"}.`,
+                        r === "FALHA" ? "erro" : r === "AVISO" ? "aviso" : "sucesso");
+                }
+            }
+
+            break;
+        }
 
 
         default:
             break;
     }
 
-
-    // ========================================================
-    // ATUALIZA INTERFACE
-    // ========================================================
-
     salvarAgvsFrota();
-
-    if (id === agvSelecionado) {
-
-        atualizarPainel();
-
-        renderizarControleFilaAGV();
-    }
-
-    renderizarFrota();
+    agendarAtualizacaoTela();
 }
-function registrarEventoHistorico(agvId, mensagem) {
+function registrarEventoHistorico(agvId, mensagem, caminho = "evento") {
 
     const agv = agvs[agvId];
 
@@ -7301,29 +1693,35 @@ function registrarEventoHistorico(agvId, mensagem) {
         // Evento simples em texto
     }
 
+    // evento/seguranca -> "seguranca"; o firmware 0.6 também manda o campo "categoria"
+    const categoria =
+        (dados && typeof dados === "object" && dados.categoria) ||
+        (caminho.startsWith("evento/") ? caminho.slice(7) : "missao");
+
     agv.historico.unshift({
         data: new Date().toISOString(),
+        categoria,
         evento: dados
     });
 
-    // Limita o histórico local
-    // para evitar crescimento infinito.
-    if (agv.historico.length > 500) {
-
-        agv.historico =
-            agv.historico.slice(0, 500);
+    // Limita o histórico local para não crescer sem fim.
+    if (agv.historico.length > 1000) {
+        agv.historico.length = 1000;
     }
 
     salvarAgvsFrota();
-
-    console.log(
-        "Evento registrado no histórico:",
-        agvId,
-        dados
-    );
 }
 
-function publicar(caminho, mensagem, id = agvSelecionado) {
+// AGV virtual: comandos vão direto para o firmware simulado no navegador.
+function canalDisponivel(agv) {
+    return Boolean(agv && agv.virtual) || Boolean(clienteMQTT && clienteMQTT.connected);
+}
+
+function publicar(caminho, mensagem, id = agvSelecionado, qos = 1) {
+
+    if (id && agvs[id]?.virtual && typeof AgvVirtual !== "undefined") {
+        return AgvVirtual.receberComando(id, caminho, String(mensagem));
+    }
 
     if (!clienteMQTT || !clienteMQTT.connected || !id) {
         console.error(
@@ -7334,14 +1732,14 @@ function publicar(caminho, mensagem, id = agvSelecionado) {
 
     const topico = gerarTopico(id, caminho);
 
-    console.log("PUBLICANDO:");
-    console.log("Tópico:", topico);
-    console.log("Mensagem:", mensagem);
+    if (qos > 0) {
+        console.log("PUBLICANDO:", topico, mensagem);
+    }
 
     clienteMQTT.publish(
         topico,
         String(mensagem),
-        { qos: 1 },
+        { qos },
         erro => {
 
             if (erro) {
@@ -7352,10 +1750,6 @@ function publicar(caminho, mensagem, id = agvSelecionado) {
                 return;
             }
 
-            console.log(
-                "Publicação MQTT concluída pelo cliente:",
-                topico
-            );
         }
     );
 
@@ -7364,393 +1758,306 @@ function publicar(caminho, mensagem, id = agvSelecionado) {
 
 
 
+
 /* ============================================================
-   FROTA / SELEÇÃO
+   ESTADO RESUMIDO DE UM AGV (cores da frota e do mapa)
    ============================================================ */
+
+// chave: missao | pronto | atencao | falha | emergencia | offline | desligado
+function categoriaEstadoAGV(agv) {
+    if (!agv || !agv.online) {
+        return { chave: "offline", texto: "OFFLINE", curto: "OFFLINE", filtro: "offline" };
+    }
+    if (agv.emergencia || agv.maquina === "EMERGENCIA") {
+        return { chave: "emergencia", texto: "EMERGÊNCIA", curto: "EMERGÊNCIA", filtro: "falha" };
+    }
+    if (agv.maquina === "PARADO" || agv.barreira === "FALHA_LEITURA") {
+        return { chave: "falha", texto: "FALHA", curto: "FALHA", filtro: "falha" };
+    }
+    if (agv.estadoMissao === "ERRO") {
+        return { chave: "falha", texto: "ERRO NA MISSÃO", curto: "ERRO", filtro: "falha" };
+    }
+    if (agv.aguardandoRearme) {
+        return { chave: "atencao", texto: "AGUARDANDO REARME", curto: "REARME", filtro: "atencao" };
+    }
+    if (agv.barreira === "INVADIDA" && (agv.estadoMissao === "EM_EXECUCAO" || agv.modo === "MANUAL")) {
+        return { chave: "atencao", texto: "OBSTÁCULO", curto: "OBSTÁCULO", filtro: "atencao" };
+    }
+    if (agv.estadoMissao === "INTERROMPIDA") {
+        return { chave: "atencao", texto: "MISSÃO PARADA", curto: "PARADA", filtro: "atencao" };
+    }
+    if (agv.estadoMissao === "AGUARDANDO_CONFIRMACAO") {
+        return { chave: "atencao", texto: "AGUARDA CONFIRMAÇÃO", curto: "CONFIRMAR", filtro: "atencao" };
+    }
+    if (agv.estadoMissao === "EM_EXECUCAO") {
+        return { chave: "missao", texto: "EM MISSÃO", curto: "EM MISSÃO", filtro: "missao" };
+    }
+    if (agv.estadoMissao === "CARREGADA") {
+        return { chave: "missao", texto: "MISSÃO PRONTA", curto: "PRONTA", filtro: "missao" };
+    }
+    if (agv.ligado !== "LIGADO") {
+        return { chave: "desligado", texto: "DESLIGADO", curto: "DESLIGADO", filtro: "pronto" };
+    }
+    if (agv.modo === "MANUAL") {
+        return { chave: "pronto", texto: "MANUAL", curto: "MANUAL", filtro: "pronto" };
+    }
+    return { chave: "pronto", texto: "PRONTO", curto: "PRONTO", filtro: "pronto" };
+}
+
+const CLASSE_CARD_ESTADO = {
+    missao: "estado-missao", pronto: "estado-pronto", atencao: "estado-atencao", falha: "estado-falha",
+    emergencia: "estado-falha emergencia", offline: "estado-offline", desligado: "estado-offline"
+};
+
+function textoModoAGV(agv) {
+    if (!agv.online) return agv.ultimoHeartbeat ? `visto ${tempoRelativo(agv.ultimoHeartbeat)}` : "nunca conectou";
+    return agv.modo === "MANUAL" ? "Manual" : "Automático";
+}
+
+function tempoRelativo(instante) {
+    const s = Math.max(0, Math.round((Date.now() - instante) / 1000));
+    if (s < 5) return "agora";
+    if (s < 60) return `há ${s} s`;
+    if (s < 3600) return `há ${Math.round(s / 60)} min`;
+    if (s < 86400) return `há ${Math.round(s / 3600)} h`;
+    return `há ${Math.round(s / 86400)} dias`;
+}
+
+function tempoDecorrido(instante) {
+    const s = Math.max(0, Math.floor((Date.now() - instante) / 1000));
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+    return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}` : `${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`;
+}
+
+function rotuloSinal(agv) {
+    if (!agv.online || !agv.ultimoHeartbeat) return "--";
+    const rssi = Number(agv.diagnostico?.rssi);
+    const idade = ((Date.now() - agv.ultimoHeartbeat) / 1000).toFixed(1).replace(".", ",");
+    return Number.isFinite(rssi) && rssi < 0 ? `${rssi} dBm · ${idade} s` : `${idade} s`;
+}
+
+
+/* ============================================================
+   FROTA
+   ============================================================ */
+
+let filtroFrota = "todos";
+
+function resumoMissaoCard(agv) {
+    const missaoId = agv.missaoAtual || agv.missaoCarregada;
+    if (!agv.online) return { titulo: "—", detalhe: agv.ultimoHeartbeat ? `Sem sinal ${tempoRelativo(agv.ultimoHeartbeat)}` : "Ainda não conectou ao broker", progresso: 0 };
+    if (!missaoId) {
+        const fila = (agv.filaMissoes || []).length;
+        return { titulo: "Sem missão", detalhe: fila ? `${fila} na fila` : (agv.modo === "MANUAL" ? "Seletora em MANUAL" : "Pronto para receber missão"), progresso: 0 };
+    }
+    const missao = obterMissaoPorId(missaoId);
+    const nome = missao?.nome ? `${missaoId} · ${missao.nome}` : missaoId;
+    const total = agv.totalEtapasMissao || missao?.etapas?.length || 0;
+    const indice = Number(agv.etapaMissao) || 0;
+    const etapa = missao?.etapas?.[indice];
+    let detalhe = total ? `Etapa ${Math.min(indice + 1, total)} de ${total}` : "";
+    if (agv.estadoMissao === "CARREGADA") detalhe = "Esperando START MISSÃO no AGV";
+    else if (etapa) detalhe += ` · ${descreverEtapaMissao(etapa)}`;
+    if (agv.estadoMissao === "INTERROMPIDA") detalhe = `Parada: ${textoCausa(agv.causaInterrupcao)}`;
+    return { titulo: nome, detalhe, progresso: agv.progresso || 0 };
+}
+
+function contarFiltrosFrota(lista) {
+    const n = { todos: lista.length, missao: 0, pronto: 0, atencao: 0, falha: 0, offline: 0 };
+    lista.forEach(agv => { n[categoriaEstadoAGV(agv).filtro]++; });
+    return n;
+}
+
+function renderizarFiltrosFrota(lista) {
+    const caixa = document.getElementById("filtrosFrota");
+    if (!caixa) return;
+    const n = contarFiltrosFrota(lista);
+    const itens = [
+        ["todos", "Todos", null], ["missao", "Em missão", "var(--accent)"], ["pronto", "Prontos", "var(--green)"],
+        ["atencao", "Atenção", "var(--amber)"], ["falha", "Falha", "var(--red)"], ["offline", "Offline", "var(--muted)"]
+    ];
+    ui.trocarHtml(caixa, itens.map(([chave, nome, cor]) => `
+        <button type="button" class="filtro ${filtroFrota === chave ? "ativo" : ""}" data-filtro="${chave}" aria-pressed="${filtroFrota === chave}">
+            ${cor ? `<span class="ponto" style="color:${cor}"></span>` : ""}${nome} <span class="n">${n[chave]}</span>
+        </button>`).join(""));
+}
 
 function renderizarFrota() {
     const grid = document.getElementById("fleetGrid");
     if (!grid) return;
 
-    const lista = Object.values(agvs);
-
-    document.getElementById("fleetCount").textContent = `${lista.length} AGVs`;
-
-    grid.innerHTML = lista.map(agv => {
-
-        const online = agv.online;
-        const emergencia = agv.emergencia;
-        const barreira = agv.barreira === "INVADIDA";
-
-        const classesCard = [
-            "fleet-card",
-            online ? "online" : "offline",
-            emergencia ? "emergencia" : "",
-            barreira ? "barreira" : ""
-        ].filter(Boolean).join(" ");
-
-        const alertas = `
-            ${emergencia ? `
-                <div class="fleet-alert emergencia">
-                    EMERGÊNCIA ATIVA — MOVIMENTAÇÃO BLOQUEADA
-                </div>
-            ` : ""}
-
-            ${barreira ? `
-                <div class="fleet-alert barreira">
-                    BARREIRA INVADIDA — MOVIMENTAÇÃO BLOQUEADA
-                </div>
-            ` : ""}
-        `;
-
-        return `
-            <article
-                class="${classesCard}"
-                onclick="selecionarAGV('${agv.id}')"
-            >
-
-                <div class="fleet-card-head">
-
-                    <div>
-                        <div class="fleet-id">
-                            AGV ${agv.id}
-                        </div>
-
-                        <div class="fleet-name">
-                            ${agv.nome}
-                        </div>
-                    </div>
-
-                    <div class="fleet-status ${online ? "online" : "offline"}">
-
-                        <span class="status-dot ${online ? "verde" : "vermelho"}"></span>
-
-                        ${online ? "ONLINE" : "OFFLINE"}
-
-                    </div>
-
-                </div>
-
-
-                <div class="fleet-data">
-
-                    <div>
-                        <span>Máquina</span>
-                        <strong>${agv.maquina}</strong>
-                    </div>
-
-                    <div>
-                        <span>Modo</span>
-                        <strong>${agv.modo}</strong>
-                    </div>
-
-                    <div>
-                        <span>Bateria</span>
-                        <strong>
-                            ${online ? agv.bateria + "%" : "--"}
-                        </strong>
-                    </div>
-
-                    <div>
-                        <span>Missão</span>
-                        <strong>${agv.estadoMissao}</strong>
-                    </div>
-
-                </div>
-
-
-                ${alertas}
-                <div class="fleet-actions-card">
-
-    <button
-        type="button"
-        onclick="event.stopPropagation(); abrirEdicaoAGV('${agv.id}')"
-    >
-        EDITAR
-    </button>
-
-    <button
-        type="button"
-        class="btn-excluir-agv"
-        onclick="event.stopPropagation(); excluirAGV('${agv.id}')"
-    >
-        EXCLUIR
-    </button>
-
-</div>
-
-                <div class="fleet-open">
-                    ${online ? "ABRIR PAINEL →" : "AGV NÃO DISPONÍVEL"}
-                </div>
-
-            </article>
-        `;
-
-    }).join("");
-}
-function renderizarControleFilaAGV() {
-
-    const select =
-        document.getElementById(
-            "missaoSelecionadaAGV"
-        );
-
-    const filaContainer =
-        document.getElementById(
-            "filaMissoesAGV"
-        );
-
-    const atualContainer =
-        document.getElementById(
-            "missaoAtualAGV"
-        );
-
-
-    if (!select) {
-        return;
-    }
-
-
-    const agv =
-        agvAtual();
-
-
-    if (!agv) {
-        return;
-    }
-
-
-    // ========================================================
-// MISSÕES DISPONÍVEIS
-// ========================================================
-
-const missoesSalvas =
-    localStorage.getItem("missoesAGV");
-
-const missoesDisponiveis =
-    missoesSalvas
-        ? JSON.parse(missoesSalvas)
-        : [];
-
-
-select.innerHTML = `
-
-    <option value="">
-        SELECIONE UMA MISSÃO
-    </option>
-
-`;
-
-
-if (Array.isArray(missoesDisponiveis)) {
-
-    missoesDisponiveis.forEach(missao => {
-
-        const option =
-            document.createElement("option");
-
-        option.value =
-            missao.id;
-
-        option.textContent =
-            `${missao.id} — ${missao.nome || "Sem nome"}`;
-
-        select.appendChild(option);
-
+    const ordem = { emergencia: 0, falha: 1, atencao: 2, missao: 3, pronto: 4, desligado: 5, offline: 6 };
+    const todos = Object.values(agvs).sort((a, b) => {
+        const ca = categoriaEstadoAGV(a).chave, cb = categoriaEstadoAGV(b).chave;
+        return (ordem[ca] - ordem[cb]) || String(a.id).localeCompare(String(b.id), "pt-BR", { numeric: true });
     });
-}
+    renderizarFiltrosFrota(todos);
+    const lista = todos.filter(agv => filtroFrota === "todos" || categoriaEstadoAGV(agv).filtro === filtroFrota);
 
-
-    select.value =
-        agv.missaoSelecionada || "";
-
-
-    // ========================================================
-    // MISSÃO ATUAL
-    // ========================================================
-
-    if (atualContainer) {
-
-        if (agv.missaoAtual) {
-
-            const missaoAtual =
-                obterMissaoPorId(
-                    agv.missaoAtual
-                );
-
-
-            atualContainer.innerHTML = `
-
-                <span class="missao-atual-label">
-                    EM EXECUÇÃO
-                </span>
-
-                <strong>
-                    ${agv.missaoAtual}
-                </strong>
-
-                ${
-                    missaoAtual
-                        ? ` — ${missaoAtual.nome || ""}`
-                        : ""
-                }
-
-            `;
-
-        } else {
-
-            atualContainer.innerHTML = `
-                <span class="missao-atual-vazia">
-                    Nenhuma missão em execução
-                </span>
-            `;
-        }
+    if (document.querySelector(".tela.ativa")?.id === "frota") {
+        const planta = plantaPublicada();
+        const sub = document.getElementById("subtituloTela");
+        if (sub) sub.textContent = `${todos.length} AGV${todos.length === 1 ? "" : "s"} cadastrado${todos.length === 1 ? "" : "s"}` +
+            (planta.nos.length ? ` · planta ${planta.nome || ""}, revisão ${planta.revisao || 0}` : " · nenhuma planta publicada");
     }
 
-
-    // ========================================================
-    // FILA
-    // ========================================================
-
-    if (!filaContainer) {
+    if (!todos.length) {
+        grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1">Nenhum AGV cadastrado. Use “+ Adicionar AGV” (o ID é o AGV_ID do firmware) ou crie um AGV virtual para testar.</div>`;
+        return;
+    }
+    if (!lista.length) {
+        grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1">Nenhum AGV neste filtro.</div>`;
         return;
     }
 
-
-    filaContainer.innerHTML = "";
-
-
-    if (
-    !Array.isArray(agv.filaMissoes) ||
-    agv.filaMissoes.length === 0
-) {
-
-    filaContainer.innerHTML = `
-
-        <div class="fila-vazia">
-            FILA VAZIA
-        </div>
-
-    `;
-    
-} else {
-
-    
-
-
-
-    agv.filaMissoes.forEach(
-        (missaoId, indice) => {
-
-            const missao =
-                obterMissaoPorId(
-                    missaoId
-                );
-
-
-            const item =
-                document.createElement("div");
-
-
-            item.className =
-                "fila-missao-item";
-
-
-            item.innerHTML = `
-
-                <div class="fila-missao-info">
-
-                    <span class="fila-missao-ordem">
-                        ${indice + 1}
-                    </span>
-
-                    <div>
-
-                        <strong>
-                            ${missaoId}
-                        </strong>
-
-                        <small>
-                            ${
-                                missao
-                                    ? missao.nome || ""
-                                    : "Missão não encontrada"
-                            }
-                        </small>
-
+    ui.trocarHtml(grid, lista.map(agv => {
+        const cat = categoriaEstadoAGV(agv);
+        const m = resumoMissaoCard(agv);
+        const id = escaparHtml(agv.id);
+        const acao = !agv.online ? "Ver último estado" : cat.chave === "emergencia" ? "Abrir agora" : agv.virtual ? "Abrir painel" : "Abrir painel";
+        return `
+            <article class="agv-card ${CLASSE_CARD_ESTADO[cat.chave] || ""}" data-agv="${id}" tabindex="0" aria-label="AGV ${id} ${escaparHtml(agv.nome)}: ${cat.texto}">
+                <div class="agv-card-faixa"></div>
+                <div class="agv-card-corpo">
+                    <div class="agv-card-topo">
+                        <span class="agv-card-id">${id}</span>
+                        <div style="min-width:0;flex:1">
+                            <div class="agv-card-nome"><h2>${escaparHtml(agv.nome)}</h2>${agv.virtual ? `<span class="tag-virtual">VIRTUAL</span>` : ""}</div>
+                            <div class="agv-card-modo">${escaparHtml(textoModoAGV(agv))}</div>
+                        </div>
+                        <span class="agv-card-estado">${cat.texto}</span>
                     </div>
-
+                    <div class="agv-card-missao">
+                        <strong>${escaparHtml(m.titulo)}</strong>
+                        <div class="barra-progresso fina"><div style="width:${m.progresso}%"></div></div>
+                        <div class="agv-card-detalhe">${escaparHtml(m.detalhe)}</div>
+                    </div>
+                    <dl class="lista-dl">
+                        <dt>Posição</dt><dd>${escaparHtml(agv.online || agv.pontoAtual ? descreverPosicaoAGV(agv) : "--")}</dd>
+                        <dt>Sinal</dt><dd class="mono">${escaparHtml(rotuloSinal(agv))}</dd>
+                    </dl>
+                    <div class="agv-card-acoes">
+                        <button type="button" class="btn ${cat.chave === "emergencia" ? "btn-perigo-cheio" : ""}" data-abrir="${id}">${acao}</button>
+                        <button type="button" class="btn btn-icone" data-editar="${id}" title="Editar nome e ID" aria-label="Editar AGV ${id}">${ui.icone("lapis")}</button>
+                        <button type="button" class="btn btn-icone btn-perigo" data-excluir="${id}" title="Excluir da frota" aria-label="Excluir AGV ${id}">${ui.icone("lixo")}</button>
+                    </div>
                 </div>
+            </article>`;
+    }).join(""));
+}
+
+document.getElementById("filtrosFrota")?.addEventListener("click", evento => {
+    const botao = evento.target.closest("[data-filtro]");
+    if (!botao) return;
+    filtroFrota = botao.dataset.filtro;
+    renderizarFrota();
+});
+
+document.getElementById("fleetGrid")?.addEventListener("click", evento => {
+    const editar = evento.target.closest("[data-editar]");
+    if (editar) { abrirEdicaoAGV(editar.dataset.editar); return; }
+    const excluir = evento.target.closest("[data-excluir]");
+    if (excluir) { excluirAGV(excluir.dataset.excluir); return; }
+    const card = evento.target.closest("[data-agv]");
+    if (card) selecionarAGV(card.dataset.agv);
+});
+
+document.getElementById("fleetGrid")?.addEventListener("keydown", evento => {
+    if (evento.key !== "Enter" && evento.key !== " ") return;
+    const card = evento.target.closest("[data-agv]");
+    if (card && evento.target === card) {
+        evento.preventDefault();
+        selecionarAGV(card.dataset.agv);
+    }
+});
+
+document.getElementById("frotaNovoVirtual")?.addEventListener("click", () => {
+    AgvVirtual.criarNovo()
+        .then(() => ui.aviso("AGV virtual criado e ligado. Ele já aparece na frota.", "sucesso"))
+        .catch(e => ui.aviso("Não foi possível iniciar o AGV virtual: " + e.message, "erro"));
+});
 
 
-                <button
-                    type="button"
-                    class="btn-remover-fila"
-                    onclick="removerMissaoFila(${indice})"
-                >
-                    ×
-                </button>
+/* ============================================================
+   ALERTA DE EMERGÊNCIA (qualquer tela)
+   ============================================================ */
 
-            `;
+function renderizarAlertaGlobal() {
+    const caixa = document.getElementById("alertaGlobal");
+    if (!caixa) return;
+    const emergencia = Object.values(agvs).filter(agv => agv.online && agv.emergencia);
+    document.body.classList.toggle("emergencia-ativa", emergencia.length > 0);
 
+    const badge = document.getElementById("menuBadgeFrota");
+    if (badge) {
+        badge.hidden = emergencia.length === 0;
+        badge.textContent = emergencia.length;
+    }
 
-            filaContainer.appendChild(item);
+    if (!emergencia.length) {
+        if (caixa.innerHTML) caixa.innerHTML = "";
+        return;
+    }
+    const tela = document.querySelector(".tela.ativa")?.id;
+    const selecionado = agvAtual();
+    const principal = selecionado && selecionado.online && selecionado.emergencia && tela !== "frota" ? selecionado : null;
 
-        }
-    );
+    if (principal) {
+        const desde = principal.emergenciaDesde || Date.now();
+        const missao = principal.missaoAtual ? ` Missão ${escaparHtml(principal.missaoAtual)} interrompida.` : "";
+        const outros = emergencia.length > 1 ? ` · mais ${emergencia.length - 1} AGV em emergência` : "";
+        caixa.innerHTML = `
+            <div class="alerta-emergencia" role="alert">
+                <span class="alerta-emergencia-icone">${ui.icone("alerta", "icone-g")}</span>
+                <div class="alerta-emergencia-texto">
+                    <div class="alerta-emergencia-titulo">EMERGÊNCIA ACIONADA · AGV ${escaparHtml(principal.id)} ${escaparHtml(principal.nome)}</div>
+                    <div>Botão de emergência pressionado às ${new Date(desde).toLocaleTimeString("pt-BR")}.${missao}${outros}</div>
+                </div>
+                <ol>
+                    <li>Verifique a área em volta do AGV</li>
+                    <li>Solte o botão de emergência</li>
+                    <li>Pressione REARME no painel do AGV</li>
+                </ol>
+                <span class="alerta-emergencia-tempo">há ${tempoDecorrido(desde)}</span>
+            </div>`;
+        return;
+    }
+    const primeiro = emergencia[0];
+    const lista = emergencia.map(a => `AGV ${escaparHtml(a.id)} ${escaparHtml(a.nome)}`).join(", ");
+    caixa.innerHTML = `
+        <div class="alerta-emergencia" role="alert" style="padding:14px 18px">
+            ${ui.icone("alerta", "icone-g")}
+            <div class="alerta-emergencia-texto"><b style="font-size:16px">${emergencia.length} AGV${emergencia.length > 1 ? "s" : ""} em emergência</b> · ${lista}${primeiro.emergenciaDesde ? `, há ${tempoDecorrido(primeiro.emergenciaDesde)}` : ""}</div>
+            <button type="button" class="btn" onclick="selecionarAGV('${escaparHtml(primeiro.id)}')">Abrir AGV ${escaparHtml(primeiro.id)}</button>
+        </div>`;
 }
 
 
-    // ========================================================
-    // BOTÕES
-    // ========================================================
+/* ============================================================
+   SELEÇÃO E NAVEGAÇÃO
+   ============================================================ */
 
-    const btnIniciar =
-        document.getElementById(
-            "btnStart"
-        );
-
-
-    const btnFila =
-        document.getElementById(
-            "btnAdicionarFilaAGV"
-        );
-
-
-    const seguro =
-        agv.online &&
-        agv.ligado === "LIGADO" &&
-        !agv.emergencia &&
-        !agv.aguardandoRearme &&
-        agv.stop === "NORMAL" &&
-        agv.barreira === "LIVRE";
-
-
-    if (btnIniciar) {
-
-        btnIniciar.disabled =
-            !seguro ||
-            !agv.missaoSelecionada ||
-            agv.estadoMissao === "EM_EXECUCAO";
-    }
-
-
-    if (btnFila) {
-
-        btnFila.disabled =
-            !agv.missaoSelecionada;
-    }
-}
 function selecionarAGV(id) {
     if (!agvs[id]) return;
     agvSelecionado = id;
-    document.getElementById("agvSelecionadoNome").textContent = agvs[id].nome;
-    document.getElementById("agvSelecionadoId").textContent = `AGV ${id}`;
-    atualizarCamposConfiguracao();
+    try { localStorage.setItem("agvSelecionado", id); } catch (e) { /* ignora */ }
+    atualizarIdentificacaoAGV();
     mudarTela("visaoGeral");
     renderizarMapaVisaoGeral();
     atualizarPainel();
     renderizarControleFilaAGV();
+    renderizarDadosTelaAtual();
+}
+
+function atualizarIdentificacaoAGV() {
+    const agv = agvAtual();
+    const set = (id, valor) => { const e = document.getElementById(id); if (e) e.textContent = valor; };
+    set("agvSelecionadoBadge", agv ? agv.id : "--");
+    set("agvSelecionadoNome", agv ? agv.nome : "Nenhum AGV");
+    set("agvSelecionadoId", agv ? `AGV selecionado${agv.virtual ? " · virtual" : ""}` : "Escolha na frota");
+    set("trocarAgvId", agv ? agv.id : "--");
+    set("trocarAgvNome", agv ? agv.nome : "AGV");
+    document.querySelectorAll(".agv-menu").forEach(item => item.classList.toggle("bloqueado", !agv));
 }
 
 function voltarFrota() {
@@ -7759,747 +2066,381 @@ function voltarFrota() {
 
 function selecionarProximoAGV() {
     const ids = Object.keys(agvs);
+    if (!ids.length) return;
     const index = Math.max(0, ids.indexOf(agvSelecionado));
     selecionarAGV(ids[(index + 1) % ids.length]);
 }
 
-/* ============================================================
-   NAVEGAÇÃO
-   ============================================================ */
-
 const informacoesTelas = {
-    frota: ["Controle da Frota", "Selecione um AGV para acessar o painel operacional"],
-    visaoGeral: ["Visão Geral", "Monitoramento e controle do AGV selecionado"],
-    controleManual: ["Controle Manual", "Comando direto e movimentação do AGV selecionado"],
-    missoes: ["Missões", "Gerenciamento das missões da frota"],
-    sensores: ["Sensores", "Monitoramento dos sensores do AGV selecionado"],
-    diagnostico: ["Diagnóstico", "Estado dos sistemas e componentes"],
-    historico: ["Histórico", "Registro de eventos do AGV selecionado"],
-    configuracoes: ["Configurações", "Parâmetros do AGV selecionado"],
-    controlePlanta: ["Controle da Planta", "Cadastro e configuração da planta do AGV"]
+    frota: ["Frota", "Selecione um AGV para abrir o painel"],
+    visaoGeral: ["Visão geral", ""],
+    controleManual: ["Controle manual", "segure para mover, solte para parar"],
+    missoes: ["Missões", "Sequências de etapas que os AGVs executam"],
+    sensores: ["Sensores", "leituras ao vivo"],
+    diagnostico: ["Diagnóstico", "saúde do hardware, da comunicação e do firmware"],
+    historico: ["Histórico", "eventos guardados neste navegador"],
+    configuracoes: ["Configurações", "parâmetros salvos no próprio AGV"],
+    controlePlanta: ["Planta", "Layout do galpão: linhas, estações, tags e zonas"],
+    agvVirtual: ["AGV virtual", "O firmware real rodando no navegador, num mundo montado a partir da planta publicada"]
 };
-function mudarTela(nomeTela) {
 
-    if (
-    nomeTela !== "frota" &&
-    nomeTela !== "controlePlanta" &&
-    nomeTela !== "missoes" &&
-    !agvSelecionado
-) {
-    alert("Selecione um AGV primeiro.");
-    return;
-}
+const TELAS_DO_AGV = ["visaoGeral", "controleManual", "sensores", "diagnostico", "historico", "configuracoes"];
 
-    document.querySelectorAll(".tela").forEach(t => {
-        t.classList.remove("ativa");
-    });
-
-    document.getElementById(nomeTela)?.classList.add("ativa");
-
-    document.querySelectorAll(".menu-item").forEach(item => {
-        item.classList.remove("ativo");
-    });
-
-    if (nomeTela === "frota") {
-
-        document.getElementById("menuFrota")?.classList.add("ativo");
-
-    } else {
-
-        document
-            .querySelector(`.menu-item[data-tela="${nomeTela}"]`)
-            ?.classList.add("ativo");
-    }
-
+function atualizarCabecalho(nomeTela) {
     const info = informacoesTelas[nomeTela];
-
+    const agv = agvAtual();
+    const doAgv = TELAS_DO_AGV.includes(nomeTela);
     if (info) {
         document.getElementById("tituloTela").textContent = info[0];
-        document.getElementById("subtituloTela").textContent = info[1];
+        let sub = info[1];
+        if (doAgv && agv) sub = `AGV ${agv.id} · ${agv.nome}${sub ? " — " + sub : ""}`;
+        if (nomeTela === "frota") sub = document.getElementById("subtituloTela").textContent || info[1];
+        document.getElementById("subtituloTela").textContent = sub;
     }
-if (nomeTela === "controleManual") {
-    atualizarControleManual();
+    const trocar = document.getElementById("trocarAgv");
+    if (trocar) trocar.hidden = !(doAgv && agv);
+    ["pilulaOnline", "pilulaSinal", "pilulaFirmware"].forEach(id => {
+        const e = document.getElementById(id);
+        if (e) e.hidden = !(doAgv && agv);
+    });
 }
 
-if (nomeTela === "frota") {
-    renderizarFrota();
+function mudarTela(nomeTela) {
+    if (TELAS_DO_AGV.includes(nomeTela) && !agvSelecionado) {
+        ui.aviso("Escolha um AGV na frota primeiro.", "aviso");
+        nomeTela = "frota";
+    }
+    document.querySelectorAll(".tela").forEach(t => t.classList.remove("ativa"));
+    document.getElementById(nomeTela)?.classList.add("ativa");
+    document.querySelectorAll(".menu-item").forEach(item => {
+        item.classList.toggle("ativo", item.dataset.tela === nomeTela);
+        if (item.dataset.tela === nomeTela) item.setAttribute("aria-current", "page");
+        else item.removeAttribute("aria-current");
+    });
+    document.body.classList.remove("menu-aberto");
+    atualizarCabecalho(nomeTela);
+    try { localStorage.setItem("telaAtual", nomeTela); } catch (e) { /* ignora */ }
+
+    if (nomeTela === "controleManual") atualizarControleManual();
+    if (nomeTela === "frota") renderizarFrota();
+    if (nomeTela === "controlePlanta") EditorPlanta.abrir();
+    if (nomeTela === "visaoGeral") renderizarMapaVisaoGeral();
+    if (nomeTela === "agvVirtual") AgvVirtual.abrir();
+    if (nomeTela === "missoes") abrirTelaMissoes();
+    renderizarAlertaGlobal();
+    renderizarDadosTelaAtual();
+    window.scrollTo({ top: 0 });
 }
 
-if (nomeTela === "controlePlanta") {
-    renderizarPontos();
-}
-if (nomeTela === "missoes") {
-    renderizarListaMissoes();
-}
-}
-/* ============================================================
-   MENU - FROTA
-   ============================================================ */
-
-const menuFrota = document.getElementById("menuFrota");
-const submenuFrota = document.getElementById("submenuFrota");
-
-menuFrota.addEventListener("click", () => {
-
-    const aberto = submenuFrota.classList.toggle("aberto");
-
-    menuFrota.classList.toggle("expandido", aberto);
-
-    // Abre também a tela principal da Frota
-    mudarTela("frota");
-
-});
-
-document.querySelectorAll(".menu-item:not(.menu-pai)").forEach(item => {
+document.querySelectorAll(".menu-item[data-tela]").forEach(item => {
     item.addEventListener("click", event => {
         event.preventDefault();
         mudarTela(item.dataset.tela);
     });
 });
 
+document.getElementById("agvAtualBotao")?.addEventListener("click", () => mudarTela("frota"));
+document.getElementById("trocarAgv")?.addEventListener("click", () => mudarTela("frota"));
+document.getElementById("vgVerHistorico")?.addEventListener("click", evento => { evento.preventDefault(); mudarTela("historico"); });
+document.getElementById("btnMenuMovel")?.addEventListener("click", () => document.body.classList.toggle("menu-aberto"));
+document.querySelectorAll("[data-acao-tema]").forEach(b => b.addEventListener("click", () => ui.alternarTema()));
+ui.aplicarTema(ui.temaAtual());
+document.getElementById("vgPosicao")?.addEventListener("toggle", evento => { evento.target.dataset.tocado = "1"; });
+document.getElementById("btnVerFila")?.addEventListener("click", () => {
+    const fila = document.getElementById("filaMissoesAGV");
+    const botao = document.getElementById("btnVerFila");
+    if (!fila) return;
+    fila.hidden = !fila.hidden;
+    botao.setAttribute("aria-expanded", String(!fila.hidden));
+});
+
+
 /* ============================================================
-   PAINEL DO AGV SELECIONADO
+   PAINEL DO AGV SELECIONADO (cabeçalho e Visão Geral)
    ============================================================ */
 
+const COR_ESTADO_PILULA = {
+    missao: "var(--accent)", pronto: "var(--green)", atencao: "var(--amber)", falha: "var(--red)",
+    emergencia: "var(--red)", offline: "var(--muted)", desligado: "var(--muted)"
+};
+
+function textoGarra(agv) {
+    const g = agv.garra;
+    if (!g) return "--";
+    const nomes = {
+        NAO_CONFIGURADA: "Desativada", MOVENDO_AVANCAR: "Subindo", MOVENDO_RECUAR: "Descendo",
+        RECUADA: "Abaixada (vazia)", AVANCADA: "Erguida (carregada)", PARADA: "No meio do curso"
+    };
+    return nomes[g.estado] || g.estado || "--";
+}
+
+function definirTile(id, classe, texto) {
+    const tile = document.getElementById(id);
+    if (!tile) return;
+    tile.className = `tile ${classe}`;
+    const valor = tile.querySelector(".tile-valor");
+    if (valor) valor.innerHTML = texto;
+}
+
 function atualizarPainel() {
+    atualizarBotaoCancelarMissao();
+    renderizarAlertaGlobal();
     const agv = agvAtual();
-
     if (!agv) {
-    document.getElementById("indicadorAgv").className =
-        "status-dot vermelho";
-
-    document.getElementById("statusAgv").textContent =
-        "NENHUM";
-
-    const indicadorOnline =
-        document.getElementById("indicadorOnline");
-
-    const statusOnlineTopo =
-        document.getElementById("statusOnlineTopo");
-
-    if (indicadorOnline) {
-        indicadorOnline.classList.remove("verde");
-        indicadorOnline.classList.add("vermelho");
+        atualizarIdentificacaoAGV();
+        atualizarPainelCalibracaoQTR(agv);
+        return;
     }
+    const set = (id, value) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = value;
+    };
+    atualizarIdentificacaoAGV();
 
-    if (statusOnlineTopo) {
-        statusOnlineTopo.textContent = "OFFLINE";
+    // cabeçalho
+    const pilula = document.getElementById("pilulaOnline");
+    if (pilula) pilula.className = `pilula ${agv.online ? "verde" : "vermelho"}`;
+    set("statusOnlineTopo", agv.online ? "Online" : "Offline");
+    set("heartbeat", rotuloSinal(agv));
+    set("topoFirmware", agv.sistema?.versao || "--");
+    const tela = document.querySelector(".tela.ativa")?.id;
+    if (TELAS_DO_AGV.includes(tela)) atualizarCabecalho(tela);
+
+    // estado
+    const cat = categoriaEstadoAGV(agv);
+    const estado = document.getElementById("vgEstadoPilula");
+    if (estado) {
+        estado.style.background = COR_ESTADO_PILULA[cat.chave];
+        estado.classList.toggle("pulsando", cat.chave === "missao");
+        estado.classList.toggle("alarme", cat.chave === "emergencia");
     }
+    set("statusOnline", cat.texto);
+    set("statusModo", agv.online ? (agv.modo === "MANUAL" ? "Manual" : "Automático") + (agv.ligado === "LIGADO" ? "" : " · desligado (STOP)") : "--");
+    set("estacaoAtual", descreverPosicaoAGV(agv));
+    const pose = poseEstimadaAGV(agv);
+    set("vgOrientacao", pose ? `${Math.round(Planta.normalizarAngulo(pose.orientacao))}° · ${ui.direcao(pose.orientacao)}` : "--");
+    set("velocidade", `${ui.numero(agv.velocidade || 0, 3)} m/s`);
+    set("vgGarra", textoGarra(agv));
 
-    return;
-}
+    // segurança
+    definirTile("tileEmergencia", agv.emergencia ? "alarme" : agv.online ? "verde" : "", agv.emergencia ? "Acionada" : agv.online ? "Normal" : "--");
+    const vl = agv.sensores?.vl53 || {};
+    const menor = [vl.d1, vl.d2].filter(d => typeof d === "number" && d >= 0).sort((a, b) => a - b)[0];
+    const distancia = typeof menor === "number" ? ` <span class="mono" style="font-weight:500;font-size:12px">${ui.numero(menor / 1000, 2)} m</span>` : "";
+    if (agv.barreira === "INVADIDA") definirTile("tileBarreira", "vermelho", "Invadida" + distancia);
+    else if (agv.barreira === "FALHA_LEITURA") definirTile("tileBarreira", "ambar", "Falha de leitura");
+    else definirTile("tileBarreira", agv.online ? "verde" : "", agv.online ? "Livre" + distancia : "--");
+    definirTile("tileRearme", agv.aguardandoRearme ? "ambar" : agv.online ? "verde" : "", agv.aguardandoRearme ? "Necessário" : agv.online ? "Liberado" : "--");
 
-    document.getElementById("indicadorAgv").className = `status-dot ${agv.ligado === "LIGADO" ? "verde" : "vermelho"}`;
-    document.getElementById("statusAgv").textContent =
-    agv.ligado;
-    const indicadorOnline = document.getElementById("indicadorOnline");
-const statusOnlineTopo = document.getElementById("statusOnlineTopo");
-
-if (indicadorOnline) {
-    indicadorOnline.classList.toggle("verde", agv.online);
-    indicadorOnline.classList.toggle("vermelho", !agv.online);
-}
-
-if (statusOnlineTopo) {
-    statusOnlineTopo.textContent =
-        agv.online ? "ONLINE" : "OFFLINE";
-}
-    document.getElementById("heartbeat").textContent = agv.online ? `${agv.heartbeat.toFixed(1).replace(".", ",")} s` : "--";
-    document.getElementById("agvSelecionadoNome").textContent = agv.nome;
-    document.getElementById("agvSelecionadoId").textContent = `AGV ${agv.id}`;
-
-    const set = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
-    set("vgNome", agv.nome); set("vgId", `AGV ${agv.id}`); set("manualAgvNome", `${agv.nome} • AGV ${agv.id}`);
-    set(
-    "statusOnline",
-    agv.online ? "ONLINE" : "OFFLINE"
-);
-const statusOnline = document.getElementById("statusOnline");
-
-if (statusOnline) {
-    statusOnline.style.color =
-        agv.online ? "var(--green)" : "var(--red)";
-}
-    set("statusMaquina", agv.maquina); set("statusModo", agv.modo); set("estacaoAtual", agv.estacaoAtual); set("destino", agv.destino);
-    set("estadoMissao", agv.estadoMissao); set("progressoTexto", `${agv.progresso}%`); set("missaoAtualBadge", agv.estadoMissao);
-    set("missaoProgresso", `${agv.progresso}%`); set("missaoDestino", agv.destino); set("diagMqtt", agv.mqttConectado ? "CONECTADO" : "DESCONECTADO"); set("diagHeartbeat", agv.online ? `${agv.heartbeat.toFixed(1)} s` : "--");
-set("bateria", `${agv.bateria}%`);
-set(
-    "velocidade",
-    `${agv.velocidade.toFixed(2).replace(".", ",")} m/s`
-);
-    const barraProgresso = document.getElementById("barraProgresso");
-
-if (barraProgresso) {
-    barraProgresso.style.width = `${agv.progresso}%`;
-}
-    const missaoProgressBar = document.getElementById("missaoProgressBar");
-
-if (missaoProgressBar) {
-    missaoProgressBar.style.width = `${agv.progresso}%`;
-}
-
-    const statusEmergencia = document.getElementById("statusEmergencia");
-    statusEmergencia.textContent = agv.emergencia ? "ACIONADA" : "NORMAL";
-    statusEmergencia.className = `seguranca-status ${agv.emergencia ? "perigo" : "normal"}`;
-
-    const statusRearme = document.getElementById("statusRearme");
-    statusRearme.textContent = agv.aguardandoRearme ? "NECESSÁRIO" : "LIBERADO";
-    statusRearme.className = `seguranca-status ${agv.aguardandoRearme ? "alerta" : "normal"}`;
-
-    const statusBarreira = document.getElementById("statusBarreira");
-    statusBarreira.textContent = agv.barreira;
-    statusBarreira.className = `seguranca-status ${agv.barreira === "INVADIDA" ? "perigo" : "normal"}`;
-
-    document.getElementById("indicadorRearme").textContent = agv.aguardandoRearme ? "REARME NECESSÁRIO" : "REARME LIBERADO";
-    document.getElementById("indicadorRearme").classList.toggle("ativo", agv.aguardandoRearme);
-    const telaAtual = document.querySelector(".tela.ativa");
-
-const estaNaFrota =
-    telaAtual && telaAtual.id === "frota";
-
-const main = document.querySelector(".main");
-
-if (telaAtual && !estaNaFrota) {
-
-    main.classList.toggle(
-        "main-emergencia",
-        agv.emergencia
-    );
-
-    document.getElementById("bannerEmergencia").classList.toggle(
-        "ativo",
-        agv.emergencia
-    );
-
-    document.getElementById("bannerBarreira").classList.toggle(
-        "ativo",
-        agv.barreira === "INVADIDA"
-    );
-
-} else {
-
-    main.classList.remove("main-emergencia");
-
-    document.getElementById("bannerEmergencia").classList.remove("ativo");
-    document.getElementById("bannerBarreira").classList.remove("ativo");
-}
-const podeIniciar =
-    agv.online &&
-    agv.ligado === "LIGADO" &&
-    !agv.emergencia &&
-    !agv.aguardandoRearme &&
-    agv.stop === "NORMAL" &&
-    agv.barreira === "LIVRE" &&
-    agv.estadoMissao !== "EM_EXECUCAO";
-document.getElementById("btnStart").disabled = !podeIniciar;
-document.getElementById("btnRearme").disabled =
-    !(agv.online && agv.aguardandoRearme);
+    preencherSelectPosicao(agv);
     atualizarControleManual();
+    renderizarEventosRecentes(agv);
+}
+
+const TEXTOS_EVENTOS = {
+    EMERGENCIA_ACIONADA: "Emergência acionada", EMERGENCIA_LIBERADA: "Emergência liberada", REARME_ACEITO: "Rearme aceito",
+    REARME_LOCAL_OBRIGATORIO: "Rearme só no painel do AGV", STOP_ACIONADO: "STOP acionado", POTENCIA_HABILITADA: "AGV ligado (START)",
+    BARREIRA_INVADIDA: "Barreira invadida", BARREIRA_LIVRE: "Barreira liberada", MODO_ALTERADO: "Seletora mudou de posição",
+    FALHA_COMUNICACAO_PAINEL: "Falha de comunicação com o painel", COMUNICACAO_PAINEL_RESTAURADA: "Painel voltou a responder",
+    FALHA_SENSORES_BARREIRA: "Falha nos sensores de distância", COMBINACAO_INVALIDA: "STOP e emergência incoerentes",
+    MISSAO_CARREGADA: "Missão carregada", MISSAO_INICIADA: "Missão iniciada", MISSAO_CONCLUIDA: "Missão concluída",
+    MISSAO_INTERROMPIDA: "Missão interrompida", MISSAO_RETOMADA: "Missão retomada", MISSAO_ERRO: "Erro na missão",
+    MISSAO_CANCELADA: "Missão cancelada", CARREGAMENTO_REJEITADO: "Missão recusada pelo AGV", INICIO_REJEITADO: "START MISSÃO recusado",
+    ETAPA_INICIADA: "Etapa iniciada", ETAPA_CONCLUIDA: "Etapa concluída", CONFIRMACAO_RECEBIDA: "Etapa confirmada",
+    TAG_LIDA: "Tag RFID lida", TAG_NAO_LIDA: "Tag esperada não foi lida", POSICAO_DEFINIDA: "Posição definida",
+    POSICAO_PERDIDA: "Posição perdida (movido no manual)", POSICAO_REJEITADA: "Posição recusada",
+    AGV_REINICIOU: "AGV reiniciou", FALHA_HARDWARE: "Falha de hardware", AUTOTESTE_CONCLUIDO: "Autoteste concluído",
+    AUTOTESTE_INICIADO: "Autoteste iniciado", AUTOTESTE_RECUSADO: "Autoteste recusado", TESTE_LEDS: "Teste dos LEDs",
+    OTA_INICIADA: "Atualização iniciada", OTA_CONCLUIDA: "Atualização concluída", OTA_ERRO: "Erro na atualização",
+    OTA_VALIDADA: "Versão nova confirmada", OTA_RECUSADA: "Atualização recusada",
+    CONFIGURACAO_ALTERADA: "Parâmetros alterados", CONFIGURACAO_RESTAURADA: "Padrão de fábrica restaurado",
+    CALIBRACAO_QTR_INICIADA: "Calibração do QTR iniciada", CALIBRACAO_QTR_CONCLUIDA: "Calibração do QTR salva",
+    CALIBRACAO_QTR_CANCELADA: "Calibração do QTR cancelada", CALIBRACAO_QTR_ERRO: "Calibração do QTR recusada",
+    MISSAO_ENVIADA: "Missão enviada", POSICAO_INFORMADA: "Posição informada", CONFIGURACAO_ENVIADA: "Parâmetros enviados"
+};
+
+function tituloEvento(dados) {
+    if (!dados || typeof dados !== "object") return String(dados ?? "");
+    const nome = dados.evento || dados.tipo || "";
+    return (typeof NOMES_EVENTOS !== "undefined" && NOMES_EVENTOS[nome]) || TEXTOS_EVENTOS[nome] || String(nome).replace(/_/g, " ").toLowerCase().replace(/^./, c => c.toUpperCase());
+}
+
+function renderizarEventosRecentes(agv) {
+    const caixa = document.getElementById("vgEventos");
+    if (!caixa || !document.getElementById("visaoGeral")?.classList.contains("ativa")) return;
+    const itens = (agv.historico || []).slice(0, 6);
+    if (!itens.length) {
+        caixa.innerHTML = `<span style="grid-column:1/-1;color:var(--muted)">Nenhum evento ainda.</span>`;
+        return;
+    }
+    const nomesCategoria = { seguranca: "Segurança", missao: "Missão", sistema: "Sistema", configuracao: "Config", site: "Site" };
+    ui.trocarHtml(caixa, itens.map(item => {
+        const dados = item.evento;
+        const categoria = typeof categoriaDoEvento === "function" ? categoriaDoEvento(item) : (item.categoria || "missao");
+        const mensagem = typeof dados === "object" ? (dados.mensagem || "") : "";
+        return `
+            <span class="hora">${new Date(item.data).toLocaleTimeString("pt-BR")}</span>
+            <span><span class="etiqueta ${categoria}">${nomesCategoria[categoria] || categoria}</span></span>
+            <span>${escaparHtml(tituloEvento(dados))}${mensagem ? ` <span class="suave">— ${escaparHtml(mensagem)}</span>` : ""}</span>`;
+    }).join(""));
+}
+
+function condicoesManual(agv) {
+    return [
+        { texto: "AGV online", ok: Boolean(agv && agv.online) },
+        { texto: "Seletora em MANUAL", ok: Boolean(agv && agv.modo === "MANUAL") },
+        { texto: "AGV ligado (START)", ok: Boolean(agv && agv.ligado === "LIGADO" && agv.stop === "NORMAL") },
+        { texto: "Sem emergência nem rearme", ok: Boolean(agv && !agv.emergencia && !agv.aguardandoRearme && agv.maquina !== "EMERGENCIA") },
+        { texto: "Frente livre", ok: Boolean(agv && agv.barreira !== "INVADIDA") }
+    ];
 }
 
 function atualizarControleManual() {
     const agv = agvAtual();
     const joystick = document.getElementById("joystick");
     if (!agv || !joystick) return;
-
-const habilitado =
-    agv.online &&
-    agv.ligado === "LIGADO" &&
-    agv.modo === "MANUAL" &&
-    agv.maquina !== "EMERGENCIA" &&
-    agv.stop === "NORMAL" &&
-    !agv.aguardandoRearme &&
-    agv.barreira !== "INVADIDA";    joystick.classList.toggle("bloqueado", !habilitado);
-    document.getElementById("manualStatus").textContent = habilitado ? "MANUAL HABILITADO" : "MANUAL BLOQUEADO";
-    document.getElementById("manualStatus").style.color = habilitado ? "var(--green)" : "var(--muted)";
-}
-function salvarMapa() {
-
-    // ========================================================
-    // 1. VERIFICA PONTOS SEM POSIÇÃO
-    // ========================================================
-
-    const pontosSemPosicao = planta.pontos.filter(
-        ponto =>
-            ponto.x === null ||
-            ponto.y === null
-    );
-
-    if (pontosSemPosicao.length > 0) {
-
-        const ids = pontosSemPosicao
-            .map(ponto => ponto.id)
-            .join(", ");
-
-        alert(
-            "Não é possível salvar a planta.\n\n" +
-            "Os seguintes pontos ainda não foram posicionados no mapa:\n" +
-            ids
-        );
-
-        return;
-    }
-
-
-    // ========================================================
-    // 2. VERIFICA PONTOS SEM CONEXÃO
-    // ========================================================
-
-    const pontosSemConexao = planta.pontos.filter(ponto => {
-
-        return !planta.conexoes.some(
-            conexao =>
-                conexao.origem === ponto.id ||
-                conexao.destino === ponto.id
-        );
-
+    const condicoes = condicoesManual(agv);
+    const habilitado = condicoes.every(c => c.ok);
+    joystick.classList.toggle("bloqueado", !habilitado);
+    ["btnGiroAnti", "btnGiroHorario", "btnGarraSubir", "btnGarraDescer"].forEach(id => {
+        const b = document.getElementById(id);
+        if (b) b.disabled = !habilitado;
     });
+    const status = document.getElementById("manualStatus");
+    if (status) {
+        const enviando = habilitado && (joystickAtivo || rotacaoAtiva || garraMovimentoAtivo);
+        status.className = `pilula ${enviando ? "azul" : habilitado ? "verde" : "cinza"}`;
+        status.textContent = enviando ? "Enviando comando · 10× por segundo" : habilitado ? "Liberado" : "Bloqueado";
+    }
+    const lista = document.getElementById("manualCondicoes");
+    if (lista) {
+        const html = condicoes.map(c => `<li class="${c.ok ? "ok" : "nao"}">${ui.icone(c.ok ? "ok" : "x", "icone-p")}${c.texto}</li>`).join("");
+        if (lista.innerHTML !== html) lista.innerHTML = html;
+    }
+    if (document.getElementById("controleManual")?.classList.contains("ativa")) {
+        renderizarVl53Manual(agv);
+        atualizarStatusGarraESP();
+    }
+}
 
-    if (pontosSemConexao.length > 0) {
+// Leque dos dois VL53 à frente do AGV (tela de controle manual)
+function renderizarVl53Manual(agv) {
+    const caixa = document.getElementById("manualVl53");
+    const pilula = document.getElementById("manualBarreira");
+    if (!caixa) return;
+    const vl = agv.sensores?.vl53 || {};
+    const limite = Number(vl.limite) || 300;
+    const alcance = 2000;
+    const escala = d => 18 + Math.min(1, d / alcance) * 108;   // px a partir da base (y=140)
+    const yLimite = 140 - escala(limite);
+    const raio = 140 - yLimite;
+    const sensor = (x, d, valido, lado) => {
+        if (!valido) return `<text x="${x}" y="40" text-anchor="middle" font-size="12" font-family="IBM Plex Mono, ui-monospace, monospace" fill="var(--amber)">sem leitura</text>`;
+        if (typeof d !== "number" || d < 0) {
+            return `<path d="M${x} 18 V126" stroke="var(--muted)" stroke-width="2" stroke-dasharray="2 5"></path>
+                <text x="${x + (lado < 0 ? -10 : 10)}" y="30" text-anchor="${lado < 0 ? "end" : "start"}" font-size="12" font-family="IBM Plex Mono, ui-monospace, monospace" fill="var(--muted)">livre</text>`;
+        }
+        const y = 140 - escala(d);
+        const perto = d < limite;
+        const cor = perto ? "var(--red)" : "var(--accent)";
+        return `<path d="M${x} ${y} V126" stroke="${cor}" stroke-width="3" stroke-dasharray="2 4"></path>
+            <circle cx="${x}" cy="${y}" r="6" fill="${cor}"></circle>
+            <text x="${x + (lado < 0 ? -12 : 12)}" y="${Math.max(14, y - 8)}" text-anchor="${lado < 0 ? "end" : "start"}" font-size="12" font-family="IBM Plex Mono, ui-monospace, monospace" fill="var(--text)">${ui.numero(d / 1000, 2)} m</text>`;
+    };
+    ui.trocarHtml(caixa, `
+        <svg viewBox="0 0 340 150" role="img" aria-label="Sensores de distância à frente: esquerdo ${vl.d1 ?? "--"} mm, direito ${vl.d2 ?? "--"} mm; barreira em ${limite} mm">
+            <path d="M170 140 L40 20 A180 180 0 0 1 300 20 Z" fill="var(--green-soft)"></path>
+            <path d="M170 140 L${170 - raio * 0.72} ${140 - raio * 0.69} A${raio} ${raio} 0 0 1 ${170 + raio * 0.72} ${140 - raio * 0.69} Z" fill="var(--amber-soft)" stroke="var(--amber)" stroke-dasharray="4 3"></path>
+            <text x="170" y="${Math.min(128, yLimite + 22)}" text-anchor="middle" font-size="11" font-family="IBM Plex Sans, system-ui, sans-serif" font-weight="600" fill="var(--amber)">barreira ${ui.numero(limite / 1000, 2)} m</text>
+            <rect x="138" y="126" width="64" height="20" rx="4" fill="var(--text)"></rect>
+            ${sensor(156, vl.d1, vl.v1 !== false, -1)}
+            ${sensor(184, vl.d2, vl.v2 !== false, 1)}
+        </svg>`);
+    if (pilula) {
+        const estado = agv.barreira;
+        pilula.className = `pilula ${estado === "INVADIDA" ? "vermelho" : estado === "FALHA_LEITURA" ? "ambar" : "verde"}`;
+        pilula.textContent = estado === "INVADIDA" ? "Obstáculo" : estado === "FALHA_LEITURA" ? "Falha de leitura" : "Livre";
+    }
+}
 
-        const ids = pontosSemConexao
-            .map(ponto => ponto.id)
-            .join(", ");
 
-        alert(
-            "Não é possível salvar a planta.\n\n" +
-            "Os seguintes pontos não possuem nenhuma conexão:\n" +
-            ids
-        );
+/* ============================================================
+   FILA E MISSÃO ATUAL (Visão Geral)
+   ============================================================ */
 
-        return;
+function renderizarControleFilaAGV() {
+    atualizarBotaoCancelarMissao();
+    const select = document.getElementById("missaoSelecionadaAGV");
+    const filaContainer = document.getElementById("filaMissoesAGV");
+    const atualContainer = document.getElementById("missaoAtualAGV");
+    const avisoContainer = document.getElementById("avisoMissaoAGV");
+    if (!select) return;
+    const agv = agvAtual();
+    if (!agv) return;
+
+    const missoesDisponiveis = Array.isArray(missoes) ? missoes : [];
+    const assinatura = missoesDisponiveis.map(m => `${m.id}:${m.nome}`).join("|");
+    if (select.dataset.assinatura !== assinatura) {
+        select.innerHTML = `<option value="">${missoesDisponiveis.length ? "Escolha uma missão" : "Nenhuma missão cadastrada"}</option>`;
+        missoesDisponiveis.forEach(missao => {
+            const option = document.createElement("option");
+            option.value = missao.id;
+            option.textContent = `${missao.id} · ${missao.nome || "Sem nome"}`;
+            select.appendChild(option);
+        });
+        select.dataset.assinatura = assinatura;
+    }
+    if (document.activeElement !== select) select.value = agv.missaoSelecionada || "";
+
+    if (atualContainer) {
+        const html = montarHtmlMissaoAtual(agv);
+        if (atualContainer.innerHTML !== html) atualContainer.innerHTML = html;
     }
 
-
-    // ========================================================
-    // 3. VERIFICA CONEXÕES INVÁLIDAS
-    // ========================================================
-
-    for (const conexao of planta.conexoes) {
-
-        const origem = planta.pontos.find(
-            ponto => ponto.id === conexao.origem
-        );
-
-        const destino = planta.pontos.find(
-            ponto => ponto.id === conexao.destino
-        );
-
-        if (!origem || !destino) {
-
-            alert(
-                "Não é possível salvar a planta.\n\n" +
-                "Existe uma conexão vinculada a um ponto que não existe mais."
-            );
-
-            return;
+    if (avisoContainer) {
+        const aviso = agv.avisoMissao;
+        if (aviso && Date.now() - aviso.quando < 60000) {
+            avisoContainer.hidden = false;
+            avisoContainer.className = `aviso-missao-agv ${aviso.tipo}`;
+            avisoContainer.textContent = aviso.texto;
+        } else {
+            avisoContainer.hidden = true;
         }
     }
 
-
-    // ========================================================
-    // 4. SALVA A PLANTA EDITÁVEL
-    // ========================================================
-
-    localStorage.setItem(
-        "plantaAGV",
-        JSON.stringify(planta)
-    );
-
-
-    // ========================================================
-    // 5. ATUALIZA A PLANTA OPERACIONAL
-    // ========================================================
-
-    const novaPlantaOperacional =
-        JSON.parse(JSON.stringify(planta));
-
-    plantaOperacional.pontos =
-        novaPlantaOperacional.pontos;
-
-    plantaOperacional.conexoes =
-        novaPlantaOperacional.conexoes;
-
-
-    localStorage.setItem(
-        "plantaAGVOperacional",
-        JSON.stringify(plantaOperacional)
-    );
-
-
-    // ========================================================
-    // 6. FINALIZA O MODO DE EDIÇÃO
-    // ========================================================
-
-  modoEdicaoPlanta = false;
-modoConexoesPlanta = false;
-
-pontoArrastando = null;
-pontoConexaoOrigem = null;
-conexaoEmConfiguracao = null;
-// ========================================================
-// 6.1 RESTAURA O BOTÃO PARA EDITAR MAPA
-// ========================================================
-
-const btnEditarMapa =
-    document.getElementById("btnEditarMapa");
-
-if (btnEditarMapa) {
-    btnEditarMapa.textContent = "EDITAR MAPA";
-}
-
-
-    // ========================================================
-    // 7. ATUALIZA O MAPA
-    // ========================================================
-
-    renderizarPontos();
-
-
-    // ========================================================
-    // 8. CONFIRMAÇÃO
-    // ========================================================
-
-    alert("Mapa salvo com sucesso.");
-}
-
-function atualizarCamposConfiguracao() {
-
-    const agv = agvAtual();
-
-    if (!agv) {
-        return;
-    }
-
-
-    // ========================================================
-    // IDENTIFICAÇÃO
-    // ========================================================
-
-    const campoNome =
-        document.getElementById("configNome");
-
-    const campoId =
-        document.getElementById("configId");
-
-
-    if (campoNome) {
-        campoNome.value = agv.nome || "";
-    }
-
-    if (campoId) {
-        campoId.value = agv.id || "";
-    }
-
-
-    // ========================================================
-    // CONFIGURAÇÃO DO QTR
-    // ========================================================
-
-    const configuracao =
-        agv.configuracao || {};
-
-
-    const campoKp =
-        document.getElementById("configKpQtr");
-
-    const campoKi =
-        document.getElementById("configKiQtr");
-
-    const campoKd =
-        document.getElementById("configKdQtr");
-
-    const campoVelocidade =
-        document.getElementById(
-            "configVelocidadeMaxima"
-        );
-
-
-    if (campoKp) {
-
-        campoKp.value =
-            configuracao.kpQtr ?? 1.2;
-    }
-
-
-    if (campoKi) {
-
-        campoKi.value =
-            configuracao.kiQtr ?? 0.05;
-    }
-
-
-    if (campoKd) {
-
-        campoKd.value =
-            configuracao.kdQtr ?? 0.8;
-    }
-
-
-    if (campoVelocidade) {
-
-        campoVelocidade.value =
-            configuracao.velocidadeMaxima ?? 0.1;
-    }
-
-
-    // ========================================================
-    // OPERAÇÃO
-    // ========================================================
-
-    const campoEstacao =
-        document.getElementById(
-            "configEstacaoAtual"
-        );
-
-    const campoModo =
-        document.getElementById(
-            "configModoAtual"
-        );
-
-    const campoMaquina =
-        document.getElementById(
-            "configMaquinaAtual"
-        );
-
-
-    if (campoEstacao) {
-        campoEstacao.textContent =
-            agv.estacaoAtual || "--";
-    }
-
-    if (campoModo) {
-        campoModo.textContent =
-            agv.modo || "--";
-    }
-
-    if (campoMaquina) {
-        campoMaquina.textContent =
-            agv.maquina || "--";
-    }
-}
-function confirmarConfiguracoesAGV() {
-
-    const agv = agvAtual();
-
-    if (!agv) {
-        alert("Nenhum AGV selecionado.");
-        return;
-    }
-
-
-    // ========================================================
-    // VERIFICA MQTT
-    // ========================================================
-
-    if (
-        !clienteMQTT ||
-        !clienteMQTT.connected
-    ) {
-
-        alert(
-            "Não é possível alterar a configuração.\n\n" +
-            "O MQTT está desconectado."
-        );
-
-        return;
-    }
-
-
-    // ========================================================
-    // LÊ OS CAMPOS
-    // ========================================================
-
-    const campoKp =
-        document.getElementById("configKpQtr");
-
-    const campoKi =
-        document.getElementById("configKiQtr");
-
-    const campoKd =
-        document.getElementById("configKdQtr");
-
-    const campoVelocidade =
-        document.getElementById(
-            "configVelocidadeMaxima"
-        );
-
-
-    const kp =
-        Number(campoKp.value);
-
-    const ki =
-        Number(campoKi.value);
-
-    const kd =
-        Number(campoKd.value);
-
-    const velocidadeMaxima =
-        Number(campoVelocidade.value);
-
-
-    // ========================================================
-    // VALIDAÇÃO BÁSICA
-    // ========================================================
-
-    if (
-        !Number.isFinite(kp) ||
-        !Number.isFinite(ki) ||
-        !Number.isFinite(kd) ||
-        !Number.isFinite(velocidadeMaxima)
-    ) {
-
-        alert(
-            "Todos os parâmetros devem possuir valores numéricos."
-        );
-
-        return;
-    }
-
-
-    if (
-        kp < 0 ||
-        ki < 0 ||
-        kd < 0 ||
-        velocidadeMaxima <= 0
-    ) {
-
-        alert(
-            "Os valores informados são inválidos."
-        );
-
-        return;
-    }
-
-
-    // ========================================================
-    // CONFIGURAÇÃO CONFIRMADA ANTERIORMENTE PELO ESP
-    // ========================================================
-
-    const configuracaoAnterior =
-        agv.configuracao || {};
-
-
-    // ========================================================
-    // LISTA DE ALTERAÇÕES
-    // ========================================================
-
-    const alteracoes = [];
-
-
-    if (
-        Number(configuracaoAnterior.kpQtr) !== kp
-    ) {
-
-        alteracoes.push({
-            parametro: "KP_QTR",
-            valor: kp
-        });
-    }
-
-
-    if (
-        Number(configuracaoAnterior.kiQtr) !== ki
-    ) {
-
-        alteracoes.push({
-            parametro: "KI_QTR",
-            valor: ki
-        });
-    }
-
-
-    if (
-        Number(configuracaoAnterior.kdQtr) !== kd
-    ) {
-
-        alteracoes.push({
-            parametro: "KD_QTR",
-            valor: kd
-        });
-    }
-
-
-    if (
-        Number(configuracaoAnterior.velocidadeMaxima) !==
-        velocidadeMaxima
-    ) {
-
-        alteracoes.push({
-            parametro: "VELOCIDADE_MAXIMA",
-            valor: velocidadeMaxima
-        });
-    }
-
-
-    // ========================================================
-    // NADA FOI ALTERADO
-    // ========================================================
-
-    if (alteracoes.length === 0) {
-
-        alert(
-            "Nenhuma alteração foi realizada."
-        );
-
-        return;
-    }
-
-
-    // ========================================================
-    // CONFIRMA COM O OPERADOR
-    // ========================================================
-
-    const confirmar =
-        confirm(
-            `Deseja enviar ${alteracoes.length} alteração(ões) ` +
-            `para o AGV ${agv.id}?`
-        );
-
-
-    if (!confirmar) {
-        return;
-    }
-
-
-    // ========================================================
-    // PUBLICA CADA ALTERAÇÃO
-    // ========================================================
-
-    alteracoes.forEach(
-        alteracao => {
-
-            const payload = {
-
-                tipo:
-                    "ALTERAR_CONFIGURACAO",
-
-                parametro:
-                    alteracao.parametro,
-
-                valor:
-                    alteracao.valor
-            };
-
-
-            publicar(
-                TOPICOS.comando.configuracao,
-
-                JSON.stringify(payload),
-
-                agv.id
-            );
-
+    const fila = Array.isArray(agv.filaMissoes) ? agv.filaMissoes : [];
+    const btnFila = document.getElementById("btnVerFila");
+    if (btnFila) btnFila.textContent = `Fila (${fila.length})${agv.filaMissoesSuspensa ? " · suspensa" : ""}`;
+    if (filaContainer) {
+        let html = "";
+        if (!fila.length) {
+            html = `<div class="fila-vazia">Fila vazia. A próxima missão da fila é carregada sozinha quando a atual termina; o início continua no botão START MISSÃO.</div>`;
+        } else {
+            if (agv.filaMissoesSuspensa) {
+                html += `<div class="fila-suspensa"><span>Fila suspensa depois de um cancelamento.</span><button type="button" class="btn btn-mini" onclick="retomarFilaMissoes()">Retomar fila</button></div>`;
+            }
+            html += fila.map((missaoId, indice) => {
+                const missao = obterMissaoPorId(missaoId);
+                return `
+                    <div class="fila-missao-item">
+                        <div class="fila-missao-info">
+                            <span class="fila-missao-ordem">${indice + 1}</span>
+                            <div><strong>${escaparHtml(missaoId)}</strong><small>${escaparHtml(missao ? missao.nome || "" : "Missão não encontrada")}</small></div>
+                        </div>
+                        <button type="button" class="btn-remover-fila" aria-label="Tirar da fila" onclick="removerMissaoFila(${indice})">×</button>
+                    </div>`;
+            }).join("");
         }
-    );
+        if (filaContainer.innerHTML !== html) filaContainer.innerHTML = html;
+    }
 
-
-    console.log(
-        "Alterações de configuração enviadas:",
-        alteracoes
-    );
+    const btnCarregar = document.getElementById("btnStart");
+    const btnAdicionar = document.getElementById("btnAdicionarFilaAGV");
+    if (btnCarregar) btnCarregar.disabled = !podeCarregarMissao(agv) || !agv.missaoSelecionada;
+    if (btnAdicionar) btnAdicionar.disabled = !agv.missaoSelecionada;
 }
+
+
 
 /* ============================================================
    MISSÃO / SIMULAÇÃO LOCAL
@@ -8518,29 +2459,17 @@ function iniciarMissao() {
     }
 
     if (!agv.missaoSelecionada) {
-
-        alert("Selecione uma missão para este AGV.");
-
+        ui.aviso("Escolha uma missão para este AGV.", "aviso");
         return;
     }
 
-    if (agv.estadoMissao === "EM_EXECUCAO") {
-
-        alert(
-            "Este AGV já está executando uma missão.\n\n" +
-            "Use ADICIONAR À FILA para colocar outra missão na sequência."
-        );
-
-        return;
-    }
-
-    iniciarMissaoPorId(
-        agv.id,
-        agv.missaoSelecionada
-    );
+    iniciarMissaoPorId(agv.id, agv.missaoSelecionada);
 }
 
-function iniciarMissaoPorId(agvId, missaoId) {
+// Envia a missão ao ESP. O ESP valida e responde em status/missao
+// (CARREGADA) ou com o evento CARREGAMENTO_REJEITADO. A execução só
+// começa quando o operador pressiona START MISSÃO no painel do AGV.
+function iniciarMissaoPorId(agvId, missaoId, silencioso = false) {
 
     const agv = agvs[agvId];
 
@@ -8548,93 +2477,71 @@ function iniciarMissaoPorId(agvId, missaoId) {
         return false;
     }
 
+    const falhar = mensagem => {
+        definirAvisoMissao(agv, mensagem, "erro");
+        if (!silencioso) {
+            ui.aviso(mensagem, "erro");
+        }
+        agendarAtualizacaoTela();
+        return false;
+    };
+
     const missao = obterMissaoPorId(missaoId);
 
     if (!missao) {
-        alert(`A missão "${missaoId}" não existe mais.`);
-        return false;
+        return falhar(`A missão "${missaoId}" não existe mais.`);
     }
 
     if (!Array.isArray(missao.etapas) || missao.etapas.length === 0) {
-        alert(`A missão "${missaoId}" não possui etapas.`);
-        return false;
+        return falhar(`A missão "${missaoId}" não possui etapas.`);
     }
 
-    // --------------------------------------------------------
-    // Segurança
-    // --------------------------------------------------------
-
-    if (!verificarSegurancaDuranteMissao(agvId)) {
-
-        alert(
-            "Não é possível carregar a missão.\n\n" +
-            "Verifique se o AGV está ligado, online e sem condição de segurança ativa."
+    if (!podeCarregarMissao(agv)) {
+        return falhar(
+            "Não dá para carregar a missão agora: o AGV precisa estar online e sem missão em execução, " +
+            "interrompida ou aguardando resposta."
         );
-
-        return false;
     }
 
-    // --------------------------------------------------------
-    // Prepara missão para o ESP
-    // --------------------------------------------------------
-
-    const resultado = prepararMissaoParaESP(
-        agvId,
-        missaoId
-    );
+    const resultado = prepararMissaoParaESP(agvId, missaoId);
 
     if (!resultado.sucesso) {
-
-        alert(
-            "Não foi possível preparar a missão.\n\n" +
-            resultado.erro
-        );
-
-        return false;
+        return falhar("Não foi possível preparar a missão: " + resultado.erro);
     }
 
-    // --------------------------------------------------------
-    // Envia missão para o ESP
-    // --------------------------------------------------------
-
-     
-const enviado = publicar(
-    TOPICOS.comando.carregarMissao,
-    JSON.stringify(resultado.pacote),
-    agv.id
-);
-
-if (!enviado) {
-
-    console.error(
-        "Não foi possível publicar a missão para o AGV:",
+    const enviado = publicar(
+        TOPICOS.comando.carregarMissao,
+        JSON.stringify(resultado.pacote),
         agv.id
     );
 
-    return false;
-}
-
-
-    // --------------------------------------------------------
-    // Missão apenas CARREGADA
-    // --------------------------------------------------------
+    if (!enviado) {
+        return falhar("MQTT desconectado: a missão não foi enviada.");
+    }
 
     agv.missaoSelecionada = missaoId;
-    agv.missaoCarregada = missaoId;
-    agv.estadoMissao = "CARREGADA";
-    agv.progresso = 0;
+    agv.carregamentoPendente = { missaoId, quando: Date.now() };
+    registrarAcaoSite(agv.id, "missao", "MISSAO_ENVIADA", `Missão ${missaoId} enviada para o AGV`);
+
+    definirAvisoMissao(agv, `Missão ${missaoId} enviada. Aguardando validação do AGV...`, "info");
+
+    // Sem resposta em 8 s: libera o painel e avisa.
+    setTimeout(() => {
+
+        const pendente = agv.carregamentoPendente;
+
+        if (pendente && pendente.missaoId === missaoId &&
+            Date.now() - pendente.quando >= 7900) {
+
+            agv.carregamentoPendente = null;
+            definirAvisoMissao(agv, `O AGV não respondeu ao carregamento da missão ${missaoId}.`, "erro");
+            agendarAtualizacaoTela();
+        }
+
+    }, 8000);
 
     salvarAgvsFrota();
-
-    atualizarPainel();
-    renderizarControleFilaAGV();
-
-    console.log(
-        "Missão carregada no AGV:",
-        agv.id,
-        missaoId
-    );
-
+    agendarAtualizacaoTela();
     return true;
 }
 
@@ -8649,14 +2556,28 @@ function adicionarMissaoFila() {
     const missaoId = agv.missaoSelecionada;
 
     if (!missaoId) {
-        alert("Selecione uma missão primeiro.");
+        ui.aviso("Escolha uma missão primeiro.", "aviso");
         return;
     }
+    const idMissao = String(missaoId);
 
+const jaEstaNaFila = agv.filaMissoes.some(
+    id => String(
+        typeof id === "object" ? id.id : id
+    ) === idMissao
+);
+
+const jaEstaCarregada =
+    String(agv.missaoCarregada) === idMissao;
+
+if (jaEstaNaFila || jaEstaCarregada) {
+    ui.aviso("Essa missão já está na fila ou carregada no AGV.", "aviso");
+    return;
+}
     const missao = obterMissaoPorId(missaoId);
 
     if (!missao) {
-        alert("A missão selecionada não existe.");
+        ui.aviso("A missão escolhida não existe.", "erro");
         return;
     }
 
@@ -8669,7 +2590,9 @@ function adicionarMissaoFila() {
     salvarAgvsFrota();
 
     renderizarControleFilaAGV();
+    ui.aviso(`${missaoId} entrou na fila do AGV ${agv.id} (posição ${agv.filaMissoes.length}).`, "sucesso");
 }
+
 
 
 
@@ -8677,7 +2600,20 @@ function iniciarProximaMissaoFila(agvId) {
 
     const agv = agvs[agvId];
 
-    if (!agv || execucoesMissoes[agvId]) {
+    if (!agv) {
+        return;
+    }
+
+    if (agv.filaMissoesSuspensa) {
+        return;
+    }
+
+    if (cancelamentosMissaoPendentes[agvId] || agv.carregamentoPendente) {
+        return;
+    }
+
+    if (["CARREGADA", "EM_EXECUCAO", "AGUARDANDO_CONFIRMACAO", "INTERROMPIDA"]
+            .includes(agv.estadoMissao)) {
         return;
     }
 
@@ -8687,47 +2623,28 @@ function iniciarProximaMissaoFila(agvId) {
 
     while (agv.filaMissoes.length > 0) {
 
-        // Consulta a primeira missão sem removê-la.
         const proximaMissaoId = agv.filaMissoes[0];
 
-        const missao = obterMissaoPorId(proximaMissaoId);
-
-        // Se foi apagada, remove somente essa missão inválida.
-        if (!missao) {
+        // Missão apagada: descarta só ela.
+        if (!obterMissaoPorId(proximaMissaoId)) {
             agv.filaMissoes.shift();
             continue;
         }
 
         agv.missaoSelecionada = proximaMissaoId;
 
-        salvarAgvsFrota();
-        renderizarControleFilaAGV();
-
-        const iniciou = iniciarMissaoPorId(
-            agvId,
-            proximaMissaoId
-        );
-
-        // Se não conseguiu carregar, preserva a fila.
-        if (!iniciou) {
-            salvarAgvsFrota();
-            renderizarControleFilaAGV();
-            return;
+        // Sai da fila somente se o envio aconteceu.
+        if (iniciarMissaoPorId(agvId, proximaMissaoId, true)) {
+            agv.filaMissoes.shift();
         }
 
-        // Remove somente após o carregamento ser aceito
-        // pela função do frontend.
-        agv.filaMissoes.shift();
-
-        salvarAgvsFrota();
-        renderizarControleFilaAGV();
-
-        return;
+        break;
     }
 
     salvarAgvsFrota();
-    renderizarControleFilaAGV();
+    agendarAtualizacaoTela();
 }
+
 
 
 
@@ -8772,2172 +2689,421 @@ function selecionarMissaoAGV(missaoId) {
 }
 
 
-function executarProximaEtapaMissao(agvId) {
 
-    const agv = agvs[agvId];
 
-    const execucao = execucoesMissoes[agvId];
 
-    if (!agv || !execucao) {
-        return;
-    }
 
 
-    // --------------------------------------------------------
-    // Segurança
-    // --------------------------------------------------------
 
-    
-if (!verificarSegurancaDuranteMissao(agvId)) {
 
-    agv.velocidade = 0;
 
-    cancelarSimulacaoAGV(agvId);
 
-    atualizarPainel();
 
-    return;
-}
 
 
 
-    const missao = obterMissaoPorId(execucao.missaoId);
 
-    if (!missao) {
 
-        finalizarMissaoComErro(
-            agvId,
-            "A missão não foi encontrada."
-        );
 
-        return;
-    }
-
-
-    // --------------------------------------------------------
-    // Fim da missão
-    // --------------------------------------------------------
-
-    if (
-        execucao.indiceEtapa >=
-        missao.etapas.length
-    ) {
-
-        finalizarMissao(agvId);
-
-        return;
-    }
-
-
-    const etapa =
-        missao.etapas[execucao.indiceEtapa];
-
-
-    execucao.etapaAtual = etapa;
-
-
-    // --------------------------------------------------------
-    // Atualiza progresso
-    // --------------------------------------------------------
-
-    agv.progresso =
-        Math.round(
-            (execucao.indiceEtapa /
-            missao.etapas.length) * 100
-        );
-
-
-    atualizarPainel();
-
-
-    // --------------------------------------------------------
-    // Executa tipo da etapa
-    // --------------------------------------------------------
-
-    switch (etapa.tipo) {
-
-        case "IR_PARA":
-            executarEtapaIrPara(agvId, etapa);
-            break;
-
-        case "AGUARDAR":
-            executarEtapaAguardar(agvId, etapa);
-            break;
-
-        case "AGUARDAR_CONFIRMACAO":
-            executarEtapaAguardarConfirmacao(agvId, etapa);
-            break;
-
-        case "CARREGAR":
-            executarEtapaCarregar(agvId, etapa);
-            break;
-
-        case "DESCARREGAR":
-            executarEtapaDescarregar(agvId, etapa);
-            break;
-
-        default:
-
-            finalizarMissaoComErro(
-                agvId,
-                `Tipo de etapa desconhecido: ${etapa.tipo}`
-            );
-
-            break;
-    }
-}
-function prepararMissaoParaESP(agvId, missaoId) {
-
-    const agv = agvs[agvId];
-
-    if (!agv) {
-        return {
-            sucesso: false,
-            erro: "AGV não encontrado."
-        };
-    }
-
-    const missao =
-        obterMissaoPorId(missaoId);
-
-    if (!missao) {
-        return {
-            sucesso: false,
-            erro: `Missão "${missaoId}" não encontrada.`
-        };
-    }
-
-    if (
-        !Array.isArray(missao.etapas) ||
-        missao.etapas.length === 0
-    ) {
-        return {
-            sucesso: false,
-            erro: `A missão "${missaoId}" não possui etapas.`
-        };
-    }
-
-    /*
-     * Descobre o ponto físico inicial do AGV.
-     */
-    let pontoAtualSimulado =
-        obterPontoEstacaoDoAGV(agv);
-
-    if (!pontoAtualSimulado) {
-
-        return {
-            sucesso: false,
-            erro:
-                "Não foi possível identificar a estação atual do AGV."
-        };
-    }
-
-    /*
-     * A orientação começa exatamente como a orientação
-     * atual do AGV.
-     */
-    let orientacaoSimulada =
-        normalizarAngulo(agv.orientacao);
-
-    const etapasPreparadas = [];
-
-    for (
-        let indice = 0;
-        indice < missao.etapas.length;
-        indice++
-    ) {
-
-        const etapa =
-            missao.etapas[indice];
-
-        if (etapa.tipo === "IR_PARA") {
-
-            /*
-             * Criamos uma cópia temporária do AGV.
-             *
-             * IMPORTANTE:
-             * agora usamos explicitamente o ID do ponto
-             * físico atual.
-             */
-            const agvTemporario = {
-
-                ...agv,
-
-                estacaoAtual:
-                    pontoAtualSimulado.id,
-
-                pontoAtual:
-                    pontoAtualSimulado.id,
-
-                orientacao:
-                    orientacaoSimulada
-            };
-
-            const resultado =
-                prepararEtapaIrPara(
-                    agvTemporario,
-                    etapa
-                );
-
-            if (!resultado || !resultado.sucesso) {
-
-                return {
-                    sucesso: false,
-
-                    erro:
-                        resultado?.erro ||
-                        `Não foi possível preparar a etapa ${indice}.`
-                };
-            }
-
-            /*
-             * Caso origem e destino sejam iguais.
-             */
-            if (resultado.concluidaImediatamente) {
-
-                etapasPreparadas.push({
-
-                    indice: indice,
-
-                    tipo: "MOVIMENTO",
-
-                    origem:
-                        resultado.contexto.origem,
-
-                    destino:
-                        resultado.contexto.destino,
-
-                    rota:
-                        resultado.contexto.rota,
-
-                    trechos: [],
-
-                    orientacaoInicial:
-                        resultado.contexto.orientacaoInicial,
-
-                    orientacaoFinal:
-                        resultado.contexto.orientacaoFinal
-                });
-
-                /*
-                 * Atualiza o ponto físico simulado.
-                 */
-                pontoAtualSimulado =
-                    plantaOperacional.pontos.find(
-                        ponto =>
-                            ponto.id ===
-                            resultado.contexto.destino
-                    );
-
-                orientacaoSimulada =
-                    normalizarAngulo(
-                        resultado.contexto.orientacaoFinal
-                    );
-
-                continue;
-            }
-
-            const instrucao =
-                resultado.contexto.instrucao;
-
-            etapasPreparadas.push({
-
-                indice: indice,
-
-                tipo: "MOVIMENTO",
-
-                origem:
-                    resultado.contexto.origem,
-
-                destino:
-                    resultado.contexto.destino,
-
-                rota:
-                    resultado.contexto.rota,
-
-                trechos:
-                    instrucao.trechos,
-
-                orientacaoInicial:
-                    instrucao.orientacaoInicial,
-
-                orientacaoFinal:
-                    instrucao.orientacaoFinal
-            });
-
-            /*
-             * =====================================================
-             * ATUALIZAÇÃO DO ESTADO SIMULADO
-             * =====================================================
-             *
-             * A etapa terminou no destino.
-             *
-             * Exemplo:
-             *
-             * E01 → E03
-             *
-             * Agora o AGV simulado está em E03.
-             */
-            pontoAtualSimulado =
-                plantaOperacional.pontos.find(
-                    ponto =>
-                        ponto.id ===
-                        resultado.contexto.destino
-                );
-
-            if (!pontoAtualSimulado) {
-
-                return {
-                    sucesso: false,
-
-                    erro:
-                        `Ponto de destino "${resultado.contexto.destino}" ` +
-                        `não encontrado na planta operacional.`
-                };
-            }
-
-            /*
-             * A orientação final desta etapa passa a ser
-             * a orientação inicial da próxima.
-             */
-            orientacaoSimulada =
-                normalizarAngulo(
-                    instrucao.orientacaoFinal
-                );
-
-            continue;
-        }
-
-        /*
-         * Outras etapas permanecem preservadas.
-         */
-        etapasPreparadas.push({
-
-            indice: indice,
-
-            ...etapa
-        });
-    }
-
-    return {
-
-        sucesso: true,
-
-        pacote: {
-
-            tipo: "CARREGAR_MISSAO",
-
-            missao:
-                missao.id,
-
-            etapas:
-                etapasPreparadas
-        }
-    };
-}
-function enviarMissaoParaESP(agvId, missaoId) {
-
-    const agv = agvs[agvId];
-
-    if (!agv) {
-        console.error("AGV não encontrado:", agvId);
-        return;
-    }
-
-    /*
-     * 1. Verifica a conexão MQTT
-     */
-    if (
-        !clienteMQTT ||
-        !clienteMQTT.connected
-    ) {
-        console.error(
-            "Não é possível enviar a missão: MQTT desconectado."
-        );
-
-        return;
-    }
-
-    /*
-     * 2. Prepara a missão completa
-     */
-    const resultado =
-        prepararMissaoParaESP(
-            agvId,
-            missaoId
-        );
-
-    if (!resultado.sucesso) {
-
-        console.error(
-            "Erro ao preparar missão:",
-            resultado.erro
-        );
-
-        return;
-    }
-
-    /*
-     * 3. Converte o pacote para JSON
-     */
-    const payload =
-        JSON.stringify(
-            resultado.pacote
-        );
-
-    /*
-     * 4. Publica no tópico do AGV
-     */
-    console.log(
-        "Publicando missão:",
-        missaoId
-    );
-
-    publicar(
-        "comando/carregar_missao",
-        payload,
-        agv.id
-    );
-
-    /*
-     * 5. Mostra o conteúdo preparado
-     */
-    console.log(
-        "Pacote preparado para publicação:",
-        JSON.parse(payload)
-    );
-}
-function executarEtapaIrPara(agvId, etapa) {
-
-    const agv = agvs[agvId];
-
-    const execucao = execucoesMissoes[agvId];
-
-    if (!agv || !execucao) {
-        return;
-    }
-
-
-    const resultado =
-    prepararEtapaIrPara(
-        agv,
-        etapa
-    );
-
-
-    if (!resultado) {
-
-        finalizarMissaoComErro(
-            agvId,
-            `Não foi possível calcular a rota até ${etapa.destino}.`
-        );
-
-        return;
-    }
-
-
-    execucao.contextoMovimento =
-        resultado.contexto;
-
-
-    agv.destino =
-        resultado.contexto.destino;
-
-
-    atualizarPainel();
-
-
-    // --------------------------------------------------------
-    // Comando MQTT
-    // --------------------------------------------------------
-
-    if (!agv.demoOnline) {
-
-        publicar(
-            "comando/etapa",
-
-            JSON.stringify({
-
-                tipo: "MOVIMENTO",
-
-                missao: execucao.missaoId,
-
-                etapa: execucao.indiceEtapa,
-
-                destino:
-                    resultado.contexto.destino,
-
-                rota:
-                    resultado.contexto.rota,
-
-                rfids:
-                    resultado.contexto.instrucao.rfids,
-
-                manobras:
-                    resultado.contexto.instrucao.manobras,
-
-                orientacaoInicial:
-                    resultado.contexto.orientacaoInicial,
-
-                orientacaoFinal:
-                    resultado.contexto.orientacaoFinal
-            }),
-
-            agv.id
-        );
-    }
-
-
-    // --------------------------------------------------------
-    // SIMULAÇÃO LOCAL
-    // --------------------------------------------------------
-
-    if (agv.demoOnline) {
-
-        simularMovimentoRota(
-            agvId,
-            resultado.contexto,
-            () => {
-
-                concluirEtapaMissao(agvId);
-            }
-        );
-
-        return;
-    }
-
-
-    // --------------------------------------------------------
-    // MODO REAL
-    //
-    // O ESP executará a rota e depois enviará
-    // ETAPA_CONCLUIDA.
-    // --------------------------------------------------------
-}
-
-
-function executarEtapaAguardar(agvId, etapa) {
-
-    const execucao = execucoesMissoes[agvId];
-
-    if (!execucao) {
-        return;
-    }
-
-
-    const tempo =
-        Number(etapa.tempo || etapa.duracao || 0);
-
-
-    execucao.aguardando = true;
-
-
-
-    execucoesMissoes[agvId].timer =
-    setTimeout(() => {
-
-        execucoesMissoes[agvId].timer = null;
-
-        if (!verificarSegurancaDuranteMissao(agvId)) {
-
-    execucao.timer = null;
-    execucao.aguardando = false;
-
-    atualizarPainel();
-
-    return;
-}
-
-        concluirEtapaMissao(agvId);
-
-    }, Math.max(0, tempo * 1000));
-}
-
-
-function executarEtapaAguardarConfirmacao(agvId, etapa) {
-
-    const execucao = execucoesMissoes[agvId];
-
-    if (!execucao) {
-        return;
-    }
-
-    execucao.aguardandoConfirmacao = true;
-
-    atualizarPainel();
-}
-
-
-function executarEtapaCarregar(agvId, etapa) {
-
-    const agv = agvs[agvId];
-
-    if (!agv) {
-        return;
-    }
-    const execucao = execucoesMissoes[agvId];
-
-if (!execucao) {
-    return;
-}
-
-
-    if (!agv.demoOnline) {
-
-        publicar(
-            "comando/etapa",
-
-            JSON.stringify({
-
-                tipo: "CARREGAR",
-
-                missao:
-                    execucoesMissoes[agvId].missaoId,
-
-                etapa:
-                    execucoesMissoes[agvId].indiceEtapa
-            }),
-
-            agv.id
-        );
-
-        return;
-    }
-
-
-    
-execucao.timer = setTimeout(() => {
-
-    execucao.timer = null;
-
-    if (!verificarSegurancaDuranteMissao(agvId)) {
-        return;
-    }
-
-    concluirEtapaMissao(agvId);
-
-}, 1000);
-}
-
-
-function executarEtapaDescarregar(agvId, etapa) {
-
-    const agv = agvs[agvId];
-
-    if (!agv) {
-        return;
-    }
-    const execucao = execucoesMissoes[agvId];
-
-if (!execucao) {
-    return;
-}
-
-
-    if (!agv.demoOnline) {
-
-        publicar(
-            "comando/etapa",
-
-            JSON.stringify({
-
-                tipo: "DESCARREGAR",
-
-                missao:
-                    execucoesMissoes[agvId].missaoId,
-
-                etapa:
-                    execucoesMissoes[agvId].indiceEtapa
-            }),
-
-            agv.id
-        );
-
-        return;
-    }
-
-
-
-
-execucao.timer = setTimeout(() => {
-
-    execucao.timer = null;
-
-    if (!verificarSegurancaDuranteMissao(agvId)) {
-        return;
-    }
-
-    concluirEtapaMissao(agvId);
-
-}, 1000);
-}
-
-
-function confirmarExecucaoEtapaMissao() {
-
-    const agv = agvAtual();
-
-    if (!agv) {
-        return;
-    }
-
-    const execucao =
-        execucoesMissoes[agv.id];
-
-    if (!execucao) {
-        return;
-    }
-
-    if (!execucao.aguardandoConfirmacao) {
-        return;
-    }
-
-    execucao.aguardandoConfirmacao = false;
-
-    concluirEtapaMissao(agv.id);
-}
-
-function concluirEtapaMissao(agvId) {
-
-    const agv = agvs[agvId];
-
-    const execucao =
-        execucoesMissoes[agvId];
-
-
-    if (!agv || !execucao) {
-        return;
-    }
-
-
-    const etapa = execucao.etapaAtual;
-
-
-    // --------------------------------------------------------
-    // Se terminou um IR_PARA
-    // --------------------------------------------------------
-
-    if (
-        etapa &&
-        etapa.tipo === "IR_PARA" &&
-        execucao.contextoMovimento
-    ) {
-
-        const destinoId =
-            execucao.contextoMovimento.destino;
-
-
-        const pontoDestino =
-            plantaOperacional.pontos.find(
-                p => p.id === destinoId
-            );
-
-
-        if (pontoDestino) {
-
-            atualizarPontoAtualAGV(
-                agv,
-                pontoDestino
-            );
-        }
-
-
-        agv.orientacao =
-            execucao.contextoMovimento.orientacaoFinal;
-
-
-        agv.velocidade = 0;
-
-
-        execucao.contextoMovimento = null;
-    }
-
-
-    if (execucao.timer) {
-
-        clearTimeout(execucao.timer);
-
-        execucao.timer = null;
-    }
-
-
-    execucao.aguardando = false;
-    execucao.aguardandoConfirmacao = false;
-
-
-    execucao.indiceEtapa++;
-
-
-    const missao = obterMissaoPorId(execucao.missaoId);
-
-if (!missao) {
-    finalizarMissaoComErro(
-        agvId,
-        "A missão em execução não existe mais."
-    );
-    return;
-}
-agv.progresso =
-    Math.round(
-        (execucao.indiceEtapa / missao.etapas.length) * 100
-    );
-
-
-    atualizarPainel();
-
-
-    executarProximaEtapaMissao(agvId);
-}
-
-
+// Eventos publicados pelo ESP em agv/<id>/evento/missao.
+// O estado da missão em si vem de status/missao; aqui tratamos
+// apenas as respostas e os avisos.
 function processarEventoMissao(agvId, evento) {
 
     const agv = agvs[agvId];
 
-    const execucao =
-        execucoesMissoes[agvId];
-
-
-    if (!agv || !execucao) {
-        return;
-    }
-
-
-    // Demo não depende do ESP para concluir etapas
-    if (agv.demoOnline) {
-        return;
-    }
-
-
-    if (evento === "ETAPA_CONCLUIDA") {
-
-        concluirEtapaMissao(agvId);
-
-        return;
-    }
-
-
-    if (
-        evento === "ETAPA_ERRO" ||
-        evento === "MISSAO_ERRO"
-    ) {
-
-        finalizarMissaoComErro(
-            agvId,
-            "O ESP informou erro na execução da missão."
-        );
-    }
-}
-
-
-function finalizarMissao(agvId) {
-
-    const agv = agvs[agvId];
-
-    const execucao =
-        execucoesMissoes[agvId];
-
-
-    if (!agv || !execucao) {
-        return;
-    }
-
-
-    cancelarSimulacaoAGV(agvId);
-
-
-    if (execucao.timer) {
-
-        clearTimeout(execucao.timer);
-
-        execucao.timer = null;
-    }
-
-
-    agv.velocidade = 0;
-
-    agv.progresso = 100;
-
-    agv.estadoMissao = "CONCLUIDA";
-
-    if (agv.demoOnline) {
-    agv.maquina = "PRONTO";
-}
-
-    agv.missaoAtual = null;
-
-
-   
-
-
-    delete execucoesMissoes[agvId];
-
-
-    salvarAgvsFrota();
-
-    atualizarPainel();
-
-    renderizarControleFilaAGV();
-
-
-    // --------------------------------------------------------
-    // Próxima missão automaticamente
-    // --------------------------------------------------------
-
-    if (
-        Array.isArray(agv.filaMissoes) &&
-        agv.filaMissoes.length > 0
-    ) {
-
-        setTimeout(() => {
-
-            iniciarProximaMissaoFila(agvId);
-
-        }, 100);
-    }
-}
-
-
-function finalizarMissaoComErro(agvId, mensagem) {
-
-    const agv = agvs[agvId];
-
-    const execucao =
-        execucoesMissoes[agvId];
-
-
     if (!agv) {
         return;
     }
 
+    let dados;
 
-    cancelarSimulacaoAGV(agvId);
-
-
-    if (execucao && execucao.timer) {
-
-        clearTimeout(execucao.timer);
-
-        execucao.timer = null;
+    try {
+        dados = JSON.parse(evento);
+    } catch (_) {
+        return;
     }
 
+    const tipo = dados?.evento || dados?.tipo;
+    const mensagem = dados?.mensagem || "";
 
-    agv.velocidade = 0;
+    switch (tipo) {
 
-    agv.estadoMissao = "ERRO";
+        case "MISSAO_CARREGADA":
+            agv.carregamentoPendente = null;
+            definirAvisoMissao(agv, `${dados.missao}: ${mensagem}. Pressione START MISSÃO no AGV.`, "ok");
+            break;
 
-    if (agv.demoOnline) {
-    agv.maquina = "PRONTO";
+        case "CARREGAMENTO_REJEITADO":
+            agv.carregamentoPendente = null;
+            definirAvisoMissao(agv, `O AGV rejeitou a missão: ${mensagem}`, "erro");
+            break;
+
+        case "INICIO_REJEITADO":
+            definirAvisoMissao(agv, `START MISSÃO recusado: ${mensagem}`, "erro");
+            break;
+
+        case "MISSAO_ERRO":
+            definirAvisoMissao(agv, `Erro na missão ${dados.missao}: ${mensagem}`, "erro");
+            break;
+
+        case "MISSAO_CONCLUIDA":
+            definirAvisoMissao(agv, `Missão ${dados.missao} concluída.`, "ok");
+            break;
+
+        case "CONFIRMACAO_ERRO":
+            definirAvisoMissao(agv, `Confirmação recusada: ${mensagem}`, "erro");
+            break;
+
+        case "POSICAO_DEFINIDA":
+            definirAvisoMissao(agv, `Posição definida no AGV: ${mensagem}`, "ok");
+            break;
+
+        case "POSICAO_REJEITADA":
+            definirAvisoMissao(agv, `Posição recusada: ${mensagem}`, "erro");
+            break;
+
+        case "REARME_LOCAL_OBRIGATORIO":
+            definirAvisoMissao(agv, mensagem, "info");
+            break;
+
+        case "POSICAO_PERDIDA":
+            definirAvisoMissao(agv, `Posição perdida: ${mensagem || "o AGV foi movido no manual"}. Informe a posição antes da próxima missão.`, "aviso");
+            break;
+
+        case "TAG_NAO_LIDA":
+            definirAvisoMissao(agv, `Tag esperada não foi lida: ${mensagem}. Confira a tag no chão.`, "aviso");
+            break;
+
+        default:
+            break;
+    }
 }
 
-    agv.missaoAtual = null;
 
 
-    
 
 
-    delete execucoesMissoes[agvId];
-
-
-    salvarAgvsFrota();
-
-    atualizarPainel();
-
-    renderizarControleFilaAGV();
-
-
-    if (mensagem) {
-        alert(mensagem);
-    }
-}
-
-
-function verificarSegurancaDuranteMissao(agvId) {
-
-    const agv = agvs[agvId];
-
-    if (!agv) {
-        return false;
-    }
-
-
-    if (!agv.online) {
-        return false;
-    }
-
-
-    if (agv.ligado !== "LIGADO") {
-        return false;
-    }
-
-
-    if (agv.emergencia) {
-        return false;
-    }
-
-
-    if (agv.stop !== "NORMAL") {
-        return false;
-    }
-
-
-    if (agv.barreira === "INVADIDA") {
-        return false;
-    }
-
-
-    return true;
-}
 // ============================================================
 // SIMULAÇÃO DO AGV NA PLANTA REAL
 // ============================================================
 
 
-function cancelarSimulacaoAGV(agvId) {
 
-    const simulacao =
-        simulacoesAGV[agvId];
 
-    if (!simulacao) {
-        return;
-    }
 
 
-    if (simulacao.animationFrame) {
 
-        cancelAnimationFrame(
-            simulacao.animationFrame
-        );
-    }
 
 
-    delete simulacoesAGV[agvId];
-}
 
 
-function simularMovimentoRota(
-    agvId,
-    contexto,
-    aoConcluir
-) {
 
-    const agv = agvs[agvId];
 
-    if (!agv || !contexto) {
-        return;
-    }
-
-
-    const rota =
-        contexto.rota;
-
-
-    if (
-        !Array.isArray(rota) ||
-        rota.length === 0
-    ) {
-
-        aoConcluir();
-
-        return;
-    }
-
-
-    // --------------------------------------------------------
-    // Cancela uma simulação anterior
-    // --------------------------------------------------------
-
-    cancelarSimulacaoAGV(agvId);
-
-
-    // --------------------------------------------------------
-    // Localiza pontos da rota
-    // --------------------------------------------------------
-
-    const pontosRota =
-        rota
-            .map(id =>
-                plantaOperacional.pontos.find(
-                    p => p.id === id
-                )
-            )
-            .filter(Boolean);
-
-
-    if (pontosRota.length === 0) {
-
-        aoConcluir();
-
-        return;
-    }
-
-
-    // --------------------------------------------------------
-    // Posiciona o AGV no primeiro ponto
-    // --------------------------------------------------------
-
-    const pontoInicial =
-        pontosRota[0];
-
-
-    atualizarPontoAtualAGV(
-        agv,
-        pontoInicial
-    );
-
-
-    agv.orientacao =
-        contexto.orientacaoInicial;
-
-
-    renderizarAGVMapaVisaoGeral();
-
-
-    // --------------------------------------------------------
-    // Caso origem == destino
-    // --------------------------------------------------------
-
-    if (pontosRota.length === 1) {
-
-        agv.velocidade = 0;
-
-        setTimeout(() => {
-
-            aoConcluir();
-
-        }, 300);
-
-        return;
-    }
-
-
-    // --------------------------------------------------------
-    // Estado da animação
-    // --------------------------------------------------------
-
-    const simulacao = {
-
-        pontos: pontosRota,
-
-        indiceTrecho: 0,
-
-        progressoTrecho: 0,
-
-        animationFrame: null,
-
-        inicioTrecho: null
-    };
-
-
-    simulacoesAGV[agvId] =
-        simulacao;
-
-
-    executarTrechoSimulado(
-        agvId,
-        contexto,
-        aoConcluir
-    );
-}
-
-
-function executarTrechoSimulado(
-    agvId,
-    contexto,
-    aoConcluir
-) {
-
-    const agv = agvs[agvId];
-
-    const simulacao =
-        simulacoesAGV[agvId];
-
-
-    if (!agv || !simulacao) {
-        return;
-    }
-
-
-    // --------------------------------------------------------
-    // Segurança a cada frame
-    // --------------------------------------------------------
-
-    
-if (!verificarSegurancaDuranteMissao(agvId)) {
-
-    if (simulacao.animationFrame) {
-        cancelAnimationFrame(
-            simulacao.animationFrame
-        );
-    }
-
-    // Preserva a última posição calculada da simulação.
-    agv.velocidade = 0;
-
-    // A animação foi interrompida; não deve permanecer
-    // registrada como uma simulação ativa.
-    delete simulacoesAGV[agvId];
-
-    renderizarAGVMapaVisaoGeral();
-    atualizarPainel();
-
-    return;
-}
-
-
-
-    // --------------------------------------------------------
-    // Verifica se terminou todos os trechos
-    // --------------------------------------------------------
-
-    if (
-        simulacao.indiceTrecho >=
-        simulacao.pontos.length - 1
-    ) {
-
-        const ultimoPonto =
-            simulacao.pontos[
-                simulacao.pontos.length - 1
-            ];
-
-
-        atualizarPontoAtualAGV(
-            agv,
-            ultimoPonto
-        );
-
-
-        agv.orientacao =
-            contexto.orientacaoFinal;
-
-
-        agv.velocidade = 0;
-
-
-        renderizarAGVMapaVisaoGeral();
-
-
-        delete simulacoesAGV[agvId];
-
-
-        setTimeout(() => {
-
-            aoConcluir();
-
-        }, 100);
-
-
-        return;
-    }
-
-
-    const pontoA =
-        simulacao.pontos[
-            simulacao.indiceTrecho
-        ];
-
-
-    const pontoB =
-        simulacao.pontos[
-            simulacao.indiceTrecho + 1
-        ];
-
-
-    // --------------------------------------------------------
-    // Define direção do trecho
-    // --------------------------------------------------------
-
-    const dx =
-        pontoB.x - pontoA.x;
-
-    const dy =
-        pontoB.y - pontoA.y;
-
-
-    let angulo;
-
-
-    if (Math.abs(dx) >= Math.abs(dy)) {
-
-        angulo =
-            dx >= 0 ? 0 : 180;
-
-    } else {
-
-        angulo =
-            dy < 0 ? 90 : 270;
-    }
-
-
-    agv.orientacao = angulo;
-
-
-    // --------------------------------------------------------
-    // Distância do trecho
-    // --------------------------------------------------------
-
-    const distancia =
-        Math.sqrt(
-            Math.pow(dx, 2) +
-            Math.pow(dy, 2)
-        );
-
-
-    const duracao =
-        Math.max(
-            700,
-            (distancia /
-            VELOCIDADE_SIMULACAO_MAPA) *
-            1000
-        );
-
-
-    if (simulacao.inicioTrecho === null) {
-
-        simulacao.inicioTrecho =
-            performance.now();
-
-        simulacao.progressoTrecho = 0;
-    }
-
-
-    const agora =
-        performance.now();
-
-
-    const decorrido =
-        agora -
-        simulacao.inicioTrecho;
-
-
-    let progresso =
-        decorrido / duracao;
-
-
-    progresso =
-        Math.max(
-            0,
-            Math.min(1, progresso)
-        );
-
-
-    // --------------------------------------------------------
-    // Interpolação da posição
-    // --------------------------------------------------------
-
-    agv.x =
-        pontoA.x +
-        ((pontoB.x - pontoA.x) *
-        progresso);
-
-
-    agv.y =
-        pontoA.y +
-        ((pontoB.y - pontoA.y) *
-        progresso);
-
-
-    agv.velocidade = 0.10;
-
-
-    renderizarAGVMapaVisaoGeral();
-
-
-    // --------------------------------------------------------
-    // Chegou ao ponto
-    // --------------------------------------------------------
-
-    if (progresso >= 1) {
-
-        agv.x = pontoB.x;
-        agv.y = pontoB.y;
-
-
-        atualizarPontoAtualAGV(
-            agv,
-            pontoB
-        );
-
-
-        agv.orientacao = angulo;
-
-
-        simulacao.indiceTrecho++;
-
-        simulacao.inicioTrecho = null;
-
-        simulacao.progressoTrecho = 0;
-
-
-        renderizarAGVMapaVisaoGeral();
-
-    }
-
-
-    simulacao.animationFrame =
-        requestAnimationFrame(() => {
-
-            executarTrechoSimulado(
-                agvId,
-                contexto,
-                aoConcluir
-            );
-
-        });
-}
-
-function executarRearme() {
-
-    const agv = agvAtual();
-
-    if (!agv) {
-        return;
-    }
-
-    if (
-        !agv.online ||
-        !agv.aguardandoRearme
-    ) {
-        return;
-    }
-
-    const enviado = publicar(
-        TOPICOS.comando.rearme,
-        "REARME",
-        agv.id
-    );
-
-    if (!enviado) {
-        console.error(
-            "Não foi possível enviar o rearme."
-        );
-
-        return;
-    }
-
-    console.log(
-        "Solicitação de REARME enviada ao AGV:",
-        agv.id
-    );
-}
 
 /* ============================================================
    JOYSTICK MANUAL
    ============================================================ */
 
-// ============================================================
-// LIMITES FÍSICOS DO AGV
-// ============================================================
-
+// Limites físicos do AGV
 const VX_MAX = 0.10;   // velocidade longitudinal máxima (m/s)
 const VY_MAX = 0.10;   // velocidade lateral máxima (m/s)
-const W_MAX  = 0.524;  // velocidade angular máxima (rad/s)
-// 0.524 rad/s ≈ 30°/s
-// 90° ≈ 3 segundos
+const W_MAX = 0.524;   // velocidade angular máxima (rad/s) ≈ 30°/s
 
-
-// ============================================================
-// COMANDO MANUAL
-// ============================================================
-
-// Valores internos normalizados:
-// vx = -1 até +1
-// vy = -1 até +1
-// w  = -1 até +1
-
-let comandoManual = {
-    vx: 0,
-    vy: 0,
-    w: 0
-};
-
-
-
-
-// ============================================================
-// ESCALA DO SLIDER
-// ============================================================
+// Valores internos normalizados de -1 a +1
+let comandoManual = { vx: 0, vy: 0, w: 0 };
 
 function obterEscalaVelocidade() {
-
     const slider = document.getElementById("sliderVelocidade");
-
-    if (!slider) {
-        return 0.5;
-    }
-
-    return Number(slider.value) / 100;
+    return slider ? Number(slider.value) / 100 : 0.5;
 }
-
-
-// ============================================================
-// VERIFICA SE O CONTROLE MANUAL ESTÁ LIBERADO
-// ============================================================
 
 function manualPermitido() {
-
     const agv = agvAtual();
-
-    if (!agv) {
-        return false;
-    }
-
-    return (
-    agv.online &&
-    agv.ligado === "LIGADO" &&
-    agv.modo === "MANUAL" &&
-    agv.maquina !== "EMERGENCIA" &&
-    agv.stop === "NORMAL" &&
-    !agv.aguardandoRearme &&
-    agv.barreira !== "INVADIDA"
-);
+    return Boolean(agv) && condicoesManual(agv).every(c => c.ok);
 }
-
-
-// ============================================================
-// INÍCIO DO JOYSTICK
-// ============================================================
 
 function iniciarJoystick(event) {
-
     if (!manualPermitido()) {
+        if (agvAtual()) ui.aviso("Controle manual bloqueado: veja as condições no alto da tela.", "aviso");
         return;
     }
-
     joystickAtivo = true;
-
     const joystick = document.getElementById("joystick");
-
-    if (joystick) {
-        joystick.setPointerCapture(event.pointerId);
-    }
-
+    joystick?.classList.add("ativo");
+    try { joystick?.setPointerCapture(event.pointerId); } catch (e) { /* ignora */ }
     atualizarJoystick(event);
+    atualizarControleManual();
 }
-
-
-// ============================================================
-// MOVIMENTO DO JOYSTICK
-// ============================================================
 
 function moverJoystick(event) {
-
-    if (!joystickAtivo) {
-        return;
-    }
-
-    atualizarJoystick(event);
+    if (joystickAtivo) atualizarJoystick(event);
 }
 
-
-// ============================================================
-// FINALIZAÇÃO DO JOYSTICK
-// ============================================================
-
+// Desenha o "botão" do joystick (coordenadas do SVG 300 × 300)
+function desenharJoystick(dxNorm, dyNorm) {
+    const raio = 108;
+    const x = 150 + dxNorm * raio, y = 150 + dyNorm * raio;
+    document.getElementById("joystickKnob")?.setAttribute("transform", `translate(${x} ${y})`);
+    document.getElementById("joystickLinha")?.setAttribute("d", `M150 150 L${x} ${y}`);
+}
 
 function finalizarJoystick() {
-
+    if (!joystickAtivo && !comandoManual.vx && !comandoManual.vy) return;
     const agv = agvAtual();
-
     joystickAtivo = false;
-
     comandoManual.vx = 0;
     comandoManual.vy = 0;
-    comandoManual.w = 0;
-
-    rotacaoAtiva = false;
-
-    const centro = document.getElementById("joystickCentro");
-
-    if (centro) {
-        centro.style.left = "50%";
-        centro.style.top = "50%";
-    }
-
-    const seta = document.getElementById("rotacaoSeta");
-
-    if (seta) {
-        seta.style.transform = "rotate(0deg)";
-    }
-
-    // Envia a parada como melhor esforço.
-    // A segurança física e o firmware não podem depender
-    // da chegada deste comando MQTT.
+    document.getElementById("joystick")?.classList.remove("ativo");
+    desenharJoystick(0, 0);
+    // Parada como melhor esforço: o ESP para sozinho em 300 ms sem comando.
     if (agv && agv.online) {
-
-        publicar(
-            "comando/manual",
-            JSON.stringify({
-                vx: 0,
-                vy: 0,
-                w: 0
-            }),
-            agv.id
-        );
+        publicar("comando/manual", JSON.stringify({ vx: 0, vy: 0, w: Number((comandoManual.w * W_MAX * obterEscalaVelocidade()).toFixed(3)) }), agv.id);
     }
-
     atualizarValoresJoystick();
+    atualizarControleManual();
 }
-
-
-
-// ============================================================
-// CALCULA A POSIÇÃO DO JOYSTICK
-// ============================================================
 
 function atualizarJoystick(event) {
-
     if (!manualPermitido()) {
-
         finalizarJoystick();
-
         return;
     }
-
     const joystick = document.getElementById("joystick");
-    const centro = document.getElementById("joystickCentro");
-
-    if (!joystick || !centro) {
-        return;
-    }
-
-
-    // --------------------------------------------------------
-    // DIMENSÕES DO JOYSTICK
-    // --------------------------------------------------------
-
+    if (!joystick) return;
     const rect = joystick.getBoundingClientRect();
-
-    const centroX = rect.left + rect.width / 2;
-    const centroY = rect.top + rect.height / 2;
-
-
-    // --------------------------------------------------------
-    // DISTÂNCIA DO DEDO/MOUSE ATÉ O CENTRO
-    // --------------------------------------------------------
-
-    let dx = event.clientX - centroX;
-    let dy = event.clientY - centroY;
-
-
-    // --------------------------------------------------------
-    // LIMITE DO MOVIMENTO
-    // --------------------------------------------------------
-
-    const raioMax = rect.width / 2 - 35;
-
-    const distancia = Math.sqrt(
-        dx * dx +
-        dy * dy
-    );
-
-
-    // Se ultrapassar o limite,
-    // mantém o joystick na borda.
-
+    const raioMax = rect.width / 2 * (108 / 150);
+    let dx = event.clientX - (rect.left + rect.width / 2);
+    let dy = event.clientY - (rect.top + rect.height / 2);
+    const distancia = Math.hypot(dx, dy);
     if (distancia > raioMax) {
-
-        dx = (dx / distancia) * raioMax;
-        dy = (dy / distancia) * raioMax;
-
+        dx = dx / distancia * raioMax;
+        dy = dy / distancia * raioMax;
     }
-
-
-    // --------------------------------------------------------
-    // MOVE O BOTÃO VISUAL
-    // --------------------------------------------------------
-
-    centro.style.left =
-        `calc(50% + ${dx}px)`;
-
-    centro.style.top =
-        `calc(50% + ${dy}px)`;
-
-
-    // --------------------------------------------------------
-    // CONVERSÃO PARA VALORES NORMALIZADOS
-    // --------------------------------------------------------
-
-    // Para cima  -> +VX
-    // Para baixo -> -VX
-    // Direita    -> +VY
-    // Esquerda   -> -VY
-
+    desenharJoystick(dx / raioMax, dy / raioMax);
+    // Convenção do firmware (mecanum X): para cima +vx, esquerda +vy
     comandoManual.vx = -dy / raioMax;
-
-    comandoManual.vy = dx / raioMax;
-
-
-    // --------------------------------------------------------
-    // ATUALIZA INTERFACE
-    // --------------------------------------------------------
-
+    comandoManual.vy = -dx / raioMax;
     atualizarValoresJoystick();
-
-
-    // --------------------------------------------------------
-    // ENVIA PARA O MQTT
-    // --------------------------------------------------------
-
     publicarManual();
 }
-
-
-// ============================================================
-// PUBLICAÇÃO DO COMANDO MANUAL
-// ============================================================
 
 function publicarManual() {
-
     const agv = agvAtual();
-
-if (!agv || !manualPermitido()) {
-    return;
-}
-
-
-    // --------------------------------------------------------
-    // ESCALA DO SLIDER
-    // --------------------------------------------------------
-
+    if (!agv || !manualPermitido()) return;
     const escala = obterEscalaVelocidade();
-
-
-    // --------------------------------------------------------
-    // CONVERSÃO:
-    //
-    // NORMALIZADO (-1 ... +1)
-    //          ↓
-    // VELOCIDADE FÍSICA
-    // --------------------------------------------------------
-
-    const vx =
-        comandoManual.vx *
-        VX_MAX *
-        escala;
-
-    const vy =
-        comandoManual.vy *
-        VY_MAX *
-        escala;
-
-    const w =
-        comandoManual.w *
-        W_MAX *
-        escala;
-
-
-    // --------------------------------------------------------
-    // OBJETO QUE SERÁ ENVIADO AO ESP32
-    // --------------------------------------------------------
-
     const comando = {
-
-        vx: Number(vx.toFixed(3)),
-        vy: Number(vy.toFixed(3)),
-        w: Number(w.toFixed(3))
-
+        vx: Number((comandoManual.vx * VX_MAX * escala).toFixed(3)),
+        vy: Number((comandoManual.vy * VY_MAX * escala).toFixed(3)),
+        w: Number((comandoManual.w * W_MAX * escala).toFixed(3))
     };
-
-
-    // --------------------------------------------------------
-    // MQTT
-    // --------------------------------------------------------
-
-    publicar(
-        "comando/manual",
-        JSON.stringify(comando),
-        agv.id
-    );
+    publicar("comando/manual", JSON.stringify(comando), agv.id, 0);
 }
-
-
-// ============================================================
-// ATUALIZA OS VALORES MOSTRADOS NA TELA
-// ============================================================
 
 function atualizarValoresJoystick() {
-
-    const set = (id, valor) => {
-
-        const elemento =
-            document.getElementById(id);
-
-        if (elemento) {
-            elemento.textContent = valor;
-        }
-
-    };
-
-
-    // --------------------------------------------------------
-    // VALORES NORMALIZADOS
-    // --------------------------------------------------------
-
-    set(
-        "valorVx",
-        comandoManual.vx.toFixed(2)
-    );
-
-    set(
-        "valorVy",
-        comandoManual.vy.toFixed(2)
-    );
-
-    set(
-        "valorW",
-        comandoManual.w.toFixed(2)
-    );
-
-
-    // --------------------------------------------------------
-    // VELOCIDADES FÍSICAS
-    // --------------------------------------------------------
-
-    const escala =
-        obterEscalaVelocidade();
-
-
-    const vx =
-        comandoManual.vx *
-        VX_MAX *
-        escala;
-
-    const vy =
-        comandoManual.vy *
-        VY_MAX *
-        escala;
-
-    const w =
-        comandoManual.w *
-        W_MAX *
-        escala;
-
-
-    set(
-        "comandoVx",
-        vx.toFixed(3) + " m/s"
-    );
-
-    set(
-        "comandoVy",
-        vy.toFixed(3) + " m/s"
-    );
-
-    set(
-        "comandoW",
-        w.toFixed(3) + " rad/s"
-    );
+    const set = (id, valor) => { const e = document.getElementById(id); if (e) e.textContent = valor; };
+    const escala = obterEscalaVelocidade();
+    const sinal = n => (n > 0.0005 ? "+" : n < -0.0005 ? "−" : "") + ui.numero(Math.abs(n), 3);
+    set("valorVx", sinal(comandoManual.vx * VX_MAX * escala));
+    set("valorVy", sinal(comandoManual.vy * VY_MAX * escala));
+    set("valorW", (comandoManual.w > 0 ? "+" : comandoManual.w < 0 ? "−" : "") + ui.numero(Math.abs(comandoManual.w * W_MAX * escala), 2));
+    set("velocidadeManualTexto", `${Math.round(escala * 100)}% · ${ui.numero(VX_MAX * escala, 3)} m/s`);
 }
-
-
-// ============================================================
-// BOTÃO DE ROTAÇÃO
-// ============================================================
 
 function iniciarRotacao(sentido) {
-
-    if (!manualPermitido()) {
-        return;
-    }
-
+    if (!manualPermitido()) return;
     rotacaoAtiva = true;
-
-
-    // sentido:
-    // -1 = anti-horário
-    // +1 = horário
-
+    // +1 = anti-horário (w positivo), -1 = horário
     comandoManual.w = sentido;
-
-
+    document.getElementById(sentido > 0 ? "btnGiroAnti" : "btnGiroHorario")?.classList.add("ativo");
     publicarManual();
     atualizarValoresJoystick();
-
-
-    // Atualiza seta visual
-
-    const seta =
-        document.getElementById("rotacaoSeta");
-
-    if (seta) {
-
-        seta.style.transform =
-            `rotate(${sentido < 0 ? -90 : 90}deg)`;
-
-    }
+    atualizarControleManual();
 }
-
-
-// ============================================================
-// PARAR ROTAÇÃO
-// ============================================================
-
 
 function pararRotacao() {
-
+    if (!rotacaoAtiva && comandoManual.w === 0) return;
     rotacaoAtiva = false;
     comandoManual.w = 0;
-
+    document.getElementById("btnGiroAnti")?.classList.remove("ativo");
+    document.getElementById("btnGiroHorario")?.classList.remove("ativo");
     const agv = agvAtual();
-
     if (agv && agv.online) {
-
-        if (manualPermitido()) {
-
-            publicarManual();
-
-        } else {
-
-            // Se a permissão foi perdida, solicita parada total.
+        if (manualPermitido()) publicarManual();
+        else {
             comandoManual.vx = 0;
             comandoManual.vy = 0;
-
-            publicar(
-                "comando/manual",
-                JSON.stringify({
-                    vx: 0,
-                    vy: 0,
-                    w: 0
-                }),
-                agv.id
-            );
+            publicar("comando/manual", JSON.stringify({ vx: 0, vy: 0, w: 0 }), agv.id);
         }
     }
-
     atualizarValoresJoystick();
-
-    const seta = document.getElementById("rotacaoSeta");
-
-    if (seta) {
-        seta.style.transform = "rotate(0deg)";
-    }
+    atualizarControleManual();
 }
 
+document.getElementById("joystick")?.addEventListener("pointerdown", iniciarJoystick);
+window.addEventListener("pointermove", moverJoystick);
+window.addEventListener("pointerup", finalizarJoystick);
+window.addEventListener("pointercancel", finalizarJoystick);
+window.addEventListener("blur", () => { finalizarJoystick(); pararRotacao(); });
 
-// ============================================================
-// EVENTOS DO JOYSTICK
-// ============================================================
+// Teclado: setas ou WASD movem, Q/E giram (só na tela de controle manual)
+const teclasManual = new Set();
+function comandoTeclado() {
+    if (!document.getElementById("controleManual")?.classList.contains("ativa")) return;
+    const vx = (teclasManual.has("frente") ? 1 : 0) - (teclasManual.has("re") ? 1 : 0);
+    const vy = (teclasManual.has("esquerda") ? 1 : 0) - (teclasManual.has("direita") ? 1 : 0);
+    const w = (teclasManual.has("anti") ? 1 : 0) - (teclasManual.has("horario") ? 1 : 0);
+    const ativo = vx || vy || w;
+    if (ativo && !manualPermitido()) return;
+    comandoManual.vx = vx;
+    comandoManual.vy = vy;
+    comandoManual.w = w;
+    joystickAtivo = Boolean(vx || vy);
+    rotacaoAtiva = Boolean(w);
+    desenharJoystick(-vy * 0.7, -vx * 0.7);
+    atualizarValoresJoystick();
+    if (ativo) publicarManual();
+    else {
+        const agv = agvAtual();
+        if (agv && agv.online) publicar("comando/manual", JSON.stringify({ vx: 0, vy: 0, w: 0 }), agv.id);
+    }
+    atualizarControleManual();
+}
+const MAPA_TECLAS = { ArrowUp: "frente", w: "frente", ArrowDown: "re", s: "re", ArrowLeft: "esquerda", a: "esquerda", ArrowRight: "direita", d: "direita", q: "anti", e: "horario" };
+document.addEventListener("keydown", evento => {
+    if (!document.getElementById("controleManual")?.classList.contains("ativa")) return;
+    if (evento.target.matches("input, select, textarea")) return;
+    const acao = MAPA_TECLAS[evento.key.length === 1 ? evento.key.toLowerCase() : evento.key];
+    if (!acao) return;
+    evento.preventDefault();
+    if (!teclasManual.has(acao)) {
+        teclasManual.add(acao);
+        comandoTeclado();
+    }
+});
+document.addEventListener("keyup", evento => {
+    const acao = MAPA_TECLAS[evento.key.length === 1 ? evento.key.toLowerCase() : evento.key];
+    if (acao && teclasManual.delete(acao)) comandoTeclado();
+});
 
-document
-    .getElementById("joystick")
-    ?.addEventListener(
-        "pointerdown",
-        iniciarJoystick
-    );
+// O ESP para os motores se ficar 300 ms sem comando: reenvia a cada 100 ms.
+setInterval(() => {
+    if ((joystickAtivo || rotacaoAtiva) && manualPermitido()) publicarManual();
+    else if (joystickAtivo || rotacaoAtiva) { finalizarJoystick(); pararRotacao(); teclasManual.clear(); }
+}, 100);
+
+document.getElementById("sliderVelocidade")?.addEventListener("input", () => {
+    atualizarValoresJoystick();
+    if (joystickAtivo || rotacaoAtiva) publicarManual();
+});
 
 
-window.addEventListener(
-    "pointermove",
-    moverJoystick
-);
-
-
-window.addEventListener(
-    "pointerup",
-    finalizarJoystick
-);
-
-
-// ============================================================
-// SLIDER DE VELOCIDADE
-// ============================================================
-
-document
-    .getElementById("sliderVelocidade")
-    ?.addEventListener(
-        "input",
-        function () {
-
-            const texto =
-                document.getElementById(
-                    "velocidadeManualTexto"
-                );
-
-            if (texto) {
-
-                texto.textContent =
-                    this.value + "%";
-
-            }
-
-
-            atualizarValoresJoystick();
-
-
-            // Se estiver movimentando,
-            // envia imediatamente o novo valor.
-
-            if (joystickAtivo || rotacaoAtiva) {
-
-                publicarManual();
-
-            }
-
-        }
-    );
 /* ============================================================
-   RELÓGIO / INICIALIZAÇÃO
+   RELÓGIO / CADASTRO DE AGVS
    ============================================================ */
 
 function atualizarRelogio() {
-    const agora = new Date();
-    document.getElementById("relogio").textContent = agora.toLocaleTimeString("pt-BR");
+    const relogio = document.getElementById("relogio");
+    if (relogio) relogio.textContent = new Date().toLocaleTimeString("pt-BR");
+    // contador "há mm:ss" do alerta de emergência
+    if (document.body.classList.contains("emergencia-ativa")) renderizarAlertaGlobal();
 }
 
-renderizarFrota();
-atualizarPainel();
-atualizarValoresJoystick();
-atualizarRelogio();
-conectarMQTT();
-setInterval(atualizarRelogio, 1000);
-setInterval(atualizarOnline, 2000);
-
 function abrirCadastroAGV() {
-    document.getElementById("modalAdicionarAGV").classList.add("ativo");
-
+    agvEmEdicao = null;
+    document.getElementById("tituloModalAgv").textContent = "Adicionar AGV";
     document.getElementById("novoAgvId").value = "";
     document.getElementById("novoAgvNome").value = "";
-
+    document.getElementById("modalAdicionarAGV").classList.add("ativo");
     document.getElementById("novoAgvId").focus();
 }
 
 function fecharCadastroAGV() {
+    agvEmEdicao = null;
     document.getElementById("modalAdicionarAGV").classList.remove("ativo");
 }
+
 function abrirEdicaoAGV(id) {
-
     const agv = agvs[id];
-
     if (!agv) return;
-
     agvEmEdicao = id;
-
+    document.getElementById("tituloModalAgv").textContent = `Editar AGV ${agv.id}`;
     document.getElementById("novoAgvId").value = agv.id;
     document.getElementById("novoAgvNome").value = agv.nome;
-
     document.getElementById("modalAdicionarAGV").classList.add("ativo");
-
-    document.getElementById("novoAgvId").focus();
+    document.getElementById("novoAgvNome").focus();
 }
-function adicionarAGV() {
 
+function adicionarAGV() {
     const id = document.getElementById("novoAgvId").value.trim();
     const nome = document.getElementById("novoAgvNome").value.trim();
-
     if (!id || !nome) {
-        alert("Preencha o ID e o nome do AGV.");
+        ui.aviso("Preencha o ID e o nome do AGV.", "aviso");
         return;
     }
-
-    // =========================
-    // MODO EDIÇÃO
-    // =========================
-
+    if (!/^[A-Za-z0-9_-]{1,12}$/.test(id)) {
+        ui.aviso("O ID usa até 12 letras, números, _ ou - (o mesmo AGV_ID do firmware).", "aviso");
+        return;
+    }
     if (agvEmEdicao !== null) {
-
         const idAntigo = agvEmEdicao;
-
         if (id !== idAntigo && agvs[id]) {
-            alert(`O AGV ${id} já está cadastrado.`);
+            ui.aviso(`O AGV ${id} já está cadastrado.`, "erro");
             return;
         }
-
         const dadosAGV = agvs[idAntigo];
-
         delete agvs[idAntigo];
-
         dadosAGV.id = id;
         dadosAGV.nome = nome;
-
         agvs[id] = dadosAGV;
-
-        if (agvSelecionado === idAntigo) {
-            agvSelecionado = id;
-        }
-
+        if (agvSelecionado === idAntigo) agvSelecionado = id;
         agvEmEdicao = null;
-
-        localStorage.setItem(
-            "agvsFrota",
-            JSON.stringify(agvs)
-        );
-
+        salvarAgvsFrotaAgora();
         renderizarFrota();
         atualizarPainel();
         fecharCadastroAGV();
-
-        console.log("AGV editado:", agvs[id]);
-
+        ui.aviso(`AGV ${id} atualizado.`, "sucesso");
         return;
     }
-
-    // =========================
-    // MODO ADIÇÃO
-    // =========================
-
     if (agvs[id]) {
-        alert(`O AGV ${id} já está cadastrado.`);
+        ui.aviso(`O AGV ${id} já está cadastrado.`, "erro");
         return;
     }
-
     agvs[id] = criarAGV(id, nome);
-
-    localStorage.setItem(
-        "agvsFrota",
-        JSON.stringify(agvs)
-    );
-
+    salvarAgvsFrotaAgora();
     renderizarFrota();
-
     fecharCadastroAGV();
-
-    console.log("Novo AGV cadastrado:", agvs[id]);
+    ui.aviso(`AGV ${id} cadastrado. Ele aparece online assim que o firmware conectar ao broker.`, "sucesso");
 }
-function excluirAGV(id) {
 
+async function excluirAGV(id) {
     const agv = agvs[id];
-
     if (!agv) return;
-
-    const confirmar = confirm(
-        `Deseja realmente excluir o AGV ${agv.id} — ${agv.nome}?`
-    );
-
-    if (!confirmar) return;
-
+    const ok = await ui.confirmar({
+        titulo: `Excluir o AGV ${agv.id}?`,
+        texto: `“${agv.nome}” sai da frota deste navegador, com o histórico guardado aqui.${agv.virtual ? "\n\nO AGV virtual será desligado." : "\n\nO AGV em si não é alterado."}`,
+        confirmar: "Excluir", perigo: true
+    });
+    if (!ok) return;
+    if (agv.virtual) AgvVirtual.desligar(id);
     delete agvs[id];
-
-    localStorage.setItem(
-        "agvsFrota",
-        JSON.stringify(agvs)
-    );
-
+    salvarAgvsFrotaAgora();
     if (agvSelecionado === id) {
         agvSelecionado = null;
         voltarFrota();
     }
-
     renderizarFrota();
-
-    console.log("AGV excluído:", id);
+    atualizarIdentificacaoAGV();
 }
-/* ============================================================
-   DRAG & DROP — SIDEBAR → MAPA
-   ============================================================ */
 
-const mapaPlanta =
-    document.getElementById("mapaPlanta");
+document.getElementById("modalAdicionarAGV")?.addEventListener("keydown", evento => {
+    if (evento.key === "Enter") adicionarAGV();
+    if (evento.key === "Escape") fecharCadastroAGV();
+});
+document.getElementById("modalAdicionarAGV")?.addEventListener("click", evento => {
+    if (evento.target.id === "modalAdicionarAGV") fecharCadastroAGV();
+});
 
-mapaPlanta?.addEventListener(
-    "dragover",
-    permitirDropMapa
-);
-
-mapaPlanta?.addEventListener(
-    "drop",
-    soltarPontoMapa
-);
 
 /* ============================================================
    CONTROLE MANUAL DA GARRA
@@ -10987,7 +3153,9 @@ function atualizarEstadoVisualGarra(estado, mensagem) {
         document.getElementById("btnGarraDescer");
 
     if (elementoEstado) {
-        elementoEstado.textContent = estado;
+        const nomes = { SUBINDO: "Subindo", DESCENDO: "Descendo", PARADA: "Parada", BLOQUEADA: "Bloqueada", FALHA: "Falha" };
+        elementoEstado.textContent = nomes[estado] || estado;
+        elementoEstado.className = `pilula ${estado === "SUBINDO" || estado === "DESCENDO" ? "azul" : estado === "BLOQUEADA" || estado === "FALHA" ? "vermelho" : "verde"}`;
     }
 
     if (elementoMensagem) {
@@ -10996,14 +3164,14 @@ function atualizarEstadoVisualGarra(estado, mensagem) {
 
     if (btnSubir) {
         btnSubir.classList.toggle(
-            "comando-ativo",
+            "ativo",
             estado === "SUBINDO"
         );
     }
 
     if (btnDescer) {
         btnDescer.classList.toggle(
-            "comando-ativo",
+            "ativo",
             estado === "DESCENDO"
         );
     }
@@ -11061,7 +3229,7 @@ function iniciarGarraManual(sentido) {
 
     atualizarEstadoVisualGarra(
         sentido === "SUBIR" ? "SUBINDO" : "DESCENDO",
-        "Comando enviado; aguardando confirmação do ESP32"
+        "Movendo enquanto o botão estiver pressionado"
     );
 }
 
@@ -11290,7 +3458,7 @@ function configurarControleManualGarra() {
 
     atualizarEstadoVisualGarra(
         "PARADA",
-        "Aguardando comando"
+        "Segure o botão para mover a garra."
     );
 }
 
@@ -11303,6 +3471,11 @@ function verificarControleManualGarra() {
 
     if (!garraMovimentoAtivo) {
         return;
+    }
+
+    // Mantém o comando vivo no ESP (watchdog de 300 ms).
+    if (garraSentidoAtual) {
+        publicar(TOPICOS.comando.garraMovimento, garraSentidoAtual, agvSelecionado, 0);
     }
 
     if (
@@ -11327,9 +3500,7 @@ function verificarControleManualGarra() {
     }
 
     if (
-        typeof clienteMQTT !== "undefined" &&
-        clienteMQTT &&
-        !clienteMQTT.connected
+        !canalDisponivel(agvAtual())
     ) {
 
         pararGarraManual(
@@ -11339,30 +3510,1441 @@ function verificarControleManualGarra() {
     }
 }
 
+function atualizarBotaoCancelarMissao() {
+    const botao = document.getElementById(
+        "btnAbrirCancelamentoMissao"
+    );
+
+    if (!botao) {
+        return;
+    }
+
+    const agv = agvs[agvSelecionado];
+
+    if (!agv) {
+        botao.disabled = true;
+        return;
+    }
+
+    const temMissaoCancelavel = Boolean(
+    agv.missaoAtual ||
+    agv.missaoCarregada
+);
+
+    const cancelamentoPendente = Boolean(
+        cancelamentosMissaoPendentes[agv.id]
+    );
+
+    botao.disabled =
+        !temMissaoCancelavel ||
+        cancelamentoPendente;
+}
+
+function abrirFormularioCancelamentoMissao() {
+    const agv = agvs[agvSelecionado];
+
+    if (!agv) {
+        ui.aviso("Escolha um AGV.", "aviso");
+        return;
+    }
+
+    const temMissaoCancelavel = Boolean(
+    agv.missaoAtual ||
+    agv.missaoCarregada ||
+    execucoesMissoes[agv.id]
+);
+
+if (!temMissaoCancelavel) {
+    ui.aviso("Este AGV não tem missão para cancelar.", "aviso");
+    return;
+}
+
+    if (cancelamentosMissaoPendentes[agv.id]) {
+        ui.aviso("Já existe um cancelamento aguardando resposta deste AGV.", "aviso");
+        return;
+    }
+
+    document.getElementById("cancelamentoMissaoAgv").textContent =
+        `${agv.id} — ${agv.nome || "AGV selecionado"}`;
+
+    document.querySelector(
+        'input[name="escopoCancelamentoMissao"][value="ATUAL"]'
+    ).checked = true;
+
+    document.getElementById(
+        "opcoesCancelamentoMissao"
+    ).hidden = false;
+
+    document.getElementById(
+        "confirmacaoFinalCancelamentoMissao"
+    ).hidden = true;
+
+    document.getElementById(
+        "mensagemCancelamentoMissao"
+    ).hidden = true;
+
+    document.getElementById(
+        "btnContinuarCancelamentoMissao"
+    ).hidden = false;
+
+    document.getElementById(
+        "btnConfirmarCancelamentoMissao"
+    ).hidden = true;
+
+    document.getElementById(
+        "btnVoltarCancelamentoMissao"
+    ).disabled = false;
+
+    document.getElementById(
+        "modalCancelarMissao"
+    ).hidden = false;
+}
+
+
+function fecharFormularioCancelamentoMissao() {
+    const modal = document.getElementById("modalCancelarMissao");
+
+    if (!modal) return;
+
+    const agvId = agvSelecionado;
+
+    // Não permita fechar e iniciar outra solicitação enquanto
+    // aguardamos a confirmação do ESP32.
+    if (cancelamentosMissaoPendentes[agvId]) {
+        const mensagem = document.getElementById(
+            "mensagemCancelamentoMissao"
+        );
+
+        mensagem.textContent =
+            "Aguardando confirmação do ESP32. Não envie outro cancelamento.";
+
+        mensagem.hidden = false;
+        return;
+    }
+
+    modal.hidden = true;
+}
+
+
+function confirmarEscopoCancelamentoMissao() {
+    const escopo = document.querySelector(
+        'input[name="escopoCancelamentoMissao"]:checked'
+    )?.value;
+
+    if (!["ATUAL", "FILA"].includes(escopo)) {
+        ui.aviso("Escolha o que cancelar.", "aviso");
+        return;
+    }
+
+    const titulo = document.getElementById(
+        "tituloConfirmacaoCancelamento"
+    );
+
+    const texto = document.getElementById(
+        "textoConfirmacaoCancelamento"
+    );
+
+    if (escopo === "ATUAL") {
+        titulo.textContent = "Confirmar cancelamento da missão atual";
+
+        texto.textContent =
+            "A missão atual será cancelada. A fila será preservada, " +
+            "mas ficará suspensa até uma decisão explícita do operador.";
+    } else {
+        titulo.textContent = "Confirmar cancelamento da missão e da fila";
+
+        texto.textContent =
+            "A missão atual e todas as missões pendentes deste AGV " +
+            "serão canceladas. A fila será apagada após a confirmação do ESP32.";
+    }
+
+    document.getElementById(
+        "opcoesCancelamentoMissao"
+    ).hidden = true;
+
+    document.getElementById(
+        "confirmacaoFinalCancelamentoMissao"
+    ).hidden = false;
+
+    document.getElementById(
+        "btnContinuarCancelamentoMissao"
+    ).hidden = true;
+
+    document.getElementById(
+        "btnConfirmarCancelamentoMissao"
+    ).hidden = false;
+}
+
+
+function enviarCancelamentoMissao() {
+    const agv = agvs[agvSelecionado];
+
+    if (!agv) {
+        ui.aviso("Nenhum AGV selecionado.", "aviso");
+        return;
+    }
+
+    if (!canalDisponivel(agv)) {
+        ui.aviso("MQTT desconectado: o cancelamento não foi enviado.", "erro");
+        return;
+    }
+
+    if (cancelamentosMissaoPendentes[agv.id]) {
+        ui.aviso("Já existe um cancelamento pendente para este AGV.");
+        return;
+    }
+
+    const escopo = document.querySelector(
+        'input[name="escopoCancelamentoMissao"]:checked'
+    )?.value;
+
+    if (!["ATUAL", "FILA"].includes(escopo)) {
+        ui.aviso("Escopo de cancelamento inválido.");
+        return;
+    }
+
+    const requestId =
+        `${agv.id}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+
+    const pedido = {
+        comando: "CANCELAR_MISSAO",
+        requestId,
+        escopo
+    };
+
+    const mensagem = document.getElementById(
+        "mensagemCancelamentoMissao"
+    );
+
+    mensagem.textContent = "Enviando solicitação ao AGV...";
+    mensagem.hidden = false;
+
+    // Registrar antes da publicação para não perder uma resposta rápida.
+    const timeoutId = setTimeout(() => {
+        const pendente = cancelamentosMissaoPendentes[agv.id];
+
+        if (!pendente || pendente.requestId !== requestId) {
+            return;
+        }
+
+        delete cancelamentosMissaoPendentes[agv.id];
+
+        mensagem.textContent =
+            "Não recebemos a confirmação do ESP32 dentro do prazo. " +
+            "O resultado do cancelamento é desconhecido. Verifique o AGV " +
+            "antes de tentar novamente.";
+
+        mensagem.hidden = false;
+
+        document.getElementById(
+            "btnVoltarCancelamentoMissao"
+        ).disabled = false;
+
+        document.getElementById(
+            "btnConfirmarCancelamentoMissao"
+        ).disabled = false;
+    }, TEMPO_LIMITE_CANCELAMENTO_MS);
+
+    cancelamentosMissaoPendentes[agv.id] = {
+        requestId,
+        escopo,
+        timeoutId,
+        missaoId: agv.missaoCarregada || agv.missaoAtual
+    };
+
+    const publicado = publicar(
+        TOPICOS.comando.cancelarMissao,
+        JSON.stringify(pedido),
+        agv.id
+    );
+
+    if (publicado) {
+        registrarAcaoSite(agv.id, "missao", "CANCELAMENTO_SOLICITADO", `Escopo ${escopo} · pedido ${requestId}`);
+    }
+
+    
+if (!publicado) {
+    clearTimeout(timeoutId);
+    delete cancelamentosMissaoPendentes[agv.id];
+
+    mensagem.textContent =
+        "Não foi possível enviar o comando pelo MQTT.";
+
+    mensagem.hidden = false;
+
+    document.getElementById(
+        "btnConfirmarCancelamentoMissao"
+    ).disabled = false;
+
+    document.getElementById(
+        "btnVoltarCancelamentoMissao"
+    ).disabled = false;
+
+    return;
+}
+
+
+    mensagem.textContent =
+        "Solicitação enviada. Aguardando confirmação do ESP32...";
+
+    document.getElementById(
+        "btnConfirmarCancelamentoMissao"
+    ).disabled = true;
+
+    document.getElementById(
+        "btnVoltarCancelamentoMissao"
+    ).disabled = true;
+}
+
+
+function processarConfirmacaoCancelamentoMissao(agvId, valor) {
+    let evento;
+
+    try {
+        evento = JSON.parse(valor);
+    } catch (_) {
+        return false;
+    }
+
+    if (
+        !evento ||
+        ![
+            "CANCELAMENTO_CONFIRMADO",
+            "CANCELAMENTO_ERRO"
+        ].includes(evento.evento)
+    ) {
+        return false;
+    }
+
+    const pendente = cancelamentosMissaoPendentes[agvId];
+
+    // Ignora respostas sem solicitação correspondente.
+    if (!pendente || evento.requestId !== pendente.requestId) {
+        console.warn(
+            "Resposta de cancelamento sem solicitação correspondente:",
+            agvId,
+            evento
+        );
+
+        return true;
+    }
+
+    const mensagem = document.getElementById(
+        "mensagemCancelamentoMissao"
+    );
+
+    const btnConfirmar = document.getElementById(
+        "btnConfirmarCancelamentoMissao"
+    );
+
+    const btnVoltar = document.getElementById(
+        "btnVoltarCancelamentoMissao"
+    );
+
+    // O ESP32 informou que não conseguiu cancelar.
+    if (evento.evento === "CANCELAMENTO_ERRO") {
+        clearTimeout(pendente.timeoutId);
+        delete cancelamentosMissaoPendentes[agvId];
+
+        if (mensagem) {
+            mensagem.textContent =
+                "O ESP32 não confirmou o cancelamento: " +
+                (evento.motivo || "motivo não informado.");
+
+            mensagem.hidden = false;
+        }
+
+        if (btnConfirmar) btnConfirmar.disabled = false;
+        if (btnVoltar) btnVoltar.disabled = false;
+
+        return true;
+    }
+
+    // Não aplique uma confirmação referente a outro escopo.
+    if (evento.escopo !== pendente.escopo) {
+        console.error(
+            "Escopo de cancelamento divergente.",
+            {
+                solicitado: pendente.escopo,
+                recebido: evento.escopo
+            }
+        );
+
+        if (mensagem) {
+            mensagem.textContent =
+                "A resposta do ESP32 diverge do pedido. " +
+                "O resultado permanece sem confirmação válida. " +
+                "Verifique o AGV antes de continuar.";
+
+            mensagem.hidden = false;
+        }
+
+        // Mantém o pedido pendente até uma resposta válida
+        // ou até o timeout já registrado.
+        return true;
+    }
+
+    const agv = agvs[agvId];
+
+    if (!agv) {
+        clearTimeout(pendente.timeoutId);
+        delete cancelamentosMissaoPendentes[agvId];
+
+        if (mensagem) {
+            mensagem.textContent =
+                "O ESP32 confirmou o cancelamento, mas o AGV " +
+                "não foi encontrado no estado local.";
+
+            mensagem.hidden = false;
+        }
+
+        if (btnVoltar) btnVoltar.disabled = false;
+
+        return true;
+    }
+
+    // A confirmação corresponde ao pedido. Encerra a espera.
+    clearTimeout(pendente.timeoutId);
+    delete cancelamentosMissaoPendentes[agvId];
+
+
+    const execucao = execucoesMissoes[agvId];
+
+    if (execucao) {
+        execucao.cancelada = true;
+
+        if (execucao.timer) {
+            clearTimeout(execucao.timer);
+        }
+
+        if (execucao.timeout) {
+            clearTimeout(execucao.timeout);
+        }
+
+        if (execucao.timeoutId) {
+            clearTimeout(execucao.timeoutId);
+        }
+
+        delete execucoesMissoes[agvId];
+    }
+
+    agv.velocidade = 0;
+    agv.progresso = 0;
+    agv.estadoMissao = "CANCELADA";
+    agv.missaoAtual = null;
+    agv.missaoCarregada = null;
+    agv.etapaMissao = null;
+
+    if (!Array.isArray(agv.filaMissoes)) {
+        agv.filaMissoes = [];
+    }
+
+    if (pendente.escopo === "FILA") {
+        agv.filaMissoes = [];
+        agv.filaMissoesSuspensa = false;
+    } else {
+        // Preserva a fila, mas impede seu início automático.
+        agv.filaMissoesSuspensa = true;
+    }
+
+    salvarAgvsFrota();
+
+    atualizarPainel();
+    renderizarControleFilaAGV();
+    renderizarFrota();
+
+    if (mensagem) {
+        mensagem.textContent =
+            pendente.escopo === "FILA"
+                ? "Cancelamento confirmado pelo ESP32. " +
+                  "A missão atual e a fila foram canceladas."
+                : "Cancelamento confirmado pelo ESP32. " +
+                  "A fila foi preservada e está suspensa.";
+
+        mensagem.hidden = false;
+    }
+
+    if (btnConfirmar) btnConfirmar.hidden = true;
+    if (btnVoltar) btnVoltar.disabled = false;
+
+    return true;
+}
+
+
+
+
+/* ============================================================
+
+   MONITORAMENTO DO ESP32 (missão, posição, sensores)
+   ============================================================ */
+
+// Estado da missão publicado (retido) pelo ESP em status/missao.
+function processarStatusMissao(agv, dados) {
+
+    if (!dados || !ESTADOS_MISSAO.includes(dados.status)) {
+        return;
+    }
+
+    const anterior = agv.estadoMissao;
+    const status = dados.status;
+    const missaoId = dados.missao || null;
+    const total = Number(dados.etapas) || 0;
+    const indice = Number(dados.indice) || 0;
+
+    agv.estadoMissao = status;
+    agv.etapaMissao = indice;
+    agv.totalEtapasMissao = total;
+    agv.trechoMissao = Number(dados.trecho) || 0;
+    agv.faseMissao = dados.fase || null;
+    agv.causaInterrupcao = dados.causa || "NENHUMA";
+
+    switch (status) {
+
+        case "CARREGADA":
+            agv.missaoCarregada = missaoId;
+            agv.missaoAtual = null;
+            agv.progresso = 0;
+            agv.carregamentoPendente = null;
+            break;
+
+        case "EM_EXECUCAO":
+        case "AGUARDANDO_CONFIRMACAO":
+        case "INTERROMPIDA":
+            // o aviso "carregada, aperte START MISSÃO" deixa de valer
+            if (anterior === "CARREGADA" && agv.avisoMissao && agv.avisoMissao.tipo !== "erro") agv.avisoMissao = null;
+            agv.missaoCarregada = missaoId;
+            agv.missaoAtual = missaoId;
+            agv.progresso = total > 0 ? Math.round((indice / total) * 100) : 0;
+            break;
+
+        case "CONCLUIDA":
+            agv.missaoAtual = null;
+            agv.missaoCarregada = null;
+            agv.progresso = 100;
+            break;
+
+        default:
+            // AGUARDANDO, CANCELADA, ERRO
+            agv.missaoAtual = null;
+            agv.missaoCarregada = null;
+            if (status !== "ERRO") {
+                agv.progresso = 0;
+            }
+            break;
+    }
+
+    // Missão terminou: carrega a próxima da fila (o início continua
+    // dependendo do botão START MISSÃO no AGV).
+    if (status === "CONCLUIDA" && anterior !== "CONCLUIDA") {
+        setTimeout(() => iniciarProximaMissaoFila(agv.id), 500);
+    }
+}
+
+
+
+
+function podeCarregarMissao(agv) {
+
+    return Boolean(
+        agv &&
+        canalDisponivel(agv) &&
+        agv.online &&
+        !agv.carregamentoPendente &&
+        !cancelamentosMissaoPendentes[agv.id] &&
+        !["EM_EXECUCAO", "AGUARDANDO_CONFIRMACAO", "INTERROMPIDA"].includes(agv.estadoMissao)
+    );
+}
+
+
+function definirAvisoMissao(agv, texto, tipo = "info") {
+
+    if (!agv) {
+        return;
+    }
+
+    agv.avisoMissao = { texto, tipo, quando: Date.now() };
+}
+
+
+function confirmarEtapaAGV() {
+
+    const agv = agvAtual();
+
+    if (!agv || agv.estadoMissao !== "AGUARDANDO_CONFIRMACAO") {
+        return;
+    }
+
+    const enviado = publicar(
+        TOPICOS.comando.confirmarEtapa,
+        JSON.stringify({
+            comando: "CONFIRMAR_ETAPA",
+            missao: agv.missaoAtual,
+            indice: Number(agv.etapaMissao) || 0
+        }),
+        agv.id
+    );
+
+    if (!enviado) {
+        ui.aviso("MQTT desconectado: a confirmação não foi enviada.", "erro");
+    }
+}
+
+
+function retomarFilaMissoes() {
+
+    const agv = agvAtual();
+
+    if (!agv) {
+        return;
+    }
+
+    agv.filaMissoesSuspensa = false;
+
+    salvarAgvsFrota();
+    iniciarProximaMissaoFila(agv.id);
+    agendarAtualizacaoTela();
+}
+
+
+
+
+function escaparHtml(texto) {
+
+    return String(texto ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+}
+
+
+// Junta várias mensagens MQTT em uma única atualização da interface.
+var atualizacaoTelaAgendada = false;
+
+function agendarAtualizacaoTela() {
+
+    if (atualizacaoTelaAgendada) {
+        return;
+    }
+
+    atualizacaoTelaAgendada = true;
+
+    setTimeout(() => {
+
+        atualizacaoTelaAgendada = false;
+
+        const telaAtual = document.querySelector(".tela.ativa")?.id;
+
+        if (telaAtual === "frota") {
+            renderizarFrota();
+        }
+
+        atualizarPainel();
+        if (telaAtual === "visaoGeral") {
+            renderizarControleFilaAGV();
+            renderizarAGVMapaVisaoGeral();
+        }
+        renderizarDadosTelaAtual();
+
+    }, 150);
+}
+
+
+function renderizarDadosTelaAtual() {
+
+    const telaAtual = document.querySelector(".tela.ativa")?.id;
+
+    if (telaAtual === "sensores") renderizarSensores();
+    if (telaAtual === "diagnostico") renderizarDiagnostico();
+    if (telaAtual === "historico") renderizarHistorico();
+    if (telaAtual === "configuracoes") renderizarConfiguracoes();
+    if (telaAtual === "controleManual") atualizarStatusGarraESP();
+    if (telaAtual === "missoes" && !document.querySelector("#modalEtapaMissao:not([hidden])")) renderizarListaMissoes();
+}
+
+/* ============================================================
+   CALIBRAÇÃO DO QTR-8A
+   ============================================================
+   Enquanto o ESP calibra, o site guarda o mínimo e o máximo que
+   cada sensor já viu (das leituras ao vivo) para mostrar quais
+   sensores ainda precisam passar pela linha.
+*/
+
+const QTR_CONTRASTE_BOM = 1000;     // faixa que deixa o sensor "verde"
+const QTR_CONTRASTE_MINIMO = 100;   // o firmware recusa abaixo disto
+
+function obterCalibracaoQTR(agv) {
+    if (!agv) return null;
+    if (!agv.sensores) agv.sensores = {};
+    if (!agv.sensores.qtr) agv.sensores.qtr = { sensores: [], posicao: 0, erro: 0, correcao: 0 };
+    if (!agv.sensores.qtr.calibracao) {
+        agv.sensores.qtr.calibracao = {
+            estado: "DESCONHECIDA", calibracaoValida: false, emAndamento: false,
+            mensagem: "Aguardando informações do AGV", ultimaAtualizacao: 0
+        };
+    }
+    return agv.sensores.qtr.calibracao;
+}
+
+function registrarLeituraCalibracaoQTR(agv) {
+    const calibracao = obterCalibracaoQTR(agv);
+    const brutos = agv.sensores?.qtr?.sensores;
+    if (!calibracao?.emAndamento || !Array.isArray(brutos) || brutos.length < 8) return;
+    const visto = agv.qtrCalibVisto || (agv.qtrCalibVisto = { min: Array(8).fill(4095), max: Array(8).fill(0), desde: Date.now() });
+    for (let i = 0; i < 8; i++) {
+        const v = Number(brutos[i]);
+        if (!Number.isFinite(v)) continue;
+        visto.min[i] = Math.min(visto.min[i], v);
+        visto.max[i] = Math.max(visto.max[i], v);
+    }
+}
+
+function atualizarPainelCalibracaoQTR(agv = agvAtual()) {
+    const estado = document.getElementById("qtrCalibracaoEstado");
+    const validade = document.getElementById("qtrCalibracaoValidade");
+    const mensagem = document.getElementById("qtrCalibracaoMensagem");
+    const conexao = document.getElementById("qtrCalibracaoConexao");
+    const grade = document.getElementById("qtrCalibGrade");
+    const resumo = document.getElementById("qtrCalibResumo");
+    const btnIniciar = document.getElementById("btnIniciarCalibracaoQTR");
+    const btnFinalizar = document.getElementById("btnFinalizarCalibracaoQTR");
+    const btnCancelar = document.getElementById("btnCancelarCalibracaoQTR");
+    if (!estado || !mensagem) return;
+
+    if (!agv) {
+        estado.textContent = "Sem AGV";
+        [btnIniciar, btnFinalizar, btnCancelar].forEach(b => { if (b) b.disabled = true; });
+        return;
+    }
+    const calibracao = obterCalibracaoQTR(agv);
+    const canal = canalDisponivel(agv);
+    const emAndamento = calibracao.emAndamento === true;
+    const valida = calibracao.calibracaoValida === true;
+    const maquinaSegura = agv.emergencia !== true && Number(agv.velocidade || 0) === 0 &&
+        !["EM_EXECUCAO", "AGUARDANDO_CONFIRMACAO"].includes(agv.estadoMissao);
+    const podeEnviar = canal && agv.online && maquinaSegura;
+
+    if (emAndamento) {
+        const desde = agv.qtrCalibVisto?.desde || calibracao.ultimaAtualizacao || Date.now();
+        estado.className = "pilula azul";
+        estado.innerHTML = `<span class="ponto" style="animation:piscar 1s steps(1) infinite"></span>Calibrando · ${tempoDecorrido(desde)}`;
+    } else {
+        estado.className = `pilula ${valida ? "verde" : "ambar"}`;
+        estado.textContent = valida ? "Calibrado" : "Sem calibração";
+    }
+    if (validade) validade.innerHTML = valida
+        ? `<span class="texto-ok">Válida</span>`
+        : `<span class="texto-aviso">Sem calibração</span>`;
+    mensagem.textContent = calibracao.mensagem || "Aguardando informações do AGV.";
+    mensagem.className = `missao-dica ${/erro|recus|inv[aá]lid/i.test(calibracao.mensagem || "") ? "vermelho" : emAndamento ? "azul" : ""}`;
+    if (conexao) {
+        conexao.textContent = !canal ? "MQTT desconectado." : !agv.online ? "AGV offline." :
+            !maquinaSegura ? "Para calibrar, o AGV precisa estar parado, sem emergência e sem missão." : "";
+    }
+
+    // barras: faixa vista (durante a calibração) e leitura atual
+    if (grade) {
+        const brutos = agv.sensores?.qtr?.sensores || [];
+        const visto = emAndamento ? agv.qtrCalibVisto : null;
+        let prontos = 0, minimos = 0;
+        let html = "";
+        for (let i = 0; i < 8; i++) {
+            const atual = Number(brutos[i]);
+            const min = visto ? visto.min[i] : null, max = visto ? visto.max[i] : null;
+            const faixa = visto && max >= min ? max - min : 0;
+            const pronto = faixa >= QTR_CONTRASTE_BOM;
+            if (pronto) prontos++;
+            if (faixa >= QTR_CONTRASTE_MINIMO) minimos++;
+            const base = v => `${Math.max(0, Math.min(100, v / 4095 * 100))}%`;
+            const status = !visto ? "--" : pronto ? "pronto" : faixa >= QTR_CONTRASTE_MINIMO ? "fraco" : "falta linha";
+            html += `
+                <div class="qtr-calib ${pronto ? "pronto" : ""}">
+                    <div class="qtr-calib-faixa">
+                        ${visto && max >= min ? `<i style="bottom:${base(min)};height:calc(${base(max)} - ${base(min)})"></i>` : ""}
+                        ${Number.isFinite(atual) ? `<b style="bottom:${base(atual)}"></b>` : ""}
+                    </div>
+                    <span>S${i}${visto ? " · " + status : ""}</span>
+                    <small>${visto && max >= min ? `${min}–${max}` : Number.isFinite(atual) ? atual : "--"}</small>
+                </div>`;
+        }
+        ui.trocarHtml(grade, html);
+        if (resumo) {
+            resumo.textContent = emAndamento
+                ? `Barra colorida: faixa já vista por cada sensor (fundo até linha). Traço escuro: leitura agora. ${prontos} de 8 prontos.`
+                : "Aperte “Iniciar calibração” e passe o AGV devagar sobre a linha, para os dois lados.";
+        }
+        if (btnFinalizar) btnFinalizar.title = emAndamento && minimos < 8 ? "Algum sensor ainda não viu a linha: o AGV vai recusar" : "";
+    }
+
+    if (btnIniciar) { btnIniciar.disabled = !podeEnviar || emAndamento; btnIniciar.hidden = emAndamento; }
+    if (btnFinalizar) { btnFinalizar.disabled = !podeEnviar || !emAndamento; btnFinalizar.hidden = !emAndamento; }
+    if (btnCancelar) { btnCancelar.disabled = !canal || !emAndamento; btnCancelar.hidden = !emAndamento; }
+}
+
+async function enviarComandoCalibracaoQTR(acao) {
+    const agv = agvAtual();
+    if (!agv) { ui.aviso("Escolha um AGV.", "aviso"); return; }
+    if (!canalDisponivel(agv)) { ui.aviso("MQTT desconectado.", "erro"); return; }
+    const calibracao = obterCalibracaoQTR(agv);
+    if (acao === "INICIAR") {
+        if (!agv.online) { ui.aviso("O AGV está offline.", "erro"); return; }
+        if (agv.emergencia || Number(agv.velocidade || 0) !== 0 || ["EM_EXECUCAO", "AGUARDANDO_CONFIRMACAO"].includes(agv.estadoMissao)) {
+            ui.aviso("A calibração exige o AGV parado, sem emergência e sem missão em execução.", "aviso");
+            return;
+        }
+        if (calibracao.emAndamento) { ui.aviso("Já existe uma calibração em andamento.", "aviso"); return; }
+    } else if (!calibracao.emAndamento) {
+        ui.aviso("Não existe calibração em andamento.", "aviso");
+        return;
+    }
+    const textos = {
+        INICIAR: ["Calibrar o seguidor de linha?", "Depois de iniciar, passe o AGV devagar sobre a linha, para os dois lados, até todos os sensores ficarem verdes.", "Iniciar"],
+        FINALIZAR: ["Salvar a calibração?", "O AGV confere se todos os sensores viram claro e escuro e grava a calibração na memória.", "Salvar"],
+        CANCELAR: ["Cancelar a calibração?", "A calibração anterior continua valendo.", "Cancelar calibração"]
+    };
+    const [titulo, texto, botao] = textos[acao];
+    if (!(await ui.confirmar({ titulo, texto, confirmar: botao, perigo: acao === "CANCELAR" }))) return;
+    if (acao === "INICIAR") agv.qtrCalibVisto = { min: Array(8).fill(4095), max: Array(8).fill(0), desde: Date.now() };
+    const enviado = publicar(TOPICOS.comando.calibracaoQtr, JSON.stringify({ acao }), agv.id);
+    if (enviado === false) ui.aviso("Não foi possível enviar o comando.", "erro");
+}
+
+function iniciarCalibracaoQTR() { enviarComandoCalibracaoQTR("INICIAR"); }
+function finalizarCalibracaoQTR() { enviarComandoCalibracaoQTR("FINALIZAR"); }
+function cancelarCalibracaoQTR() { enviarComandoCalibracaoQTR("CANCELAR"); }
+
+
+/* ============================================================
+   MISSÃO ATUAL (Visão Geral)
+   ============================================================ */
+
+const TEXTOS_CAUSA = {
+    STOP: "STOP acionado", EMERGENCIA: "emergência", BARREIRA: "obstáculo à frente",
+    FALHA_MCP: "falha de comunicação do painel", FALHA_SENSOR: "falha dos sensores de distância",
+    FALHA_TECNICA: "falha técnica", MUDANCA_MODO: "seletora foi para MANUAL", RFID: "RFID", NENHUMA: "—"
+};
+
+function textoCausa(causa) {
+    return TEXTOS_CAUSA[causa] || String(causa || "").toLowerCase();
+}
+
+function descreverEtapaMissao(etapa) {
+    if (!etapa) return "--";
+    switch (etapa.tipo) {
+        case "IR_PARA": return `Ir para ${nomeCurtoDestino(etapa.destino)}`;
+        case "AGUARDAR": return `Aguardar ${etapa.tempo} s`;
+        case "AGUARDAR_CONFIRMACAO": return "Aguardar confirmação";
+        case "CARREGAR": return "Carregar";
+        case "DESCARREGAR": return "Descarregar";
+        default: return etapa.tipo;
+    }
+}
+
+// Progresso fino: etapas feitas + fração do trecho atual
+function progressoDetalhado(agv, missao) {
+    const total = agv.totalEtapasMissao || missao?.etapas?.length || 0;
+    if (!total) return 0;
+    const indice = Number(agv.etapaMissao) || 0;
+    let fracao = 0;
+    const compilada = agv.missaoCompilada;
+    const etapa = compilada && compilada.missao === (agv.missaoAtual || agv.missaoCarregada) ? compilada.etapas[indice] : null;
+    if (agv.missaoAtual && etapa && etapa.tipo === "MOVIMENTO" && etapa.trechos.length) {
+        const comprimentos = etapa.trechos.map(t => Number(t.comprimento) || 0);
+        const soma = comprimentos.reduce((a, b) => a + b, 0) || 1;
+        const t = Number(agv.trechoMissao) || 0;
+        const feito = comprimentos.slice(0, t).reduce((a, b) => a + b, 0);
+        const p = agv.progressoTrecho;
+        const dentro = p && p.fase !== "ODOMETRIA" && p.trecho === t ? Math.min(comprimentos[t] || 0, p.distancia || 0) : 0;
+        fracao = Math.max(0, Math.min(1, (feito + dentro) / soma));
+    }
+    return Math.max(0, Math.min(100, (indice + fracao) / total * 100));
+}
+
+function montarHtmlMissaoAtual(agv) {
+    if (agv.carregamentoPendente) {
+        return `
+            <div class="missao-cabecalho"><div><h2>Missão</h2><div class="sub"><span class="mono">${escaparHtml(agv.carregamentoPendente.missaoId)}</span> · enviando</div></div></div>
+            <div class="missao-dica azul" style="margin-top:12px">Aguardando o AGV validar a missão…</div>`;
+    }
+    const missaoId = agv.missaoAtual || agv.missaoCarregada;
+    if (!missaoId) {
+        const ultima = agv.estadoMissao === "CONCLUIDA" ? "Última missão concluída." : agv.estadoMissao === "ERRO" ? "A última missão terminou com erro." : agv.estadoMissao === "CANCELADA" ? "A última missão foi cancelada." : "";
+        return `
+            <div class="missao-cabecalho"><div><h2>Missão</h2><div class="sub">Nenhuma missão carregada</div></div></div>
+            <div class="missao-vazia-vg" style="font-size:13px;margin-top:8px">${ultima} Escolha uma missão abaixo e carregue no AGV. O início é sempre no botão START MISSÃO do AGV.</div>`;
+    }
+    const missao = obterMissaoPorId(missaoId);
+    const etapas = missao ? missao.etapas : [];
+    const total = agv.totalEtapasMissao || etapas.length;
+    const indice = Number(agv.etapaMissao) || 0;
+    const estado = agv.estadoMissao;
+    const carregada = estado === "CARREGADA";
+    const progresso = carregada ? 0 : progressoDetalhado(agv, missao);
+
+    const compilada = agv.missaoCompilada && agv.missaoCompilada.missao === missaoId ? agv.missaoCompilada : null;
+    let extraAtual = "";
+    let classeAtual = "";
+    if (estado === "EM_EXECUCAO") {
+        const ce = compilada?.etapas?.[indice];
+        if (ce && ce.tipo === "MOVIMENTO" && ce.trechos.length) extraAtual = `trecho ${Math.min((Number(agv.trechoMissao) || 0) + 1, ce.trechos.length)} de ${ce.trechos.length}`;
+        else if (etapas[indice]?.tipo === "AGUARDAR") extraAtual = `${etapas[indice].tempo} s`;
+        else extraAtual = "agora";
+    } else if (estado === "INTERROMPIDA") {
+        extraAtual = textoCausa(agv.causaInterrupcao);
+        classeAtual = agv.causaInterrupcao === "EMERGENCIA" ? "erro" : "pausa";
+    } else if (estado === "AGUARDANDO_CONFIRMACAO") {
+        extraAtual = "aguarda você";
+        classeAtual = "pausa";
+    }
+
+    const itens = etapas.map((etapa, i) => {
+        let classe = "", marca = String(i + 1), extra = "";
+        if (!carregada && i < indice) { classe = "feita"; marca = ui.icone("ok", "icone-p"); }
+        else if (!carregada && i === indice) { classe = `atual ${classeAtual}`; extra = extraAtual; }
+        return `<li class="${classe}"><span class="marca-etapa">${marca}</span><span>${escaparHtml(descreverEtapaMissao(etapa))}</span>${extra ? `<span class="timeline-extra">${escaparHtml(extra)}</span>` : ""}</li>`;
+    }).join("");
+
+    let dica = "";
+    switch (estado) {
+        case "CARREGADA":
+            dica = agv.modo === "AUTOMATICO"
+                ? `<div class="missao-dica azul">Pronta. Aperte <b>START MISSÃO</b> no painel do AGV para começar.</div>`
+                : `<div class="missao-dica ambar">Passe a seletora para <b>AUTOMÁTICO</b> e aperte <b>START MISSÃO</b> no AGV.</div>`;
+            break;
+        case "AGUARDANDO_CONFIRMACAO":
+            dica = `<div class="missao-dica ciano"><b>${escaparHtml(etapas[indice]?.mensagem || "Confirmar etapa")}</b><br>Confirme aqui ou no botão START MISSÃO do AGV.</div>
+                    <button type="button" class="btn btn-primario btn-confirmar-etapa" onclick="confirmarEtapaAGV()">Confirmar etapa</button>`;
+            break;
+        case "INTERROMPIDA":
+            dica = agv.causaInterrupcao === "EMERGENCIA"
+                ? `<div class="missao-dica vermelho">Parada por emergência. Libere o botão e aperte REARME no AGV; depois START MISSÃO para continuar.</div>`
+                : agv.causaInterrupcao === "BARREIRA"
+                    ? `<div class="missao-dica ambar">Obstáculo à frente. O AGV continua sozinho quando a frente ficar livre.</div>`
+                    : `<div class="missao-dica ambar">Parada: ${escaparHtml(textoCausa(agv.causaInterrupcao))}. Resolva e aperte START MISSÃO no AGV para retomar.</div>`;
+            break;
+    }
+
+    return `
+        <div class="missao-cabecalho">
+            <div><h2>Missão</h2><div class="sub"><span class="mono">${escaparHtml(missaoId)}</span>${missao?.nome ? ` · ${escaparHtml(missao.nome)}` : ""}</div></div>
+            <span class="mono suave" style="font-size:13px">${carregada ? "carregada" : `etapa ${Math.min(indice + 1, total)} de ${total}`}</span>
+        </div>
+        <div class="barra-progresso" style="margin:12px 0"><div style="width:${progresso.toFixed(1)}%"></div></div>
+        <ol class="timeline">${itens}</ol>
+        ${dica ? `<div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">${dica}</div>` : ""}`;
+}
+
+
+/* ============================================================
+   SENSORES
+   ============================================================ */
+
+const SINAIS_LED_SITE = {
+    INICIANDO: ["#F2F4F7", "perseguicao", "Iniciando"],
+    FALHA: ["#FF2FB9", "pisca", "Falha técnica ou erro na missão"],
+    EMERGENCIA: ["#FF3B3B", "estrobo", "Emergência"],
+    REARME: ["#FFB000", "pisca", "Aguardando rearme"],
+    DESLIGADO: ["#8A939E", "respira", "Desligado (STOP)"],
+    OBSTACULO: ["#FF6A1A", "respira-rapida", "Obstáculo à frente"],
+    MANUTENCAO: ["#F2F4F7", "perseguicao", "Calibração, teste ou atualização"],
+    MANUAL_PRONTO: ["#2F6BFF", "fixo", "Manual, parado"],
+    MANUAL_ANDANDO: ["#2F6BFF", "perseguicao", "Manual, andando"],
+    PASSAR_AUTOMATICO: ["#2F6BFF", "pisca", "Missão carregada: passe para AUTOMÁTICO"],
+    AUTO_PRONTO: ["#22D35B", "fixo", "Automático, pronto"],
+    APERTE_START: ["#22D35B", "pisca", "Missão pronta: aperte START MISSÃO"],
+    MISSAO_ANDANDO: ["#22D35B", "perseguicao", "Em missão, andando"],
+    MISSAO_PARADA: ["#22D35B", "respira", "Em missão, parado numa etapa"],
+    CONFIRMACAO: ["#22D8FF", "pisca", "Aguardando confirmação do operador"],
+    CONCLUIDA: ["#22D35B", "flash3", "Missão concluída"],
+    TESTE_LEDS: ["#F2F4F7", "fixo", "Teste dos LEDs"]
+};
+
+const NOMES_EFEITO = { fixo: "aceso", pisca: "piscando", estrobo: "piscando rápido", respira: "respirando", "respira-rapida": "respirando rápido", perseguicao: "correndo", flash3: "3 piscadas" };
+
+function fitaLedHtml(nome, quantidade = 5, classe = "") {
+    const sinal = SINAIS_LED_SITE[nome];
+    if (!sinal) return `<span class="fita-led ${classe}">${"<i></i>".repeat(quantidade)}</span>`;
+    const [cor, efeito] = sinal;
+    const leds = Array.from({ length: quantidade }, (_, i) =>
+        `<i class="fx-${efeito}" style="--led:${cor};--i:${i};--n:${quantidade}"></i>`).join("");
+    return `<span class="fita-led ${classe}">${leds}</span>`;
+}
+
+function renderizarSensores() {
+    const agv = agvAtual();
+    if (!agv) return;
+    const set = (id, valor) => { const el = document.getElementById(id); if (el) el.textContent = valor; };
+    const atualizado = agv.online ? "ao vivo" : "offline · últimos valores recebidos";
+    const sub = document.getElementById("subtituloTela");
+    if (sub) sub.textContent = `AGV ${agv.id} · ${agv.nome} — ${atualizado}`;
+
+    // ---------------- QTR ----------------
+    const qtr = agv.sensores?.qtr || {};
+    const brutos = Array.isArray(qtr.sensores) ? qtr.sensores : [];
+    const normalizados = Array.isArray(qtr.normalizados) ? qtr.normalizados : [];
+    const caixa = document.getElementById("qtrSensores");
+    if (caixa && !caixa.children.length) {
+        caixa.innerHTML = Array.from({ length: 8 }, (_, i) =>
+            `<div class="qtr-barra"><div class="qtr-coluna"><i id="qtrA${i}"></i></div><strong id="qtrValorA${i}">--</strong><span>S${i}</span></div>`).join("");
+    }
+    for (let i = 0; i < 8; i++) {
+        const barra = document.getElementById(`qtrA${i}`);
+        const bruto = brutos[i];
+        const altura = qtr.calibrado ? (Number(normalizados[i]) || 0) / 10 : typeof bruto === "number" ? bruto / 4095 * 100 : 0;
+        if (barra) {
+            barra.style.height = `${Math.max(0, Math.min(100, altura))}%`;
+            barra.classList.toggle("forte", altura > 60);
+        }
+        set(`qtrValorA${i}`, typeof bruto === "number" ? bruto : "--");
+    }
+    const pilula = document.getElementById("qtrPilula");
+    if (pilula) {
+        pilula.className = `pilula ${!agv.online ? "cinza" : qtr.linha ? "verde" : "ambar"}`;
+        pilula.textContent = !agv.online ? "Sem dados" : qtr.linha ? "Linha detectada" : "Sem linha";
+    }
+    const posicao = document.getElementById("qtrLinhaPosicao");
+    if (posicao) {
+        // posição 0..7000 (sensor 0 à direita): 0 = direita
+        const p = Number(qtr.posicao);
+        const fracao = Number.isFinite(p) ? 1 - Math.max(0, Math.min(7000, p)) / 7000 : 0.5;
+        posicao.classList.toggle("sem-linha", !qtr.linha);
+        posicao.firstElementChild.style.left = `${(qtr.linha ? fracao : 0.5) * 100}%`;
+    }
+    set("qtrPosicao", qtr.linha ? qtr.posicao : "SEM LINHA");
+    set("qtrErro", qtr.linha && typeof qtr.erro === "number" ? (qtr.erro > 0 ? "+" : "") + qtr.erro : "--");
+    const qtrCorrecao = document.getElementById("qtrCorrecao");
+    if (qtrCorrecao) qtrCorrecao.innerHTML = typeof qtr.correcao === "number" ? `${ui.numero(qtr.correcao, 2)} <span class="unidade">rad/s</span>` : "--";
+    set("qtrSub", qtr.calibrado ? "Calibrado · sensor 0 à direita" : "Sem calibração: as barras mostram o valor bruto · sensor 0 à direita");
+    atualizarPainelCalibracaoQTR(agv);
+
+    // ---------------- VL53 ----------------
+    const vl53 = agv.sensores?.vl53 || {};
+    const limite = Number(vl53.limite) || 1000;
+    const alcance = 2000;
+    set("vl53Sub", `Os dois olham para a frente · limite atual ${ui.numero(limite / 1000, 2)} m (${agv.modo === "MANUAL" ? "manual" : "automático"})`);
+    set("vl53EscalaLimite", `barreira ${ui.numero(limite / 1000, 2)} m`);
+    [1, 2].forEach(n => {
+        const d = vl53[`d${n}`];
+        const valido = vl53[`v${n}`];
+        const barra = document.getElementById(`vl53Barra${n}`);
+        const marca = document.getElementById(`vl53Limite${n}`);
+        if (marca) marca.style.left = `${Math.min(100, limite / alcance * 100)}%`;
+        let texto = "--", largura = 0, perto = false, estado = "";
+        if (typeof d === "number") {
+            if (!valido) { texto = "sem leitura"; estado = "Sem leitura recente: o AGV para por segurança se durar mais de 0,3 s."; }
+            else if (d < 0) { texto = "fora de alcance (livre)"; largura = 100; }
+            else { texto = `${ui.numero(d / 1000, 2)} m`; largura = Math.min(100, d / alcance * 100); perto = d < limite; estado = perto ? "Objeto dentro da barreira" : ""; }
+        }
+        set(`vl53Valor${n}`, texto);
+        set(`vl53Estado${n}`, estado);
+        if (barra) { barra.style.width = `${largura}%`; barra.classList.toggle("perto", perto); }
+    });
+    const vlPilula = document.getElementById("vl53Pilula");
+    if (vlPilula) {
+        const b = agv.barreira;
+        vlPilula.className = `pilula ${!agv.online ? "cinza" : b === "INVADIDA" ? "vermelho" : b === "FALHA_LEITURA" ? "ambar" : "verde"}`;
+        vlPilula.textContent = !agv.online ? "Sem dados" : b === "INVADIDA" ? "Invadida" : b === "FALHA_LEITURA" ? "Falha de leitura" : "Livre";
+    }
+
+    // ---------------- RFID ----------------
+    const rfid = agv.sensores?.rfid || {};
+    const rfidStatus = document.getElementById("rfidStatus");
+    if (rfidStatus) { rfidStatus.className = `pilula ${agv.online ? "verde" : "cinza"}`; rfidStatus.textContent = agv.online ? "Online" : "Offline"; }
+    set("rfidUltimo", rfid.ultimo && rfid.ultimo !== "--" ? rfid.ultimo : "Nenhuma tag");
+    set("rfidEstacao", descreverTag(rfid.ultimo));
+    set("rfidHorario", rfid.quando ? tempoRelativo(rfid.quando) : rfid.horario || "--");
+    set("rfidResultado", rfid.resultado || "--");
+    const lista = document.getElementById("rfidLista");
+    if (lista) {
+        const itens = (agv.rfidHistorico || []).slice(0, 6);
+        ui.trocarHtml(lista, itens.length ? itens.map(r =>
+            `<li><span>${new Date(r.quando).toLocaleTimeString("pt-BR")}</span><span>${escaparHtml(r.codigo)}</span><span class="${descreverTag(r.codigo) === "fora da planta" ? "texto-aviso" : ""}">${escaparHtml(descreverTag(r.codigo))}</span></li>`).join("")
+            : `<li><span></span><span class="suave">Nenhuma leitura ainda</span><span></span></li>`);
+    }
+
+    renderizarPainelEntradas(agv);
+}
+
+function descreverTag(codigo) {
+    if (!codigo || codigo === "--") return "--";
+    const achado = Planta.localizarRfid(plantaPublicada(), codigo);
+    if (!achado) return "fora da planta";
+    if (achado.tipo === "NO") return Planta.nomeDoPonto(plantaPublicada(), achado.no.id);
+    return `tag do segmento ${achado.segmento.id}`;
+}
+
+// Entradas do MCP: bit 0 START, 1 REARME, 2 EMERGÊNCIA (1 = solta), 3 SELETORA (1 = AUTO),
+// 4 STOP (1 = solto), 5 START MISSÃO
+function renderizarPainelEntradas(agv) {
+    const caixa = document.getElementById("painelEntradas");
+    const luzes = document.getElementById("painelLuzes");
+    if (!caixa || !luzes) return;
+    const bits = Number(agv.entradas);
+    const conhecido = agv.online && Number.isFinite(bits) && bits >= 0;
+    const bit = n => Boolean(bits & (1 << n));
+    const entrada = (nome, ativo, textoAtivo, textoNormal, perigo) => `
+        <div class="entrada ${conhecido && ativo ? (perigo ? "perigo" : "ativa") : ""}"><i></i>
+            <span><b>${nome}</b><small>${!conhecido ? "sem dados" : ativo ? textoAtivo : textoNormal}</small></span></div>`;
+    ui.trocarHtml(caixa, [
+        entrada("START", bit(0), "pressionado", "solto"),
+        entrada("STOP", !bit(4), "acionado (travado)", "solto", true),
+        entrada("EMERGÊNCIA", !bit(2), "acionada", "solta", true),
+        entrada("REARME", bit(1), "pressionado", "solto"),
+        entrada("START MISSÃO", bit(5), "pressionado", "solto"),
+        entrada("SELETORA", !bit(3), "MANUAL", "AUTOMÁTICO")
+    ].join(""));
+    if (!conhecido && agv.online && bits === -1) caixa.insertAdjacentHTML("afterbegin", `<div class="missao-dica vermelho" style="grid-column:1/-1">O painel (MCP23017) não está respondendo.</div>`);
+
+    const leds = agv.leds;
+    const sinal = SINAIS_LED_SITE[leds];
+    const startMissaoAceso = ["EM_EXECUCAO"].includes(agv.estadoMissao) && leds !== "APERTE_START" && leds !== "CONFIRMACAO";
+    const startMissaoPisca = leds === "APERTE_START" || leds === "CONFIRMACAO";
+    const rearmePisca = agv.aguardandoRearme && !agv.emergencia;
+    const luz = (classeLed, cor, nome, texto) => `
+        <div class="luz"><span class="luz-led ${classeLed}" style="--led:${cor}"></span><span><b>${nome}</b><small>${texto}</small></span></div>`;
+    ui.trocarHtml(luzes, [
+        luz(!agv.online ? "" : startMissaoPisca ? "pisca" : startMissaoAceso ? "aceso" : "", "var(--accent)", "START MISSÃO",
+            !agv.online ? "sem dados" : startMissaoPisca ? (leds === "CONFIRMACAO" ? "piscando · confirma a etapa" : "piscando · missão pronta") : startMissaoAceso ? "aceso · missão em andamento" : "apagado"),
+        luz(!agv.online ? "" : rearmePisca ? "pisca" : "", "#F0C419", "REARME", !agv.online ? "sem dados" : rearmePisca ? "piscando · aperte para rearmar" : "apagado"),
+        `<div class="luz">${fitaLedHtml(agv.online ? leds : null, 5)}<span><b>Fitas de LED</b><small>${!agv.online ? "sem dados" : sinal ? `${NOMES_EFEITO[sinal[1]]} · ${sinal[2]}` : escaparHtml(leds || "--")}</small></span></div>`
+    ].join(""));
+}
+
+
+/* ============================================================
+   DIAGNÓSTICO
+   ============================================================ */
+
+function nivelPorErros(n) {
+    return n > 0 ? "aviso" : "ok";
+}
+
+function itemAutoteste(agv, id) {
+    return (agv.autoteste?.itens || []).find(i => i.id === id) || null;
+}
+
+function componentesDiagnostico(agv) {
+    const d = agv.diagnostico || {};
+    const e = d.erros || {};
+    const conhecido = Boolean(agv.diagnostico);
+    const hardwareFalha = agv.sistema?.hardware && agv.sistema.hardware !== "OK" ? agv.sistema.hardware : "";
+    const lista = [];
+    const add = (nome, detalhe, nivel, contagem, idAutoteste) => {
+        const at = idAutoteste ? itemAutoteste(agv, idAutoteste) : null;
+        if (at && at.nivel === "FALHA") { nivel = "falha"; detalhe = at.detalhe; }
+        else if (at && at.nivel === "AVISO" && nivel === "ok") { nivel = "aviso"; detalhe = at.detalhe; }
+        lista.push({ nome, detalhe, nivel: conhecido || at ? nivel : "", contagem: conhecido ? String(contagem ?? 0) : "--" });
+    };
+    add("Painel de botões (MCP23017)", d.entradas === -1 ? "Sem resposta no endereço 0x20" : "Respondendo · endereço 0x20",
+        d.entradas === -1 || /MCP/i.test(hardwareFalha) ? "falha" : nivelPorErros(e.mcp), e.mcp, "mcp");
+    add("Multiplexador I²C (TCA9548A)", "Endereço 0x70", /TCA/i.test(hardwareFalha) ? "falha" : nivelPorErros(e.tca), e.tca, "tca");
+    add("Distância esquerdo (VL53L0X)", e.vl53_1 > 0 ? "Canal 0 · falhas de leitura (cabo ou conector?)" : "Canal 0", nivelPorErros(e.vl53_1), e.vl53_1, "vl53_1");
+    add("Distância direito (VL53L0X)", e.vl53_2 > 0 ? "Canal 1 · falhas de leitura (cabo ou conector?)" : "Canal 1", nivelPorErros(e.vl53_2), e.vl53_2, "vl53_2");
+    const calibrado = agv.sensores?.qtr?.calibrado;
+    add("Seguidor de linha (QTR-8A)", `${calibrado ? "Calibrado" : "Sem calibração"} · linha perdida ${e.linhaPerdida ?? 0}×`,
+        calibrado === false ? "aviso" : "ok", e.linhaPerdida, "qtr");
+    add("Leitor RFID (RDM6300)", `${ui.milhar(d.rfidLeituras ?? 0)} leituras · ${e.rfidInvalidos ?? 0} quadros inválidos`,
+        nivelPorErros(e.rfidInvalidos), e.rfidInvalidos, "rfid");
+    const g = agv.garra;
+    add("Garra (motor 5)", g ? (g.estado === "NAO_CONFIGURADA" ? "Desativada (GARRA_CURSO = 0)" : `Curso de ${g.curso} passos · em ${g.posicao}`) : "--", "ok", 0, "garra");
+    const p = agv.parametros || {};
+    add("Fitas de LED", `Fita 1: ${p.LEDS_FITA_ESTADO ?? "--"} LEDs · Fita 2: ${p.LEDS_FITA_COMUNICACAO ?? "--"} LEDs · ${SINAIS_LED_SITE[d.leds]?.[2] || d.leds || "--"}`, "ok", 0);
+    add("Wi-Fi e broker", `${d.quedasWifi ?? 0} quedas do Wi-Fi · ${d.quedasMqtt ?? 0} do MQTT desde que ligou`,
+        (d.quedasWifi || 0) + (d.quedasMqtt || 0) > 3 ? "aviso" : "ok", (d.quedasWifi || 0) + (d.quedasMqtt || 0), "wifi");
+    add("Memória de configuração", agv.parametros ? `${Object.keys(agv.parametros).length} parâmetros recebidos` : "Aguardando parâmetros", "ok", 0, "braco");
+    if (hardwareFalha) lista.unshift({ nome: "Inicialização do hardware", detalhe: hardwareFalha, nivel: "falha", contagem: "!" });
+    return lista;
+}
+
+function guardarHistoricoDiagnostico(agv, dados) {
+    const lista = agv.loopHistorico || (agv.loopHistorico = []);
+    lista.push({ t: Date.now(), medio: Number(dados.loopMedioUs) || 0, max: Number(dados.loopMaxUs) || 0 });
+    while (lista.length > 72) lista.shift();
+}
+
+function barrasWifi(rssi) {
+    if (!Number.isFinite(rssi) || rssi >= 0) return 0;
+    return rssi >= -55 ? 4 : rssi >= -67 ? 3 : rssi >= -75 ? 2 : rssi >= -85 ? 1 : 0;
+}
+
+function renderizarDiagnostico() {
+    const agv = agvAtual();
+    if (!agv) return;
+    const d = agv.diagnostico || {};
+    const sistema = agv.sistema || {};
+    const conhecido = Boolean(agv.diagnostico);
+
+    // resumo
+    const componentes = componentesDiagnostico(agv);
+    const falhas = componentes.filter(c => c.nivel === "falha");
+    const avisos = componentes.filter(c => c.nivel === "aviso");
+    const resumo = document.getElementById("diagResumo");
+    if (resumo) {
+        const tipo = !agv.online && !conhecido ? "" : falhas.length ? "falha" : avisos.length ? "aviso" : conhecido ? "ok" : "";
+        const pior = falhas[0] || avisos[0];
+        resumo.className = `diag-resumo ${tipo}`;
+        ui.trocarHtml(resumo, `
+            <div style="display:flex;align-items:center;gap:14px">
+                <span class="diag-resumo-icone">${ui.icone(tipo === "ok" ? "ok" : tipo ? "alerta" : "info", "icone-g")}</span>
+                <div>
+                    <div class="diag-resumo-titulo">${!conhecido ? (agv.online ? "Aguardando o primeiro diagnóstico" : "Sem dados") : falhas.length ? `${falhas.length} falha${falhas.length > 1 ? "s" : ""}` : avisos.length ? `${avisos.length} ponto${avisos.length > 1 ? "s" : ""} de atenção` : "Tudo certo"}</div>
+                    <div class="suave">${conhecido ? `${componentes.length - falhas.length - avisos.length} de ${componentes.length} componentes sem problema` : agv.online ? "O AGV manda o diagnóstico a cada 5 s (firmware 0.7 ou mais novo)." : "O AGV está offline."}</div>
+                </div>
+            </div>
+            <div class="diag-resumo-detalhe">${pior ? `<b>${escaparHtml(pior.nome)}</b>: ${escaparHtml(pior.detalhe)}` : ""}</div>`);
+    }
+    const badge = document.getElementById("menuBadgeDiag");
+    if (badge) badge.hidden = !(falhas.length || avisos.length);
+
+    const comp = document.getElementById("diagComponentes");
+    if (comp) ui.trocarHtml(comp, componentes.map(c => `
+        <div class="componente ${c.nivel}"><i></i><span><b>${escaparHtml(c.nome)}</b><small>${escaparHtml(c.detalhe)}</small></span><span class="contagem">${escaparHtml(c.contagem)}</span></div>`).join(""));
+
+    // comunicação
+    const rssi = Number(d.rssi);
+    const barras = barrasWifi(rssi);
+    const qualidade = !conhecido ? "--" : barras >= 4 ? "Sinal ótimo" : barras === 3 ? "Sinal bom" : barras === 2 ? "Sinal fraco" : "Sinal ruim";
+    const classeSinal = barras >= 3 ? "" : barras === 2 ? "fraco" : "ruim";
+    const resposta = agv.online && agv.ultimoHeartbeat ? `${ui.numero((Date.now() - agv.ultimoHeartbeat) / 1000, 1)} s` : "--";
+    const com = document.getElementById("diagComunicacao");
+    if (com) ui.trocarHtml(com, `
+        <div class="card-header"><h2>Comunicação</h2><span class="pilula ${agv.online ? "verde" : "vermelho"}">${agv.online ? "Online" : "Offline"}</span></div>
+        <div class="sinal-wifi ${classeSinal}">
+            <svg width="56" height="44" viewBox="0 0 56 44" role="img" aria-label="Sinal Wi-Fi: ${barras} de 4 barras">
+                ${[0, 1, 2, 3].map(i => `<rect x="${2 + i * 14}" y="${32 - i * 10}" width="10" height="${10 + i * 10}" rx="2" class="${i < barras ? "on" : ""}"></rect>`).join("")}
+            </svg>
+            <div>
+                <div style="font-weight:700;font-size:17px">${qualidade} <span class="mono suave" style="font-weight:500;font-size:14px">${Number.isFinite(rssi) && conhecido ? rssi + " dBm" : ""}</span></div>
+                <div class="suave" style="font-size:12.5px">IP ${escaparHtml(sistema.ip || "--")} · ${escaparHtml(sistema.ota_host || "")}</div>
+            </div>
+        </div>
+        <dl class="tiles" style="margin:14px 0 0">
+            <div class="tile"><dt>Última mensagem</dt><dd>${resposta}</dd></div>
+            <div class="tile"><dt>Quedas</dt><dd>${conhecido ? (d.quedasWifi || 0) + (d.quedasMqtt || 0) : "--"} <span class="unidade">desde ligar</span></dd></div>
+            <div class="tile"><dt>Na fila</dt><dd>${conhecido ? d.filaEventos ?? 0 : "--"} <span class="unidade">eventos</span></dd></div>
+        </dl>
+        ${d.erroMqtt && d.erroMqtt !== 0 ? `<p class="suave" style="font-size:12.5px;margin-top:8px">Último código de erro do MQTT: ${escaparHtml(d.erroMqtt)}</p>` : ""}`);
+
+    // firmware
+    const heap = Number(d.heap), heapMin = Number(d.heapMinimo);
+    const heapPct = Number.isFinite(heap) ? Math.min(100, heap / 320000 * 100) : 0;
+    const historico = agv.loopHistorico || [];
+    const maxGrafico = Math.max(40000, ...historico.map(h => h.max));
+    const pontos = historico.map((h, i) => `${historico.length > 1 ? (i / (historico.length - 1) * 300).toFixed(1) : 0},${(46 - h.max / maxGrafico * 42).toFixed(1)}`).join(" ");
+    const y30 = (46 - 30000 / maxGrafico * 42).toFixed(1);
+    const fw = document.getElementById("diagFirmwareCard");
+    const segundos = Number(d.uptime ?? agv.uptime ?? sistema.uptime);
+    if (fw) ui.trocarHtml(fw, `
+        <div class="card-header"><h2>Firmware</h2><span class="pilula mono">${escaparHtml(sistema.versao || "--")}</span></div>
+        <dl class="lista-dl">
+            <dt>Ligado há</dt><dd class="mono">${agv.online && Number.isFinite(segundos) ? ui.duracao(segundos) : "--"}</dd>
+            <dt>Último reinício</dt><dd>${escaparHtml(d.reinicio || "--")}</dd>
+            <dt>Hardware</dt><dd>${escaparHtml(sistema.hardware || "--")}</dd>
+        </dl>
+        <div class="medidor" style="margin-top:14px">
+            <div class="medidor-topo"><span>Memória livre</span><span>${Number.isFinite(heap) ? Math.round(heap / 1024) + " KB" : "--"} <span class="suave">${Number.isFinite(heapMin) ? `(mín. ${Math.round(heapMin / 1024)} KB)` : ""}</span></span></div>
+            <div class="barra-progresso"><div style="width:${heapPct}%;background:${heap < 40000 ? "var(--amber)" : "var(--green)"}"></div></div>
+        </div>
+        <div class="medidor" style="margin-top:14px">
+            <div class="medidor-topo"><span>Tempo de cada volta do programa</span><span>${conhecido ? ui.numero((d.loopMedioUs || 0) / 1000, 1) + " ms" : "--"} <span class="suave">${conhecido ? `(máx. ${ui.numero((d.loopMaxUs || 0) / 1000, 0)} ms)` : ""}</span></span></div>
+            <svg class="grafico-loop" viewBox="0 0 300 48" preserveAspectRatio="none" role="img" aria-label="Tempo máximo do laço nos últimos minutos">
+                <path d="M0 ${y30} H300" stroke="var(--amber)" stroke-dasharray="3 4" stroke-width="1" vector-effect="non-scaling-stroke"></path>
+                ${historico.length > 1 ? `<polyline fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke" points="${pontos}"></polyline>` : ""}
+            </svg>
+            <div class="suave" style="font-size:12px;margin-top:4px">Linha tracejada: 30 ms. Picos acontecem nas reconexões; os motores têm relógio próprio e não são afetados.</div>
+        </div>`);
+
+    // uso
+    const u = d.uso || {};
+    const km = Number(u.metros) / 1000;
+    const manut = agv.manutencao || { intervaloKm: 50, ultimaKm: 0 };
+    const desdeRevisao = Number.isFinite(km) ? Math.max(0, km - (manut.ultimaKm || 0)) : 0;
+    const pctRevisao = Math.min(100, desdeRevisao / (manut.intervaloKm || 50) * 100);
+    const usoCard = document.getElementById("diagUso");
+    const valorUso = (v, f) => conhecido && v !== undefined ? f(v) : "--";
+    if (usoCard) ui.trocarHtml(usoCard, `
+        <div class="card-header"><h2>Uso e manutenção</h2><span>gravado no AGV</span></div>
+        <div class="tiles">
+            <div class="tile"><div class="tile-rotulo">Rodado</div><div class="tile-valor">${valorUso(u.metros, m => m >= 1000 ? ui.numero(m / 1000, 1) + " km" : ui.numero(m, 0) + " m")}</div></div>
+            <div class="tile"><div class="tile-rotulo">Ligado</div><div class="tile-valor">${valorUso(u.horasLigado, h => ui.numero(h, h < 10 ? 1 : 0) + " h")}</div></div>
+            <div class="tile"><div class="tile-rotulo">Energizado</div><div class="tile-valor">${valorUso(u.horasEnergizado, h => ui.numero(h, h < 10 ? 1 : 0) + " h")}</div></div>
+            <div class="tile"><div class="tile-rotulo">Missões</div><div class="tile-valor">${valorUso(u.missoes, ui.milhar)}</div></div>
+            <div class="tile"><div class="tile-rotulo">Com erro</div><div class="tile-valor">${valorUso(u.missoesErro, ui.milhar)}</div></div>
+            <div class="tile"><div class="tile-rotulo">Emergências</div><div class="tile-valor">${valorUso(u.emergencias, ui.milhar)}</div></div>
+        </div>
+        <div class="editor-bloco" style="margin-top:12px">
+            <div class="medidor-topo"><b>Revisão das rodas</b><span>${ui.numero(desdeRevisao, 1)} / ${ui.numero(manut.intervaloKm || 50, 0)} km</span></div>
+            <div class="barra-progresso"><div style="width:${pctRevisao}%;background:${pctRevisao >= 85 ? "var(--amber)" : "var(--green)"}"></div></div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12.5px" class="suave">
+                <span style="flex:1 1 160px">${pctRevisao >= 100 ? "Revisão vencida." : `Faltam ~${ui.numero(Math.max(0, (manut.intervaloKm || 50) - desdeRevisao), 1)} km.`} ${u.reinicios !== undefined ? `· ${u.reinicios} reinícios no total` : ""}</span>
+                <label class="editor-com-unidade" style="width:130px"><input type="number" id="diagIntervaloRevisao" min="1" max="2000" step="1" value="${manut.intervaloKm || 50}" aria-label="Intervalo de revisão"><em>km</em></label>
+                <button type="button" class="btn btn-mini" id="diagRevisaoFeita" ${conhecido ? "" : "disabled"}>Revisão feita</button>
+            </div>
+        </div>`);
+
+    // autoteste
+    const at = agv.autoteste;
+    const atCard = document.getElementById("diagAutotesteCard");
+    if (atCard) {
+        const itens = at?.itens || [];
+        const okCount = itens.filter(i => i.nivel === "OK" || i.nivel === "INFO").length;
+        const resultado = at?.resultado;
+        const pilula = !at ? `<span class="pilula cinza">Nunca rodou</span>`
+            : resultado === "FALHA" ? `<span class="pilula vermelho">REPROVADO</span>`
+            : resultado === "AVISO" ? `<span class="pilula ambar">COM AVISOS ${okCount}/${itens.length}</span>`
+            : `<span class="pilula verde">APROVADO ${okCount}/${itens.length}</span>`;
+        const nomes = { mcp: "Painel", painel: "Fiação do painel", tca: "I²C", vl53_1: "Distância esq.", vl53_2: "Distância dir.", qtr: "QTR", qtr_calibracao: "Calibração QTR", rfid: "RFID", rfid_ruido: "Ruído RFID", wifi: "Wi-Fi", memoria: "Memória", loop: "Tempo do laço", braco: "Braço", garra: "Garra" };
+        const problemas = itens.filter(i => i.nivel === "AVISO" || i.nivel === "FALHA" || i.nivel === "INFO");
+        ui.trocarHtml(atCard, `
+            <div class="card-header" style="margin-bottom:6px"><h2>Último autoteste</h2>${agv.autotesteRodando ? `<span class="pilula azul">Rodando…</span>` : pilula}</div>
+            <div class="suave" style="font-size:13px;margin-bottom:10px">${at ? `${at.recebido ? new Date(at.recebido).toLocaleString("pt-BR") : ""} · firmware ${escaparHtml(at.versao || "--")} · com o AGV ligado há ${ui.duracao(at.uptime)}` : "Confere painel, sensores, Wi-Fi, memória e configuração em 2 segundos, com o AGV parado."}</div>
+            <div class="autoteste-itens">${itens.map(i => `<span class="autoteste-item ${i.nivel.toLowerCase()}" title="${escaparHtml(i.detalhe)}">${ui.icone(i.nivel === "OK" ? "ok" : i.nivel === "INFO" ? "info" : "alerta", "icone-p")}${escaparHtml(nomes[i.id] || i.id)}</span>`).join("")}</div>
+            ${problemas.length ? `<ul class="autoteste-detalhes" style="margin-top:12px">${problemas.map(i => `<li><b class="${i.nivel === "FALHA" ? "texto-erro" : i.nivel === "AVISO" ? "texto-aviso" : ""}">${escaparHtml(nomes[i.id] || i.id)}</b><span>${escaparHtml(i.detalhe)}</span></li>`).join("")}</ul>` : ""}`);
+    }
+    const at2 = document.getElementById("diagAtualizado");
+    if (at2) at2.textContent = agv.diagnosticoRecebido ? `Atualizado ${tempoRelativo(agv.diagnosticoRecebido)}` : "";
+    const btnAuto = document.getElementById("diagAutoteste");
+    const btnLeds = document.getElementById("diagTestarLeds");
+    const podeTestar = agv.online && canalDisponivel(agv) && !["EM_EXECUCAO", "AGUARDANDO_CONFIRMACAO"].includes(agv.estadoMissao);
+    if (btnAuto) btnAuto.disabled = !podeTestar || agv.autotesteRodando;
+    if (btnLeds) btnLeds.disabled = !podeTestar;
+}
+
+async function rodarAutoteste() {
+    const agv = agvAtual();
+    if (!agv) return;
+    if (Number(agv.velocidade) > 0.001) { ui.aviso("Pare o AGV antes do autoteste.", "aviso"); return; }
+    const ok = await ui.confirmar({ titulo: "Rodar o autoteste?", texto: "O AGV fica parado por 2 segundos lendo todos os sensores. Mantenha a frente livre.", confirmar: "Rodar" });
+    if (!ok) return;
+    if (publicar(TOPICOS.comando.autoteste, JSON.stringify({ acao: "INICIAR" }), agv.id)) {
+        agv.autotesteRodando = Date.now();
+        setTimeout(() => { if (agv.autotesteRodando && Date.now() - agv.autotesteRodando >= 7900) { agv.autotesteRodando = null; ui.aviso("O AGV não respondeu ao autoteste.", "erro"); agendarAtualizacaoTela(); } }, 8000);
+        registrarAcaoSite(agv.id, "sistema", "AUTOTESTE_SOLICITADO", "");
+        renderizarDiagnostico();
+    } else ui.aviso("Não foi possível enviar o comando.", "erro");
+}
+
+function testarLeds() {
+    const agv = agvAtual();
+    if (!agv) return;
+    if (publicar(TOPICOS.comando.autoteste, JSON.stringify({ acao: "LEDS" }), agv.id)) {
+        ui.aviso("Teste dos LEDs: as duas fitas passam por vermelho, verde, azul e branco. Confira se as cores aparecem nessa ordem; senão, ajuste a ordem das cores em Configurações › LEDs.", "info");
+        registrarAcaoSite(agv.id, "sistema", "TESTE_LEDS_SOLICITADO", "");
+    } else ui.aviso("Não foi possível enviar o comando.", "erro");
+}
+
+function relatorioDiagnostico(agv) {
+    const d = agv.diagnostico || {};
+    const linhas = [
+        `Relatório do AGV ${agv.id} (${agv.nome}) — ${new Date().toLocaleString("pt-BR")}`,
+        `Firmware ${agv.sistema?.versao || "--"} · IP ${agv.sistema?.ip || "--"} · ${agv.online ? "online" : "offline"}`,
+        `Sinal ${d.rssi ?? "--"} dBm · memória ${d.heap ?? "--"} B (mín. ${d.heapMinimo ?? "--"}) · laço ${d.loopMedioUs ?? "--"} µs (máx. ${d.loopMaxUs ?? "--"})`,
+        `Último reinício: ${d.reinicio || "--"} · quedas Wi-Fi ${d.quedasWifi ?? "--"}, MQTT ${d.quedasMqtt ?? "--"}`,
+        "", "Componentes:"
+    ];
+    componentesDiagnostico(agv).forEach(c => linhas.push(`- [${(c.nivel || "?").toUpperCase()}] ${c.nome}: ${c.detalhe} (erros: ${c.contagem})`));
+    if (agv.autoteste) {
+        linhas.push("", `Autoteste (${agv.autoteste.resultado}):`);
+        agv.autoteste.itens.forEach(i => linhas.push(`- [${i.nivel}] ${i.id}: ${i.detalhe}`));
+    }
+    const u = d.uso || {};
+    linhas.push("", `Uso: ${u.metros ?? "--"} m · ${u.horasLigado ?? "--"} h ligado · ${u.missoes ?? "--"} missões (${u.missoesErro ?? "--"} com erro) · ${u.emergencias ?? "--"} emergências · ${u.reinicios ?? "--"} reinícios`);
+    return linhas.join("\n");
+}
+
+document.getElementById("diagAutoteste")?.addEventListener("click", rodarAutoteste);
+document.getElementById("diagTestarLeds")?.addEventListener("click", testarLeds);
+document.getElementById("diagCopiar")?.addEventListener("click", () => {
+    const agv = agvAtual();
+    if (!agv) return;
+    const texto = relatorioDiagnostico(agv);
+    (navigator.clipboard ? navigator.clipboard.writeText(texto) : Promise.reject())
+        .then(() => ui.aviso("Relatório copiado.", "sucesso"))
+        .catch(() => ui.aviso("Não foi possível copiar automaticamente.", "erro"));
+});
+document.getElementById("diagUso")?.addEventListener("click", evento => {
+    if (evento.target.id !== "diagRevisaoFeita") return;
+    const agv = agvAtual();
+    const km = Number(agv?.diagnostico?.uso?.metros) / 1000;
+    if (!agv || !Number.isFinite(km)) return;
+    agv.manutencao = Object.assign({ intervaloKm: 50 }, agv.manutencao, { ultimaKm: km, quando: Date.now() });
+    salvarAgvsFrota();
+    registrarAcaoSite(agv.id, "sistema", "REVISAO_REGISTRADA", `${ui.numero(km, 1)} km`);
+    renderizarDiagnostico();
+});
+document.getElementById("diagUso")?.addEventListener("change", evento => {
+    if (evento.target.id !== "diagIntervaloRevisao") return;
+    const agv = agvAtual();
+    const v = Number(evento.target.value);
+    if (!agv || !(v > 0)) return;
+    agv.manutencao = Object.assign({ ultimaKm: 0 }, agv.manutencao, { intervaloKm: v });
+    salvarAgvsFrota();
+    renderizarDiagnostico();
+});
+
+
+/* ============================================================
+   GARRA (estado vindo do ESP)
+   ============================================================ */
+
+function atualizarStatusGarraESP() {
+    const agv = agvAtual();
+    if (!agv || !agv.garra) return;
+    const g = agv.garra;
+    const barra = document.getElementById("garraBarra");
+    const posicao = document.getElementById("garraPosicao");
+    const curso = Number(g.curso) || 0;
+    if (barra) barra.style.height = curso ? `${Math.max(0, Math.min(100, g.posicao / curso * 100))}%` : "0%";
+    document.getElementById("garraBarraRotulo")?.setAttribute("aria-label", `Posição da garra: ${g.posicao ?? "--"} de ${curso || "--"} passos`);
+    if (posicao) posicao.innerHTML = g.estado === "NAO_CONFIGURADA" ? `— <span>desativada</span>` : `${g.posicao ?? "--"} <span>/ ${curso || "--"} passos</span>`;
+    if (garraMovimentoAtivo) return;
+    const estado = document.getElementById("garraEstadoManual");
+    const mensagem = document.getElementById("garraMensagem");
+    const nomes = { MOVENDO_AVANCAR: "Subindo", MOVENDO_RECUAR: "Descendo", RECUADA: "Embaixo", AVANCADA: "No topo", PARADA: "Parada", NAO_CONFIGURADA: "Desativada" };
+    if (estado) {
+        estado.className = `pilula ${/MOVENDO/.test(g.estado) ? "azul" : g.estado === "NAO_CONFIGURADA" ? "cinza" : "verde"}`;
+        estado.textContent = nomes[g.estado] || g.estado || "--";
+    }
+    if (mensagem) mensagem.textContent = g.estado === "NAO_CONFIGURADA" ? "Curso da garra não configurado (GARRA_CURSO = 0)." : "Segure o botão para mover a garra.";
+}
+
+
+
 
 /* ============================================================
    INICIALIZAÇÃO
    ============================================================ */
 
-if (document.readyState === "loading") {
+configurarControleManualGarra();
+setInterval(verificarControleManualGarra, 100);
 
-    document.addEventListener(
-        "DOMContentLoaded",
-        configurarControleManualGarra
-    );
-
-} else {
-
-    configurarControleManualGarra();
-
-}
-
-
-/* ============================================================
-   VERIFICAÇÃO PERIÓDICA
-   ============================================================ */
-
-setInterval(
-    verificarControleManualGarra,
-    100
-);
+(function iniciarSite() {
+    // Volta para o AGV e a tela que estavam abertos
+    let telaSalva = null, agvSalvo = null;
+    try {
+        telaSalva = localStorage.getItem("telaAtual");
+        agvSalvo = localStorage.getItem("agvSelecionado");
+    } catch (e) { /* sem armazenamento */ }
+    if (agvSalvo && agvs[agvSalvo]) agvSelecionado = agvSalvo;
+    atualizarIdentificacaoAGV();
+    renderizarFrota();
+    atualizarPainel();
+    atualizarValoresJoystick();
+    atualizarRelogio();
+    AgvVirtual.ligarBotoes();
+    AgvVirtual.retomar();
+    try {
+        conectarMQTT();
+    } catch (erro) {
+        // Sem a biblioteca MQTT (offline) o site ainda funciona com AGVs virtuais.
+        console.error("MQTT indisponível:", erro);
+    }
+    setInterval(atualizarRelogio, 1000);
+    setInterval(atualizarOnline, 2000);
+    const telasValidas = Object.keys(informacoesTelas);
+    if (telaSalva && telasValidas.includes(telaSalva) && (!TELAS_DO_AGV.includes(telaSalva) || agvSelecionado)) {
+        mudarTela(telaSalva);
+    } else {
+        mudarTela("frota");
+    }
+})();
