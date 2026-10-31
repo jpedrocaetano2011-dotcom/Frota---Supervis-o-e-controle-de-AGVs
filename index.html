@@ -9,6 +9,8 @@
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 <script src="ui.js"></script>
+<script src="config.js"></script>
+<script src="nuvem.js"></script>
 </head>
 <body>
 
@@ -47,6 +49,7 @@
         <div class="menu-titulo">Operação</div>
         <a href="#" class="menu-item" data-tela="missoes"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4h11l-2 4 2 4H5"/></svg><span>Missões</span></a>
         <a href="#" class="menu-item" data-tela="controlePlanta"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h18v18H3zM3 9h8v12M11 14h10"/></svg><span>Planta</span></a>
+        <a href="#" class="menu-item so-nuvem" data-tela="usuarios" hidden><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11a4 4 0 1 0 0-8a4 4 0 1 0 0 8zM2 21v-1a6 6 0 0 1 6-6h2a6 6 0 0 1 6 6v1M16 3.5a4 4 0 0 1 0 7.5M22 21v-1a6 6 0 0 0-4-5.6"/></svg><span>Usuários</span></a>
         <a href="#" class="menu-item" data-tela="agvVirtual"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l9 5v10l-9 5-9-5V7zM12 22V12M21 7l-9 5-9-5"/></svg><span>AGV virtual</span></a>
     </nav>
 
@@ -93,7 +96,7 @@
             <div class="filtros" id="filtrosFrota" role="group" aria-label="Filtrar por estado"></div>
             <div class="grupo">
                 <button type="button" class="btn" id="frotaNovoVirtual">+ AGV virtual</button>
-                <button type="button" class="btn btn-primario" onclick="abrirCadastroAGV()">+ Adicionar AGV</button>
+                <button type="button" class="btn btn-primario" onclick="abrirCadastroAGV()" data-requer="administrar">+ Adicionar AGV</button>
             </div>
         </div>
         <div id="fleetGrid" class="fleet-grid"></div>
@@ -307,7 +310,7 @@
     <section id="missoes" class="tela">
         <div class="barra-acoes">
             <span class="suave" id="missoesResumo"></span>
-            <button type="button" class="btn btn-primario" id="btnNovaMissao">+ Nova missão</button>
+            <button type="button" class="btn btn-primario" id="btnNovaMissao" data-requer="operar">+ Nova missão</button>
         </div>
         <div class="missoes-linha">
             <section class="card missoes-lista-card" aria-label="Lista de missões" id="painelListaMissoes">
@@ -328,11 +331,11 @@
                     <div class="missao-editor-topo">
                         <label>Nome da missão<input type="text" id="nomeMissao" placeholder="Ex.: Abastecer montagem"></label>
                         <div class="grupo" style="display:flex;gap:8px;flex-wrap:wrap">
-                            <button type="button" class="btn" id="btnDuplicarMissaoAtual">Duplicar</button>
-                            <button type="button" class="btn btn-perigo" id="btnExcluirMissaoAtual">Excluir</button>
+                            <button type="button" class="btn" id="btnDuplicarMissaoAtual" data-requer="operar">Duplicar</button>
+                            <button type="button" class="btn btn-perigo" id="btnExcluirMissaoAtual" data-requer="operar">Excluir</button>
                             <button type="button" class="btn" id="btnEnviarMissaoAGV">Enviar para AGV…</button>
                             <button type="button" class="btn" id="btnCancelarMissao">Descartar</button>
-                            <button type="button" class="btn btn-primario" id="btnSalvarMissao">Salvar</button>
+                            <button type="button" class="btn btn-primario" id="btnSalvarMissao" data-requer="operar">Salvar</button>
                         </div>
                     </div>
                     <span id="tituloConstrutorMissao" class="suave" style="font-size:13px"></span>
@@ -340,7 +343,7 @@
                         <div style="flex:1 1 320px;min-width:0;display:flex;flex-direction:column">
                             <ol id="listaEtapasMissao" class="etapas" aria-label="Etapas"></ol>
                             <div id="estadoVazioMissao" class="vazio" style="margin-bottom:12px">Nenhuma etapa ainda. Adicione a primeira abaixo.</div>
-                            <div class="adicionar-etapa" role="group" aria-label="Adicionar etapa" id="adicionarEtapa">
+                            <div class="adicionar-etapa" role="group" aria-label="Adicionar etapa" id="adicionarEtapa" data-requer="operar">
                                 <span>Adicionar etapa</span>
                                 <button type="button" class="btn" data-nova-etapa="IR_PARA">Ir para</button>
                                 <button type="button" class="btn" data-nova-etapa="AGUARDAR">Aguardar</button>
@@ -481,6 +484,10 @@
     <!-- ========================================================
          HISTÓRICO
          ======================================================== -->
+    <section id="usuarios" class="tela">
+        <div id="usuariosConteudo" class="usuarios"></div>
+    </section>
+
     <section id="historico" class="tela">
         <div class="resumo-dia" id="historicoResumo"></div>
         <section class="card" aria-label="Eventos" style="display:flex;flex-direction:column;gap:12px">
@@ -566,7 +573,7 @@
          ======================================================== -->
     <section id="controlePlanta" class="tela">
         <div class="editor-barra">
-            <div class="editor-ferramentas" role="toolbar" aria-label="Ferramentas do editor">
+            <div class="editor-ferramentas" role="toolbar" aria-label="Ferramentas do editor" data-requer="administrar">
                 <button type="button" class="btn editor-ferramenta" data-ferramenta="SELECIONAR" title="Selecionar e mover">Selecionar <kbd>V</kbd></button>
                 <button type="button" class="btn editor-ferramenta" data-ferramenta="ESTACAO" title="Acesso de estação">Estação <kbd>E</kbd></button>
                 <button type="button" class="btn editor-ferramenta" data-ferramenta="REFERENCIA" title="Ponto de referência">Referência <kbd>R</kbd></button>
@@ -591,13 +598,14 @@
                 <button type="button" class="btn editor-ferramenta" data-ferramenta="ESCALA" title="Corrigir a escala">Escala <kbd>K</kbd></button>
             </div>
             <div class="editor-arquivo">
-                <button type="button" class="btn btn-icone" id="editorDesfazer" title="Desfazer (Ctrl+Z)">↶</button>
-                <button type="button" class="btn btn-icone" id="editorRefazer" title="Refazer (Ctrl+Y)">↷</button>
-                <button type="button" class="btn btn-mini" id="editorImagem">Imagem de fundo</button>
-                <button type="button" class="btn btn-mini" id="editorImportar">Importar</button>
+                <button type="button" class="btn btn-icone" id="editorDesfazer" data-requer="administrar" title="Desfazer (Ctrl+Z)">↶</button>
+                <button type="button" class="btn btn-icone" id="editorRefazer" data-requer="administrar" title="Refazer (Ctrl+Y)">↷</button>
+                <button type="button" class="btn btn-mini" id="editorImagem" data-requer="administrar">Imagem de fundo</button>
+                <button type="button" class="btn btn-mini" id="editorImportar" data-requer="administrar">Importar</button>
                 <button type="button" class="btn btn-mini" id="editorExportar">Exportar</button>
                 <span id="editorStatus" class="editor-status"></span>
-                <button type="button" class="btn btn-primario" id="editorPublicar">Publicar</button>
+                <span class="pilula aviso-leitura">Somente leitura · só o administrador altera a planta</span>
+                <button type="button" class="btn btn-primario" id="editorPublicar" data-requer="administrar">Publicar</button>
             </div>
         </div>
         <div class="editor-layout">
@@ -858,13 +866,11 @@
      SCRIPTS
      ============================================================ -->
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
-<script src="planta.js"></script>
-<script src="planta-exemplo.js"></script>
-<script src="mapa-svg.js"></script>
-<script src="editor-planta.js"></script>
-<script src="operacao-planta.js"></script>
-<script src="configuracoes.js"></script>
-<script src="agv-virtual.js"></script>
-<script src="script.js"></script>
+<script>
+    // Sem nuvem configurada (config.js) os scripts carregam na hora, como antes.
+    // Com nuvem, carregam depois do login e dos dados da empresa.
+    Nuvem.iniciar(["planta.js", "planta-exemplo.js", "mapa-svg.js", "editor-planta.js", "operacao-planta.js",
+                   "configuracoes.js", "agv-virtual.js", "script.js", "usuarios.js"]);
+</script>
 </body>
 </html>

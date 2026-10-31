@@ -71,11 +71,21 @@
         }
     }
 
+    // Com a nuvem, só o administrador altera a planta; os outros só olham.
+    function somenteLeitura() {
+        return typeof Nuvem !== "undefined" && !Nuvem.pode("administrar");
+    }
+
     function carregar() {
         let rascunho = lerJSON(CHAVE_RASCUNHO);
         let publicada = lerJSON(CHAVE_PUBLICADA);
+        const daNuvem = typeof Nuvem !== "undefined" ? Nuvem.plantaDaNuvem() : null;
 
-        if (!rascunho && !publicada) {
+        if (daNuvem) {
+            // A planta da empresa vem do banco (sem exemplo nem migração).
+            publicada = daNuvem.publicada;
+            rascunho = daNuvem.rascunho || (publicada ? Planta.clonar(publicada) : null);
+        } else if (!rascunho && !publicada) {
             // Primeira vez com o editor novo: migra a planta antiga, se houver.
             const antiga = lerJSON("plantaAGVOperacional") || lerJSON("plantaAGV");
             if (antiga && Array.isArray(antiga.pontos) && antiga.pontos.length) {
@@ -96,10 +106,11 @@
         }
         estado.publicada = publicada ? Planta.normalizar(publicada) : Planta.criarVazia();
         estado.rascunho = rascunho ? Planta.normalizar(rascunho) : Planta.clonar(estado.publicada);
-        salvarAgora();
+        salvarAgora(true);
     }
 
-    function salvarAgora() {
+    function salvarAgora(soNoNavegador) {
+        if (!soNoNavegador && typeof Nuvem !== "undefined") Nuvem.salvarPlanta(estado.rascunho, estado.publicada);
         try {
             localStorage.setItem(CHAVE_RASCUNHO, JSON.stringify(estado.rascunho));
             localStorage.setItem(CHAVE_PUBLICADA, JSON.stringify(estado.publicada));
@@ -669,6 +680,7 @@
     }
 
     function aoMudarCampo(evento) {
+        if (somenteLeitura()) { renderizarPropriedades(); return; }
         const alvo = evento.target;
         const nome = alvo.dataset.campo;
         if (!nome) return;
@@ -757,6 +769,7 @@
         const botao = evento.target.closest("[data-acao]");
         if (!botao) return;
         const acao = botao.dataset.acao;
+        if (somenteLeitura() && acao !== "selecionarNo") return;
         const planta = p();
         const sel = estado.selecao;
 
@@ -1000,6 +1013,7 @@
        ======================================================== */
 
     async function publicar() {
+        if (typeof Nuvem !== "undefined" && !Nuvem.exigir("administrar", "publicar a planta")) return;
         estado.validacao = Planta.validar(p());
         renderizarValidacao();
         desenharMapa();
@@ -1126,7 +1140,7 @@
     function aoPressionar(evento) {
         if (evento.button !== 0) return;
         const alvo = alvoDoEvento(evento);
-        const ferramenta = estado.ferramenta;
+        const ferramenta = somenteLeitura() ? "SELECIONAR" : estado.ferramenta;
         const planta = p();
         const mundo = estado.mapa.paraMundo(evento);
 
@@ -1135,8 +1149,10 @@
             if (alvo.tipo === "no" || alvo.tipo === "layout") {
                 const objeto = alvo.tipo === "no" ? Planta.noPorId(planta, alvo.id) : planta.layout.find(o => o.id === alvo.id);
                 estado.selecao = { tipo: alvo.tipo, id: alvo.id };
-                estado.arrasto = { objeto, dx: objeto.x - mundo.x, dy: objeto.y - mundo.y, registrado: false, x0: evento.clientX, y0: evento.clientY };
-                estado.mapa.svg.setPointerCapture(evento.pointerId);
+                if (!somenteLeitura()) {
+                    estado.arrasto = { objeto, dx: objeto.x - mundo.x, dy: objeto.y - mundo.y, registrado: false, x0: evento.clientX, y0: evento.clientY };
+                    estado.mapa.svg.setPointerCapture(evento.pointerId);
+                }
             } else if (alvo.tipo === "segmento") {
                 estado.selecao = { tipo: "segmento", id: alvo.id };
             } else if (alvo.tipo === "tag") {
@@ -1382,6 +1398,7 @@
     function aoTeclar(evento) {
         const tela = document.getElementById("controlePlanta");
         if (!tela || !tela.classList.contains("ativa")) return;
+        if (somenteLeitura()) return;
         const emCampo = /INPUT|SELECT|TEXTAREA/.test(document.activeElement?.tagName || "");
         if ((evento.ctrlKey || evento.metaKey) && evento.key.toLowerCase() === "z" && !emCampo) {
             evento.preventDefault();

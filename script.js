@@ -154,6 +154,8 @@ const agvs = agvsSalvos
         "02": criarAGV("02", "DIOGO"),
         "03": criarAGV("03", "MARIA")
     };
+// Com a nuvem, a frota é a cadastrada no banco para a empresa.
+if (window.Nuvem) Nuvem.ajustarFrota(agvs, criarAGV);
 Object.values(agvs).forEach(agv => {
 
     if (!Array.isArray(agv.filaMissoes)) {
@@ -364,6 +366,7 @@ function salvarMissoesNoNavegador() {
     } catch (erro) {
         ui.aviso("Não foi possível salvar as missões neste navegador (espaço cheio).", "erro");
     }
+    if (window.Nuvem) Nuvem.salvarMissoes(missoes);
 }
 
 
@@ -529,6 +532,7 @@ async function podeTrocarDeMissao() {
 }
 
 async function abrirNovaMissao() {
+    if (window.Nuvem && !Nuvem.exigir("operar", "criar missões")) return;
     if (!(await podeTrocarDeMissao())) return;
     missaoEmEdicao = { id: gerarIdMissao(), nome: "", etapas: [] };
     missaoListaSelecionada = missaoEmEdicao.id;
@@ -873,6 +877,7 @@ function removerEtapaMissao(indice) {
 }
 
 function salvarMissao() {
+    if (window.Nuvem && !Nuvem.exigir("operar", "salvar missões")) return;
     if (!missaoEmEdicao) return;
     const nome = document.getElementById("nomeMissao").value.trim();
     if (!nome) {
@@ -917,6 +922,7 @@ function voltarListaMissoes() {
 async function duplicarMissao(id) {
     const missao = missoes.find(m => m.id === id);
     if (!missao) return;
+    if (window.Nuvem && !Nuvem.exigir("operar", "criar missões")) return;
     if (!(await podeTrocarDeMissao())) return;
     const copia = JSON.parse(JSON.stringify(missao));
     copia.id = gerarIdMissao();
@@ -931,10 +937,11 @@ async function duplicarMissao(id) {
 async function excluirMissao(id) {
     const missao = missoes.find(m => m.id === id);
     if (!missao) return;
+    if (window.Nuvem && !Nuvem.exigir("operar", "excluir missões")) return;
     const usos = usoDaMissao(id);
     const ok = await ui.confirmar({
         titulo: `Excluir ${missao.id}?`,
-        texto: `“${missao.nome}” será apagada deste navegador.${usos.length ? `\n\nAtenção: ${usos.join(", ")}.` : ""}`,
+        texto: `“${missao.nome}” será apagada${window.Nuvem?.emNuvem() ? " para todos da empresa" : " deste navegador"}.${usos.length ? `\n\nAtenção: ${usos.join(", ")}.` : ""}`,
         confirmar: "Excluir", perigo: true
     });
     if (!ok) return;
@@ -1723,6 +1730,8 @@ function publicar(caminho, mensagem, id = agvSelecionado, qos = 1) {
         return AgvVirtual.receberComando(id, caminho, String(mensagem));
     }
 
+    if (window.Nuvem && !Nuvem.podePublicar(caminho)) return false;
+
     if (!clienteMQTT || !clienteMQTT.connected || !id) {
         console.error(
             "MQTT não conectado ou AGV não selecionado."
@@ -1938,8 +1947,8 @@ function renderizarFrota() {
                     </dl>
                     <div class="agv-card-acoes">
                         <button type="button" class="btn ${cat.chave === "emergencia" ? "btn-perigo-cheio" : ""}" data-abrir="${id}">${acao}</button>
-                        <button type="button" class="btn btn-icone" data-editar="${id}" title="Editar nome e ID" aria-label="Editar AGV ${id}">${ui.icone("lapis")}</button>
-                        <button type="button" class="btn btn-icone btn-perigo" data-excluir="${id}" title="Excluir da frota" aria-label="Excluir AGV ${id}">${ui.icone("lixo")}</button>
+                        <button type="button" class="btn btn-icone" data-editar="${id}" data-requer="administrar" title="Editar nome e ID" aria-label="Editar AGV ${id}">${ui.icone("lapis")}</button>
+                        <button type="button" class="btn btn-icone btn-perigo" data-excluir="${id}" data-requer="administrar" title="Excluir da frota" aria-label="Excluir AGV ${id}">${ui.icone("lixo")}</button>
                     </div>
                 </div>
             </article>`;
@@ -2081,7 +2090,8 @@ const informacoesTelas = {
     historico: ["Histórico", "eventos guardados neste navegador"],
     configuracoes: ["Configurações", "parâmetros salvos no próprio AGV"],
     controlePlanta: ["Planta", "Layout do galpão: linhas, estações, tags e zonas"],
-    agvVirtual: ["AGV virtual", "O firmware real rodando no navegador, num mundo montado a partir da planta publicada"]
+    agvVirtual: ["AGV virtual", "O firmware real rodando no navegador, num mundo montado a partir da planta publicada"],
+    usuarios: ["Usuários", "Quem acessa o sistema e o que cada um pode fazer"]
 };
 
 const TELAS_DO_AGV = ["visaoGeral", "controleManual", "sensores", "diagnostico", "historico", "configuracoes"];
@@ -2127,6 +2137,7 @@ function mudarTela(nomeTela) {
     if (nomeTela === "visaoGeral") renderizarMapaVisaoGeral();
     if (nomeTela === "agvVirtual") AgvVirtual.abrir();
     if (nomeTela === "missoes") abrirTelaMissoes();
+    if (nomeTela === "usuarios" && typeof Usuarios !== "undefined") Usuarios.abrir();
     renderizarAlertaGlobal();
     renderizarDadosTelaAtual();
     window.scrollTo({ top: 0 });
@@ -3010,6 +3021,7 @@ function atualizarRelogio() {
 }
 
 function abrirCadastroAGV() {
+    if (window.Nuvem && !Nuvem.exigir("administrar", "cadastrar AGVs")) return;
     agvEmEdicao = null;
     document.getElementById("tituloModalAgv").textContent = "Adicionar AGV";
     document.getElementById("novoAgvId").value = "";
@@ -3026,6 +3038,7 @@ function fecharCadastroAGV() {
 function abrirEdicaoAGV(id) {
     const agv = agvs[id];
     if (!agv) return;
+    if (!agv.virtual && window.Nuvem && !Nuvem.exigir("administrar", "editar AGVs")) return;
     agvEmEdicao = id;
     document.getElementById("tituloModalAgv").textContent = `Editar AGV ${agv.id}`;
     document.getElementById("novoAgvId").value = agv.id;
@@ -3057,6 +3070,7 @@ function adicionarAGV() {
         dadosAGV.nome = nome;
         agvs[id] = dadosAGV;
         if (agvSelecionado === idAntigo) agvSelecionado = id;
+        if (window.Nuvem && !dadosAGV.virtual) Nuvem.salvarAgv(id, nome, idAntigo);
         agvEmEdicao = null;
         salvarAgvsFrotaAgora();
         renderizarFrota();
@@ -3070,6 +3084,7 @@ function adicionarAGV() {
         return;
     }
     agvs[id] = criarAGV(id, nome);
+    if (window.Nuvem) Nuvem.salvarAgv(id, nome);
     salvarAgvsFrotaAgora();
     renderizarFrota();
     fecharCadastroAGV();
@@ -3079,13 +3094,15 @@ function adicionarAGV() {
 async function excluirAGV(id) {
     const agv = agvs[id];
     if (!agv) return;
+    if (!agv.virtual && window.Nuvem && !Nuvem.exigir("administrar", "excluir AGVs")) return;
     const ok = await ui.confirmar({
         titulo: `Excluir o AGV ${agv.id}?`,
-        texto: `“${agv.nome}” sai da frota deste navegador, com o histórico guardado aqui.${agv.virtual ? "\n\nO AGV virtual será desligado." : "\n\nO AGV em si não é alterado."}`,
+        texto: `“${agv.nome}” sai da frota${window.Nuvem?.emNuvem() && !agv.virtual ? " da empresa (para todos)" : " deste navegador, com o histórico guardado aqui"}.${agv.virtual ? "\n\nO AGV virtual será desligado." : "\n\nO AGV em si não é alterado."}`,
         confirmar: "Excluir", perigo: true
     });
     if (!ok) return;
     if (agv.virtual) AgvVirtual.desligar(id);
+    else if (window.Nuvem) Nuvem.removerAgv(id);
     delete agvs[id];
     salvarAgvsFrotaAgora();
     if (agvSelecionado === id) {

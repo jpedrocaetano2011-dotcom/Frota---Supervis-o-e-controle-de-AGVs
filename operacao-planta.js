@@ -21,7 +21,7 @@ EditorPlanta.iniciar({
                 mudou = true;
             }
         }));
-        if (mudou) localStorage.setItem("missoesAGV", JSON.stringify(missoes));
+        if (mudou) salvarMissoesNoNavegador();
     },
     aoCarregarExemplo: () => {
         // As missões de exemplo só entram se não houver nenhuma missão.
