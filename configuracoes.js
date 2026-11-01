@@ -12,7 +12,8 @@ const SECOES_CONFIG = [
     { id: "mecanica", titulo: "Mecânica e cinemática", descricao: "Medidas do AGV e sentido de cada motor. Use o assistente de calibração." },
     { id: "seguranca", titulo: "Segurança e rota", descricao: "Barreira dos VL53 e limites dos trechos." },
     { id: "garra", titulo: "Garra", descricao: "Curso e velocidade do motor 5." },
-    { id: "leds", titulo: "LEDs", descricao: "Quantidade, brilho e ordem das cores das duas fitas." }
+    { id: "leds", titulo: "LEDs", descricao: "Quantidade, brilho e ordem das cores das duas fitas." },
+    { id: "frota", titulo: "Frota e fila", descricao: "Partida automática da fila, saída do ponto para outro AGV e obstáculos na missão." }
 ];
 
 const PARAMETROS_SITE = {
@@ -75,6 +76,9 @@ const PARAMETROS_SITE = {
     LEDS_FITA_COMUNICACAO: { secao: "leds", rotulo: "LEDs da fita 2 (pino 26)", unidade: "LEDs", ajuda: "Mesma cor da fita 1. Reinicia o AGV para valer." },
     LEDS_BRILHO: { secao: "leds", rotulo: "Brilho", unidade: "0–255", ajuda: "As fitas consomem bastante: 80 já é bem visível no galpão." },
     LEDS_ORDEM_CORES: { secao: "leds", rotulo: "Ordem das cores da fita", tipo: "opcoes", opcoes: [[0, "RGB"], [1, "GRB (WS2812B comum)"], [2, "BRG"], [3, "RBG"], [4, "GBR"], [5, "BGR"]], ajuda: "Use Diagnóstico › Testar LEDs: as fitas devem mostrar vermelho, verde, azul e branco, nessa ordem." },
+    AVISO_PARTIDA_S: { secao: "frota", rotulo: "Aviso antes de partir sozinho", unidade: "s", ajuda: "Ao terminar uma missão com outra na fila (ou ao sair para liberar o ponto), a fita pisca em verde por esse tempo e o AGV parte. START MISSÃO parte na hora." },
+    LIBERAR_PONTO: { secao: "frota", rotulo: "Liberar o ponto para outro AGV", tipo: "booleano", ajuda: "Parado sem missão num ponto que outro AGV precisa, vai sozinho para um ponto de espera livre (depois do aviso). Desligado: fica e o site avisa." },
+    RETOMAR_APOS_OBSTACULO_S: { secao: "frota", rotulo: "Retomar depois de obstáculo", unidade: "s", ajuda: "Obstáculo na frente durante a missão pausa; com o caminho livre por esse tempo, segue sozinho. 0 = interrompe e espera START MISSÃO." },
     LEDS_EFEITOS: { secao: "leds", rotulo: "Animações", tipo: "booleano", ajuda: "Desligado: respirar e correr viram luz fixa (piscar continua)." }
 };
 

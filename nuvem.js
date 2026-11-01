@@ -511,7 +511,7 @@
     function montarEntrada() {
         if (fundo) return;
         fundo = document.createElement("div");
-        fundo.className = "entrada";
+        fundo.className = "tela-entrada";  // não "entrada": é a classe das entradas do painel (Sensores)
         fundo.id = "telaEntrada";
         fundo.innerHTML = `
             <div class="entrada-cartao" role="dialog" aria-modal="true" aria-labelledby="entradaTitulo">

@@ -226,6 +226,8 @@ async function enviarDefinirPosicao() {
     if (no && no.barreira > 0) {
         comando.barreira = no.barreira;
     }
+    const zona = zonaDoPonto(ponto);
+    if (zona) comando.zona = zona;   // tráfego: o AGV parado ali é dono da zona do ponto
     const enviado = publicar(TOPICOS.comando.definirPosicao, JSON.stringify(comando), agv.id);
     if (!enviado) {
         ui.aviso("MQTT desconectado: a posição não foi enviada.", "erro");
@@ -388,6 +390,12 @@ function zonasDaPlanta() {
     const planta = plantaPublicada();
     if (cacheZonas.planta !== planta) cacheZonas = { planta, zonas: Planta.zonasDeConflito(planta) };
     return cacheZonas.zonas;
+}
+
+// Zona de tráfego de um ponto (ou null)
+function zonaDoPonto(pontoId) {
+    const z = zonasDaPlanta().find(z => z.nos.includes(pontoId));
+    return z ? z.id : null;
 }
 
 // zona -> { ocupada: [ids], pedida: [ids] } a partir do status/trafego dos AGVs

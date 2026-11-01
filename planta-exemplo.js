@@ -8,7 +8,7 @@
 
    Galpão de 24 × 13 m com duas faixas paralelas (ida y = 5,5 m e
    volta y = 6,0 m), trocas laterais nas pontas e no meio, 4
-   estações (uma com dois acessos), ponto de espera e zona lenta.
+   estações (uma com dois acessos), dois pontos de espera e zona lenta.
 
    Tags no formato que o AGV lê: 10 caracteres hexadecimais
    (0A00000010, 0A00000011...). Ver LEIAME, "Tags RFID".
@@ -49,6 +49,7 @@
         no("E04-2", "ESTACAO", 17.5, 9.4, { estacao: "E04", orientacaoChegada: 90, nome: "Kits" });
         no("R17", "REFERENCIA", 17.5, 6.0);
         no("W01", "ESPERA", 20, 2.3, { nome: "Espera" });
+        no("W02", "ESPERA", 10, 2.3, { nome: "Espera 2" });
 
         const seg = (id, a, b, sentido = "DUPLO", tipo = "LINHA", extra = {}) =>
             p.segmentos.push(Object.assign({ id, tipo, a, b, sentido, velocidadeMaxima: 0, barreira: 0, tags: [] }, extra));
@@ -61,6 +62,7 @@
         seg("S23", "R13", "R03", "DUPLO", "LATERAL");
         seg("S31", "R12", "E01"); seg("S32", "R13", "E02"); seg("S33", "R02", "E03");
         seg("S34", "R04", "E04"); seg("S35", "R17", "E04-2"); seg("S36", "R05", "W01");
+        seg("S37", "R03", "W02");
 
         p.layout = [
             { id: "L01", tipo: "MAQUINA", nome: "Prensa 1", x: 5, y: 11.3, largura: 3.4, profundidade: 1.8, rotacao: 0 },

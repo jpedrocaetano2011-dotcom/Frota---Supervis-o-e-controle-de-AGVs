@@ -17,6 +17,7 @@ const AgvVirtual = (function () {
     const BITS = { START: 0, REARME: 1, ESTOP: 2, SELETORA: 3, STOP: 4, START_MISSAO: 5 };
     const SAIDA_LED_START = 8, SAIDA_LED_REARME = 9, SAIDA_ENABLE = 15;
     const CHAVE_NVS = "agvVirtualNvs_";
+    const CHAVE_ARQUIVOS = "agvVirtualArquivos_";   // flash: fila de missões e rotas de saída
     const CHAVE_CONFIG = "agvVirtualMundo_";
 
     let modulo = null;
@@ -151,6 +152,8 @@ const AgvVirtual = (function () {
             const n = escreverTexto(inst, inst.ptrPayload, nvs, inst.tamPayload);
             inst.exp.vi_nvs_importar(n);
         }
+        const arquivos = inst.exp.vi_arquivos_importar ? localStorage.getItem(CHAVE_ARQUIVOS + id) : null;
+        if (arquivos) inst.exp.vi_arquivos_importar(escreverTexto(inst, inst.ptrPayload, arquivos, inst.tamPayload));
         aplicarGeometria(inst);
         instancias[id] = inst;
         montarMundo(inst);
@@ -371,6 +374,19 @@ const AgvVirtual = (function () {
                 const texto = new TextDecoder().decode(new Uint8Array(inst.memoria.buffer, inst.ptrPayload, n));
                 try { localStorage.setItem(CHAVE_NVS + id, texto); } catch (erro) { /* ignora */ }
             }
+            // Flash (fila, rotas de saída): confere 1×/s
+            if (inst.exp.vi_arquivos_versao && agora - (inst.arquivosVistoEm || 0) > 1000) {
+                inst.arquivosVistoEm = agora;
+                const v = inst.exp.vi_arquivos_versao();
+                if (v !== inst.versaoArquivos) {
+                    inst.versaoArquivos = v;
+                    const n = inst.exp.vi_arquivos_exportar();
+                    if (n >= 0) {
+                        const texto = new TextDecoder().decode(new Uint8Array(inst.memoria.buffer, inst.ptrPayload, n));
+                        try { localStorage.setItem(CHAVE_ARQUIVOS + id, texto); } catch (erro) { /* sem espaço: ignora */ }
+                    }
+                }
+            }
         });
 
         if (document.getElementById("agvVirtual")?.classList.contains("ativa")) {
@@ -456,6 +472,7 @@ const AgvVirtual = (function () {
         esquecerTrafego(id);
         delete agvs[id];
         localStorage.removeItem(CHAVE_NVS + id);
+        localStorage.removeItem(CHAVE_ARQUIVOS + id);
         localStorage.removeItem(CHAVE_CONFIG + id);
         if (agvSelecionado === id) agvSelecionado = null;
         salvarAgvsFrota();
@@ -475,6 +492,8 @@ const AgvVirtual = (function () {
             if (no) {
                 const comando = { comando: "DEFINIR_POSICAO", ponto: no.id, orientacao: Planta.normalizarAngulo(orientacao) };
                 if (no.barreira > 0) comando.barreira = no.barreira;
+                const zona = typeof zonaDoPonto === "function" ? zonaDoPonto(no.id) : null;
+                if (zona) comando.zona = zona;
                 receberComando(id, "comando/definir_posicao", JSON.stringify(comando));
             }
         }
@@ -636,7 +655,7 @@ const AgvVirtual = (function () {
         document.getElementById("virtualRearme")?.classList.toggle("aceso", ledRearme);
         // a fita mostra o estado; os textos explicam as lâmpadas dos botões
         const sinal = agv?.leds;
-        texto("virtualStartMissaoTexto", ledStartMissao ? (sinal === "MISSAO_ANDANDO" || agv?.estadoMissao === "EM_EXECUCAO" ? "aceso · em missão" : "aceso") : sinal === "APERTE_START" ? "piscando · missão pronta" : sinal === "CONFIRMACAO" ? "piscando · confirmar" : "apagado");
+        texto("virtualStartMissaoTexto", ledStartMissao ? (sinal === "MISSAO_ANDANDO" || agv?.estadoMissao === "EM_EXECUCAO" ? "aceso · em missão" : "aceso") : sinal === "APERTE_START" ? "piscando · missão pronta" : sinal === "PARTINDO" ? "piscando · vai partir sozinho" : sinal === "CONFIRMACAO" ? "piscando · confirmar" : "apagado");
         texto("virtualRearmeTexto", ledRearme || agv?.aguardandoRearme ? "piscando · aperte" : "apagado");
         document.getElementById("virtualLedOn")?.classList.toggle("aceso", Boolean(agv?.mqttConectado || inst.brokerDisponivel));
         document.getElementById("virtualLedEnable")?.classList.toggle("aceso", !(saidas & (1 << SAIDA_ENABLE)));
@@ -856,6 +875,7 @@ const AgvVirtual = (function () {
             if (!selecionado) return;
             if (!(await ui.confirmar({ titulo: "Apagar a memória do AGV virtual?", texto: `O AGV ${selecionado} volta como saiu da fábrica (parâmetros, calibrações e contadores).`, confirmar: "Apagar", perigo: true }))) return;
             localStorage.removeItem(CHAVE_NVS + selecionado);
+            localStorage.removeItem(CHAVE_ARQUIVOS + selecionado);
             if (instancias[selecionado]) ligar(selecionado).then(renderizarTela);
         });
     }

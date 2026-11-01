@@ -78,8 +78,8 @@ function criarAGV(id, nome) {
         // Missão atualmente em execução
         missaoAtual: null,
 
-        // Fila de missões do AGV
-        filaMissoes: [],
+        // Fila de missões: mora no AGV (status/fila)
+        fila: null,
 
         // ========================================================
         // SENSORES
@@ -158,9 +158,11 @@ const agvs = agvsSalvos
 if (window.Nuvem) Nuvem.ajustarFrota(agvs, criarAGV);
 Object.values(agvs).forEach(agv => {
 
-    if (!Array.isArray(agv.filaMissoes)) {
-        agv.filaMissoes = [];
-    }
+    // A fila agora mora no AGV (0.11): a antiga, do navegador, sai.
+    delete agv.filaMissoes;
+    delete agv.filaMissoesSuspensa;
+    agv.fila = null;
+    agv.filaPendentes = [];
 
     if (!("missaoSelecionada" in agv)) {
         agv.missaoSelecionada = null;
@@ -484,7 +486,7 @@ function usoDaMissao(id) {
     Object.values(agvs).forEach(agv => {
         if (agv.missaoAtual === id) usos.push(`em execução no AGV ${agv.id}`);
         else if (agv.missaoCarregada === id) usos.push(`carregada no AGV ${agv.id}`);
-        else if ((agv.filaMissoes || []).includes(id)) usos.push(`na fila do AGV ${agv.id}`);
+        else if ((agv.fila?.itens || []).some(i => i.id === id)) usos.push(`na fila do AGV ${agv.id}`);
     });
     return usos;
 }
@@ -998,9 +1000,7 @@ async function enviarMissaoParaAGV() {
     if (podeCarregarMissao(agv) && !["CARREGADA"].includes(agv.estadoMissao)) {
         if (iniciarMissaoPorId(agv.id, id)) ui.aviso(`Missão ${id} enviada ao AGV ${agv.id}. Aperte START MISSÃO no AGV para começar.`, "sucesso");
     } else {
-        if (!(agv.filaMissoes || []).includes(id)) agv.filaMissoes.push(id);
-        salvarAgvsFrota();
-        ui.aviso(`AGV ${agv.id} ocupado: ${id} entrou na fila (posição ${agv.filaMissoes.length}).`, "info");
+        if (adicionarNaFilaDoAGV(agv.id, id)) ui.aviso(`AGV ${agv.id} ocupado: ${id} vai para a fila dele e parte sozinha quando chegar a vez.`, "info");
     }
     renderizarListaMissoes();
 }
@@ -1140,6 +1140,9 @@ const TOPICOS = {
     garraMovimento: "comando/garra/movimento",
     garraParar: "comando/garra/parar",
     carregarMissao: "comando/carregar_missao",
+    fila: "comando/fila",
+    filaAdicionar: "comando/fila/adicionar",
+    saidas: "comando/saidas",
     confirmarEtapa: "comando/confirmar_etapa",
     cancelarMissao: "comando/cancelar_missao",
     definirPosicao: "comando/definir_posicao",
@@ -1433,6 +1436,25 @@ function processarMensagemMQTT(topico, valor) {
             break;
 
 
+        case "status/fila":
+
+            // Fila de missões guardada no AGV, partida automática e saída do ponto
+            if (!valor) {
+                agv.fila = null;
+            } else {
+                const f = lerJSON();
+                if (f) {
+                    f.recebidoEm = Date.now();
+                    agv.fila = f;
+                    atualizarPendentesFila(agv);
+                    if (!f.pedidoPor) agv.pontoBloqueado = null;
+                    sincronizarSaidas(agv);
+                }
+            }
+            agendarAtualizacaoTela();
+            if (typeof renderizarTrafegoFrota === "function") renderizarTrafegoFrota();
+            break;
+
         case "status/trafego":
 
             // Zonas que o AGV ocupa (o), reserva (c) e pede (p); m = por que espera.
@@ -1456,6 +1478,8 @@ function processarMensagemMQTT(topico, valor) {
                 agv.heartbeat = Number(valor);
                 agv.uptime = Number(valor);
                 marcarHeartbeat(id);
+                // rotas de saída desatualizadas (planta nova, AGV novo): manda de novo
+                if (agv.fila) sincronizarSaidas(agv);
             }
 
             break;
@@ -1893,7 +1917,7 @@ function resumoMissaoCard(agv) {
     const missaoId = agv.missaoAtual || agv.missaoCarregada;
     if (!agv.online) return { titulo: "—", detalhe: agv.ultimoHeartbeat ? `Sem sinal ${tempoRelativo(agv.ultimoHeartbeat)}` : "Ainda não conectou ao broker", progresso: 0 };
     if (!missaoId) {
-        const fila = (agv.filaMissoes || []).length;
+        const fila = (agv.fila?.itens || []).length;
         return { titulo: "Sem missão", detalhe: fila ? `${fila} na fila` : (agv.modo === "MANUAL" ? "Seletora em MANUAL" : "Pronto para receber missão"), progresso: 0 };
     }
     const missao = obterMissaoPorId(missaoId);
@@ -1946,7 +1970,9 @@ function renderizarTrafegoFrota() {
         const situacao = esperando
             ? `<span class="pilula ambar">${t.ag ? "parado esperando" : "pedindo passagem"}${segundos ? " · " + ui.duracao(segundos) : ""}</span> <span class="suave">${escaparHtml(t.m || "zonas: " + [...(t.p || [])].join(", "))}</span>`
             : `<span class="suave">sem pedidos</span>`;
-        const obstaculo = t.ob ? ` <span class="pilula vermelho">obstáculo à frente</span>` : "";
+        const obstaculo = (t.ob ? ` <span class="pilula vermelho">obstáculo à frente</span>` : "") +
+            (agv.fila?.pedidoPor && agv.pontoBloqueado ? ` <span class="pilula vermelho">não consegue liberar o ponto</span> <span class="suave">${escaparHtml(agv.pontoBloqueado)}</span>` : "") +
+            (agv.fila?.partidaEm != null && agv.fila?.saida ? ` <span class="pilula azul">saindo para liberar o ponto · ${Number(agv.fila.partidaEm)} s</span>` : "");
         const ocupa = (t.o || []).length ? (t.o || []).map(z => `<span class="pilula azul">${escaparHtml(z)}</span>`).join(" ") : `<span class="suave">—</span>`;
         return `<tr>
             <td><strong>${escaparHtml(agv.id)}</strong> <span class="suave">${escaparHtml(agv.nome || "")}</span>${agv.online ? "" : ` <span class="pilula">offline</span>`}</td>
@@ -2522,24 +2548,37 @@ function renderizarControleFilaAGV() {
         }
     }
 
-    const fila = Array.isArray(agv.filaMissoes) ? agv.filaMissoes : [];
+    const f = agv.fila;
+    const itensFila = f?.itens || [];
     const btnFila = document.getElementById("btnVerFila");
-    if (btnFila) btnFila.textContent = `Fila (${fila.length})${agv.filaMissoesSuspensa ? " · suspensa" : ""}`;
+    if (btnFila) btnFila.textContent = `Fila (${itensFila.length})${f?.suspensa ? " · suspensa" : f?.partidaEm != null ? ` · parte em ${f.partidaEm} s` : ""}`;
     if (filaContainer) {
         let html = "";
-        if (!fila.length) {
-            html = `<div class="fila-vazia">Fila vazia. A próxima missão da fila é carregada sozinha quando a atual termina; o início continua no botão START MISSÃO.</div>`;
+        if (!f) {
+            html = `<div class="fila-vazia">${agv.online
+                ? (agv.virtual ? "Carregando a fila do AGV virtual…" : "Este AGV está com um firmware antigo: a fila de missões mora no AGV a partir da versão 0.11. Atualize o firmware.")
+                : "AGV offline. A fila fica guardada no próprio AGV."}</div>`;
         } else {
-            if (agv.filaMissoesSuspensa) {
-                html += `<div class="fila-suspensa"><span>Fila suspensa depois de um cancelamento.</span><button type="button" class="btn btn-mini" onclick="retomarFilaMissoes()">Retomar fila</button></div>`;
+            if (f.partidaEm != null) {
+                html += `<div class="fila-partida"><span>${f.saida ? "Saindo para liberar o ponto" : "Próxima missão parte sozinha"} em <b>${Number(f.partidaEm)} s</b>. START MISSÃO no AGV parte agora.</span></div>`;
             }
-            html += fila.map((missaoId, indice) => {
-                const missao = obterMissaoPorId(missaoId);
+            if (f.pedidoPor && f.partidaEm == null) {
+                html += `<div class="fila-suspensa"><span>O AGV ${escaparHtml(f.pedidoPor)} precisa do ponto onde este AGV está${agv.pontoBloqueado ? `: ${escaparHtml(agv.pontoBloqueado)}` : ". Ele vai sair para um ponto de espera."}</span></div>`;
+            }
+            if (f.suspensa) {
+                html += `<div class="fila-suspensa"><span>Fila suspensa${f.motivo ? `: ${escaparHtml(f.motivo)}` : ""}. Retome aqui ou aperte START MISSÃO no AGV.</span><button type="button" class="btn btn-mini" onclick="retomarFilaMissoes()">Retomar fila</button></div>`;
+            }
+            if (!itensFila.length) {
+                html += `<div class="fila-vazia">Fila vazia. Cada missão da fila parte sozinha: quando a anterior termina, o AGV avisa na fita por ${Number(f.aviso) || 10} s e sai.</div>`;
+            }
+            html += itensFila.map((item, indice) => {
+                const missao = obterMissaoPorId(item.id);
+                const rota = item.origem && item.destino ? `${item.origem} → ${item.destino}` : "";
                 return `
                     <div class="fila-missao-item">
                         <div class="fila-missao-info">
                             <span class="fila-missao-ordem">${indice + 1}</span>
-                            <div><strong>${escaparHtml(missaoId)}</strong><small>${escaparHtml(missao ? missao.nome || "" : "Missão não encontrada")}</small></div>
+                            <div><strong>${escaparHtml(item.id)}</strong><small>${escaparHtml(missao ? missao.nome || "" : "Missão não encontrada neste site")}${rota ? " · " + escaparHtml(rota) : ""}</small></div>
                         </div>
                         <button type="button" class="btn-remover-fila" aria-label="Tirar da fila" onclick="removerMissaoFila(${indice})">×</button>
                     </div>`;
@@ -2551,7 +2590,7 @@ function renderizarControleFilaAGV() {
     const btnCarregar = document.getElementById("btnStart");
     const btnAdicionar = document.getElementById("btnAdicionarFilaAGV");
     if (btnCarregar) btnCarregar.disabled = !podeCarregarMissao(agv) || !agv.missaoSelecionada;
-    if (btnAdicionar) btnAdicionar.disabled = !agv.missaoSelecionada;
+    if (btnAdicionar) btnAdicionar.disabled = !agv.missaoSelecionada || !agv.fila || !agv.online;
 }
 
 
@@ -2660,129 +2699,165 @@ function iniciarMissaoPorId(agvId, missaoId, silencioso = false) {
 }
 
 function adicionarMissaoFila() {
-
     const agv = agvAtual();
-
-    if (!agv) {
-        return;
-    }
-
+    if (!agv) return;
     const missaoId = agv.missaoSelecionada;
-
     if (!missaoId) {
         ui.aviso("Escolha uma missão primeiro.", "aviso");
         return;
     }
-    const idMissao = String(missaoId);
-
-const jaEstaNaFila = agv.filaMissoes.some(
-    id => String(
-        typeof id === "object" ? id.id : id
-    ) === idMissao
-);
-
-const jaEstaCarregada =
-    String(agv.missaoCarregada) === idMissao;
-
-if (jaEstaNaFila || jaEstaCarregada) {
-    ui.aviso("Essa missão já está na fila ou carregada no AGV.", "aviso");
-    return;
-}
-    const missao = obterMissaoPorId(missaoId);
-
-    if (!missao) {
-        ui.aviso("A missão escolhida não existe.", "erro");
-        return;
+    const parado = !MISSAO_OCUPADA.includes(agv.estadoMissao) && !(agv.fila?.itens || []).length && !agv.fila?.suspensa;
+    if (adicionarNaFilaDoAGV(agv.id, missaoId)) {
+        const espera = Number(agv.fila?.aviso) || 10;
+        ui.aviso(parado
+            ? `${missaoId} enviada para a fila do AGV ${agv.id}: ele avisa na fita por ${espera} s e parte sozinho.`
+            : `${missaoId} entrou na fila do AGV ${agv.id}.`, "sucesso");
     }
-
-    if (!Array.isArray(agv.filaMissoes)) {
-        agv.filaMissoes = [];
-    }
-
-    agv.filaMissoes.push(missaoId);
-
-    salvarAgvsFrota();
-
-    renderizarControleFilaAGV();
-    ui.aviso(`${missaoId} entrou na fila do AGV ${agv.id} (posição ${agv.filaMissoes.length}).`, "sucesso");
 }
 
 
+/* ------------------------------------------------------------
+   FILA NO AGV
+   ------------------------------------------------------------
+   Cada missão vai para o AGV já preparada para partir de onde a
+   anterior termina. O AGV guarda na flash, carrega a próxima ao
+   terminar e parte sozinho depois do aviso na fita.
+*/
 
+const MISSAO_OCUPADA = ["CARREGADA", "EM_EXECUCAO", "AGUARDANDO_CONFIRMACAO", "INTERROMPIDA"];
 
-function iniciarProximaMissaoFila(agvId) {
+function destinoFinalPacote(pacote) {
+    const etapas = pacote?.etapas || [];
+    for (let e = etapas.length - 1; e >= 0; e--) {
+        const t = etapas[e].trechos || [];
+        if (t.length) return t[t.length - 1].destino;
+    }
+    return null;
+}
 
+// Pedidos enviados que o AGV ainda não confirmou (para encadear vários seguidos)
+function atualizarPendentesFila(agv) {
+    const f = agv.fila || {};
+    const vistos = new Set([...(f.itens || []).map(i => i.id), f.atual?.id].filter(Boolean));
+    agv.filaPendentes = (agv.filaPendentes || []).filter(p => Date.now() - p.quando < 4000 && !vistos.has(p.id));
+}
+
+// Onde o AGV vai estar depois de tudo o que já tem (missão atual + fila + pedidos a caminho)
+function pontoPrevistoFila(agv) {
+    const pendentes = (agv.filaPendentes || []).filter(p => Date.now() - p.quando < 4000);
+    if (pendentes.length) return pendentes[pendentes.length - 1].destino;
+    const itens = agv.fila?.itens || [];
+    for (let i = itens.length - 1; i >= 0; i--) if (itens[i].destino || itens[i].origem) return itens[i].destino || itens[i].origem;
+    if (MISSAO_OCUPADA.includes(agv.estadoMissao)) {
+        if (agv.fila?.atual?.destino) return agv.fila.atual.destino;
+        const etapas = agv.missaoCompilada?.etapas;
+        if (etapas) return destinoFinalPacote({ etapas });
+        return null;
+    }
+    return agv.posicaoConhecida && agv.pontoAtual ? agv.pontoAtual : null;
+}
+
+function adicionarNaFilaDoAGV(agvId, missaoId, { silencioso = false } = {}) {
     const agv = agvs[agvId];
+    if (!agv) return false;
+    const falhar = mensagem => {
+        definirAvisoMissao(agv, mensagem, "erro");
+        if (!silencioso) ui.aviso(mensagem, "erro");
+        agendarAtualizacaoTela();
+        return false;
+    };
+    if (!agv.online) return falhar(`AGV ${agv.id} offline: a fila fica no AGV, ligue-o antes.`);
+    if (!agv.fila) return falhar(`O AGV ${agv.id} está com firmware antigo, sem fila no AGV. Atualize o firmware.`);
+    if (agv.fila.flash === false) return falhar(`O AGV ${agv.id} está sem memória flash para guardar a fila.`);
+    const ocupados = (agv.fila.itens || []).length + (agv.filaPendentes || []).length;
+    if (ocupados >= (Number(agv.fila.max) || 8)) return falhar(`A fila do AGV ${agv.id} está cheia (${Number(agv.fila.max) || 8} missões).`);
+    const missao = obterMissaoPorId(missaoId);
+    if (!missao) return falhar(`A missão "${missaoId}" não existe mais.`);
 
-    if (!agv) {
-        return;
+    const planta = plantaPublicada();
+    const ponto = pontoPrevistoFila(agv);
+    const anda = (missao.etapas || []).some(e => e.tipo === "IR_PARA");
+    if (anda && !ponto) {
+        return falhar(MISSAO_OCUPADA.includes(agv.estadoMissao)
+            ? "Não deu para saber onde a missão atual termina. Tente de novo em alguns segundos."
+            : "Posição do AGV desconhecida: use DEFINIR POSIÇÃO na Visão geral antes.");
     }
+    const no = ponto ? Planta.noPorId(planta, ponto) : null;
+    const orientacao = ponto && ponto === agv.pontoAtual && agv.posicaoConhecida && !MISSAO_OCUPADA.includes(agv.estadoMissao)
+        ? Number(agv.orientacao) || 0
+        : (no?.orientacaoChegada ?? 0);
+    const c = Planta.compilarMissao(planta, missao, ponto ? { ponto, orientacao } : null);
+    if (!c.sucesso) return falhar(`Não deu para preparar ${missaoId}${ponto ? ` saindo de ${ponto}` : ""}: ${c.erro}`);
 
-    if (agv.filaMissoesSuspensa) {
-        return;
+    if (!publicar(TOPICOS.comando.filaAdicionar, JSON.stringify(Planta.pacoteParaESP(c.pacote)), agv.id)) {
+        return falhar("MQTT desconectado: a missão não foi enviada.");
     }
-
-    if (cancelamentosMissaoPendentes[agvId] || agv.carregamentoPendente) {
-        return;
-    }
-
-    if (["CARREGADA", "EM_EXECUCAO", "AGUARDANDO_CONFIRMACAO", "INTERROMPIDA"]
-            .includes(agv.estadoMissao)) {
-        return;
-    }
-
-    if (!Array.isArray(agv.filaMissoes)) {
-        agv.filaMissoes = [];
-    }
-
-    while (agv.filaMissoes.length > 0) {
-
-        const proximaMissaoId = agv.filaMissoes[0];
-
-        // Missão apagada: descarta só ela.
-        if (!obterMissaoPorId(proximaMissaoId)) {
-            agv.filaMissoes.shift();
-            continue;
-        }
-
-        agv.missaoSelecionada = proximaMissaoId;
-
-        // Sai da fila somente se o envio aconteceu.
-        if (iniciarMissaoPorId(agvId, proximaMissaoId, true)) {
-            agv.filaMissoes.shift();
-        }
-
-        break;
-    }
-
-    salvarAgvsFrota();
+    const destino = destinoFinalPacote(c.pacote) || ponto;
+    agv.filaPendentes = (agv.filaPendentes || []).concat([{ id: String(missao.id), origem: ponto, destino, quando: Date.now() }]);
+    agv.compiladasFila = Object.assign({}, agv.compiladasFila, { [String(missao.id)]: c.pacote.etapas });
+    registrarAcaoSite(agv.id, "missao", "FILA_ENVIADA", `Missão ${missaoId} enviada para a fila do AGV`);
     agendarAtualizacaoTela();
+    return true;
 }
 
+// Rota desenhada no mapa para a missão que o AGV carregou sozinho (fila ou saída do ponto)
+function garantirMissaoCompilada(agv, missaoId) {
+    if (!missaoId || agv.missaoCompilada?.missao === String(missaoId)) return;
+    const planta = plantaPublicada();
+    let etapas = agv.compiladasFila?.[missaoId] || null;
+    if (!etapas) {
+        const saida = /^SAIDA-(.+)$/.exec(missaoId);
+        const missao = saida ? { id: missaoId, etapas: [{ tipo: "IR_PARA", destino: saida[1] }] } : obterMissaoPorId(missaoId);
+        const origem = agv.fila?.atual?.origem || (agv.posicaoConhecida ? agv.pontoAtual : null);
+        if (missao && origem) {
+            const no = Planta.noPorId(planta, origem);
+            const c = Planta.compilarMissao(planta, missao, { ponto: origem, orientacao: Number(agv.orientacao) || no?.orientacaoChegada || 0 });
+            if (c.sucesso) etapas = c.pacote.etapas;
+        }
+    }
+    if (etapas) agv.missaoCompilada = { missao: String(missaoId), revisao: planta.revisao, etapas };
+}
 
+// Rotas de saída (para o AGV parado liberar o ponto): o AGV guarda e diz qual versão tem.
+let cacheSaidas = { chave: null, dados: null };
+function saidasDaPlanta() {
+    const planta = plantaPublicada();
+    const chave = `${planta.revisao}|${JSON.stringify(planta.nos).length}|${JSON.stringify(planta.segmentos).length}`;
+    if (cacheSaidas.chave !== chave) cacheSaidas = { chave, dados: Planta.compilarSaidas(planta) };
+    return cacheSaidas.dados;
+}
+
+function sincronizarSaidas(agv) {
+    if (!agv?.online || !agv.fila || agv.fila.flash === false) return;
+    if (window.Nuvem && !Nuvem.pode("operar")) return;
+    const dados = saidasDaPlanta();
+    if (!dados || agv.fila.saidas === dados.rev) return;
+    if (agv.saidasEnviadasEm && Date.now() - agv.saidasEnviadasEm < 20000) return;
+    agv.saidasEnviadasEm = Date.now();
+    const enviar = m => publicar(TOPICOS.comando.saidas, JSON.stringify(m), agv.id, 1);
+    if (!enviar({ acao: "LIMPAR" })) return;
+    dados.pontos.forEach(p => enviar({ acao: "PONTO", ponto: p.ponto, rotas: p.rotas.map(r => ({ destino: r.destino, zona: r.zona, missao: r.missao })) }));
+    enviar({ acao: "FIM", rev: dados.rev });
+}
 
 
 function removerMissaoFila(indice) {
-
     const agv = agvAtual();
-
-    if (!agv || !Array.isArray(agv.filaMissoes)) {
-        return;
+    const itens = agv?.fila?.itens || [];
+    if (!itens[indice]) return;
+    // Tira esta e as seguintes; as seguintes voltam preparadas para partir
+    // de onde o AGV vai estar sem a que saiu.
+    const seguintes = itens.slice(indice + 1).map(i => i.id);
+    for (let k = itens.length - 1; k >= indice; k--) {
+        if (!publicar(TOPICOS.comando.fila, JSON.stringify({ acao: "REMOVER", indice: k, id: itens[k].id }), agv.id)) {
+            ui.aviso("MQTT desconectado: a fila não mudou.", "erro");
+            return;
+        }
     }
-
-
-    if (
-        indice < 0 ||
-        indice >= agv.filaMissoes.length
-    ) {
-        return;
-    }
-
-
-    agv.filaMissoes.splice(indice, 1);
-
-    salvarAgvsFrota();
-
+    agv.fila.itens = itens.slice(0, indice);
+    agv.filaPendentes = [];
+    const faltou = seguintes.filter(id => !adicionarNaFilaDoAGV(agv.id, id, { silencioso: true }));
+    if (faltou.length) ui.aviso(`Não deu para recolocar ${faltou.join(", ")} na fila.`, "aviso");
     renderizarControleFilaAGV();
 }
 
@@ -2845,7 +2920,37 @@ function processarEventoMissao(agvId, evento) {
 
         case "MISSAO_CARREGADA":
             agv.carregamentoPendente = null;
-            definirAvisoMissao(agv, `${dados.missao}: ${mensagem}. Pressione START MISSÃO no AGV.`, "ok");
+            if (/da fila/.test(mensagem)) {
+                definirAvisoMissao(agv, `${dados.missao} carregada da fila: parte sozinha em ${Number(agv.fila?.aviso) || 10} s (START MISSÃO parte agora).`, "ok");
+            } else {
+                definirAvisoMissao(agv, `${dados.missao}: ${mensagem}. Pressione START MISSÃO no AGV.`, "ok");
+            }
+            break;
+
+        case "FILA_ADICIONADA":
+            definirAvisoMissao(agv, mensagem, "ok");
+            break;
+
+        case "FILA_REJEITADA":
+            agv.filaPendentes = [];
+            definirAvisoMissao(agv, mensagem, "erro");
+            ui.aviso(`AGV ${agv.id}: ${mensagem}`, "erro");
+            break;
+
+        case "FILA_SUSPENSA":
+        case "PARTIDA_CANCELADA":
+            definirAvisoMissao(agv, mensagem, "aviso");
+            break;
+
+        case "LIBERANDO_PONTO":
+            agv.pontoBloqueado = null;
+            definirAvisoMissao(agv, `Liberando o ponto: ${mensagem}. Parte em ${Number(agv.fila?.aviso) || 10} s.`, "info");
+            break;
+
+        case "PONTO_BLOQUEADO":
+            agv.pontoBloqueado = mensagem;
+            definirAvisoMissao(agv, `Não consegue liberar o ponto: ${mensagem}`, "erro");
+            if (typeof renderizarTrafegoFrota === "function") renderizarTrafegoFrota();
             break;
 
         case "CARREGAMENTO_REJEITADO":
@@ -4055,17 +4160,8 @@ function processarConfirmacaoCancelamentoMissao(agvId, valor) {
     agv.missaoCarregada = null;
     agv.etapaMissao = null;
 
-    if (!Array.isArray(agv.filaMissoes)) {
-        agv.filaMissoes = [];
-    }
-
-    if (pendente.escopo === "FILA") {
-        agv.filaMissoes = [];
-        agv.filaMissoesSuspensa = false;
-    } else {
-        // Preserva a fila, mas impede seu início automático.
-        agv.filaMissoesSuspensa = true;
-    }
+    // A fila mora no AGV: "FILA" apaga, "ATUAL" suspende (o AGV avisa em status/fila).
+    agv.filaPendentes = [];
 
     salvarAgvsFrota();
 
@@ -4153,11 +4249,8 @@ function processarStatusMissao(agv, dados) {
             break;
     }
 
-    // Missão terminou: carrega a próxima da fila (o início continua
-    // dependendo do botão START MISSÃO no AGV).
-    if (status === "CONCLUIDA" && anterior !== "CONCLUIDA") {
-        setTimeout(() => iniciarProximaMissaoFila(agv.id), 500);
-    }
+    // Missão que o AGV carregou sozinho (fila, saída do ponto): rota para o mapa
+    if (missaoId && ["CARREGADA", "EM_EXECUCAO"].includes(status)) garantirMissaoCompilada(agv, missaoId);
 }
 
 
@@ -4211,17 +4304,22 @@ function confirmarEtapaAGV() {
 
 
 function retomarFilaMissoes() {
-
     const agv = agvAtual();
-
-    if (!agv) {
-        return;
+    if (!agv?.fila) return;
+    const itens = agv.fila.itens || [];
+    const aqui = agv.posicaoConhecida ? agv.pontoAtual : null;
+    // A fila foi montada para partir de outro ponto (o AGV foi para um ponto
+    // de espera, foi movido...): refaz a partir de onde ele está.
+    if (itens.length && itens[0].origem && aqui && itens[0].origem !== aqui && !MISSAO_OCUPADA.includes(agv.estadoMissao)) {
+        const ids = itens.map(i => i.id);
+        if (!publicar(TOPICOS.comando.fila, JSON.stringify({ acao: "LIMPAR" }), agv.id)) return;
+        agv.fila.itens = [];
+        agv.filaPendentes = [];
+        const faltou = ids.filter(id => !adicionarNaFilaDoAGV(agv.id, id, { silencioso: true }));
+        ui.aviso(`Fila refeita a partir de ${aqui} e retomada${faltou.length ? ` (ficaram de fora: ${faltou.join(", ")})` : ""}.`, faltou.length ? "aviso" : "sucesso");
+    } else if (publicar(TOPICOS.comando.fila, JSON.stringify({ acao: "RETOMAR" }), agv.id)) {
+        ui.aviso("Fila retomada.", "sucesso");
     }
-
-    agv.filaMissoesSuspensa = false;
-
-    salvarAgvsFrota();
-    iniciarProximaMissaoFila(agv.id);
     agendarAtualizacaoTela();
 }
 
@@ -4527,7 +4625,9 @@ function montarHtmlMissaoAtual(agv) {
     let dica = "";
     switch (estado) {
         case "CARREGADA":
-            dica = agv.modo === "AUTOMATICO"
+            dica = agv.modo === "AUTOMATICO" && agv.fila?.partidaEm != null
+                ? `<div class="missao-dica azul">${agv.fila.saida ? "Saindo para liberar o ponto" : "Da fila: parte sozinha"} em <b>${Number(agv.fila.partidaEm)} s</b> (a fita pisca em verde). START MISSÃO parte agora.</div>`
+                : agv.modo === "AUTOMATICO"
                 ? `<div class="missao-dica azul">Pronta. Aperte <b>START MISSÃO</b> no painel do AGV para começar.</div>`
                 : `<div class="missao-dica ambar">Passe a seletora para <b>AUTOMÁTICO</b> e aperte <b>START MISSÃO</b> no AGV.</div>`;
             break;
@@ -4576,7 +4676,8 @@ const SINAIS_LED_SITE = {
     MISSAO_PARADA: ["#22D35B", "respira", "Em missão, parado numa etapa"],
     CONFIRMACAO: ["#22D8FF", "pisca", "Aguardando confirmação do operador"],
     CONCLUIDA: ["#22D35B", "flash3", "Missão concluída"],
-    TESTE_LEDS: ["#F2F4F7", "fixo", "Teste dos LEDs"]
+    TESTE_LEDS: ["#F2F4F7", "fixo", "Teste dos LEDs"],
+    PARTINDO: ["#22D35B", "estrobo", "Vai partir sozinho (fila ou liberar o ponto)"]
 };
 
 const NOMES_EFEITO = { fixo: "aceso", pisca: "piscando", estrobo: "piscando rápido", respira: "respirando", "respira-rapida": "respirando rápido", perseguicao: "correndo", flash3: "3 piscadas" };
@@ -4718,7 +4819,7 @@ function renderizarPainelEntradas(agv) {
     const leds = agv.leds;
     const sinal = SINAIS_LED_SITE[leds];
     const startMissaoAceso = ["EM_EXECUCAO"].includes(agv.estadoMissao) && leds !== "APERTE_START" && leds !== "CONFIRMACAO";
-    const startMissaoPisca = leds === "APERTE_START" || leds === "CONFIRMACAO";
+    const startMissaoPisca = leds === "APERTE_START" || leds === "CONFIRMACAO" || leds === "PARTINDO";
     const rearmePisca = agv.aguardandoRearme && !agv.emergencia;
     const luz = (classeLed, cor, nome, texto) => `
         <div class="luz"><span class="luz-led ${classeLed}" style="--led:${cor}"></span><span><b>${nome}</b><small>${texto}</small></span></div>`;

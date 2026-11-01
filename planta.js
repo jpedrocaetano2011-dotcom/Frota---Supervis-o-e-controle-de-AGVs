@@ -723,6 +723,10 @@
             });
         }
 
+        // Frota: AGV que termina numa estacao sem nada na fila sai para um ponto de espera
+        if (planta.nos.some(n => n.tipo === "ESTACAO") && !planta.nos.some(n => n.tipo === "ESPERA")) {
+            avisos.push({ alvo: null, msg: "Nenhum ponto de espera: com mais de um AGV, um AGV parado numa estação não tem para onde sair e pode travar quem precisa dela." });
+        }
         return { erros, avisos, valida: erros.length === 0 };
     }
 
@@ -1252,10 +1256,40 @@
     }
 
 
+    // Rotas de saida: de cada estacao/ponto de espera ate os pontos de espera
+    // mais perto (ate "maximo"), ja compiladas para o AGV. O AGV parado sem
+    // missao usa quando outro AGV precisa do ponto onde ele esta.
+    // Devolve { rev, pontos: [{ ponto, rotas: [{ destino, zona, comprimento, missao }] }] }
+    function compilarSaidas(planta, maximo = 2) {
+        const zonas = zonasDeConflito(planta);
+        const zonaDoNo = new Map();
+        zonas.forEach(z => z.nos.forEach(n => zonaDoNo.set(n, z.id)));
+        const esperas = planta.nos.filter(n => n.tipo === "ESPERA");
+        const pontos = [];
+        planta.nos.filter(n => n.tipo === "ESTACAO" || n.tipo === "ESPERA").forEach(no => {
+            const rotas = [];
+            esperas.forEach(destino => {
+                if (destino.id === no.id) return;
+                const missao = { id: ("SAIDA-" + destino.id).slice(0, 31), nome: "Liberar o ponto", etapas: [{ tipo: "IR_PARA", destino: destino.id }] };
+                const c = compilarMissao(planta, missao, { ponto: no.id, orientacao: no.orientacaoChegada ?? 0 });
+                if (!c.sucesso) return;
+                const comprimento = c.pacote.etapas.reduce((t, e) => t + (e.trechos || []).reduce((u, tr) => u + (tr.comprimento || 0), 0), 0);
+                rotas.push({ destino: destino.id, zona: zonaDoNo.get(destino.id) || "", comprimento: arred(comprimento), missao: pacoteParaESP(c.pacote) });
+            });
+            rotas.sort((a, b) => a.comprimento - b.comprimento);
+            if (rotas.length) pontos.push({ ponto: no.id, rotas: rotas.slice(0, maximo) });
+        });
+        // versao: muda quando qualquer rota muda (o AGV compara para saber se precisa de novas)
+        const texto = JSON.stringify(pontos);
+        let h = 2166136261;
+        for (let i = 0; i < texto.length; i++) { h ^= texto.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+        return { rev: h.toString(36), pontos };
+    }
+
     const API = {
         VERSAO, LIMITES, TIPOS_NO, TIPOS_LAYOUT, TIPOS_SEGMENTO, DISTANCIA_SUGESTAO_LATERAL,
         criarVazia, normalizar, migrarV1, validar,
-        calcularRota, compilarIrPara, compilarMissao, pacoteParaESP, zonasDeConflito, anotarTrafego, TRAFEGO,
+        calcularRota, compilarIrPara, compilarMissao, pacoteParaESP, zonasDeConflito, anotarTrafego, TRAFEGO, compilarSaidas,
         noPorId, segmentoPorId, estacaoPorId, acessosDaEstacao, estacaoDoNo, nomeDoPonto, candidatosDestino,
         comprimentoSegmento, anguloEntre, anguloExato, tagsNoSentido, tipoSegmento, segmentoGemeo,
         localizarRfid, velocidadeSegmento, proximoId, prefixoNo, normalizarAngulo, diferencaDirecao,

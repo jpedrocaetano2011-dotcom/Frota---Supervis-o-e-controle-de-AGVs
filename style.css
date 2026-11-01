@@ -622,6 +622,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 .btn-remover-fila:hover { color: var(--red); border-color: var(--red-line); }
 .fila-vazia { color: var(--muted); font-size: 13px; }
 .fila-suspensa { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 10px 12px; border-radius: var(--raio-medio); background: var(--amber-soft); font-size: 13px; }
+.fila-partida { padding: 10px 12px; border-radius: var(--raio-medio); background: var(--accent-soft); color: var(--accent-hover); font-size: 13px; }
 
 .posicao-form { display: flex; flex-direction: column; gap: 10px; padding-top: 14px; margin-top: 14px; border-top: 1px solid var(--border); }
 .posicao-form .linha { display: grid; grid-template-columns: 1fr 140px; gap: 8px; }
@@ -750,7 +751,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 .entrada.perigo > i { background: var(--red); box-shadow: 0 0 0 3px var(--red-soft); }
 .entrada b { display: block; font-size: 13px; }
 .entrada small { display: block; font-size: 12px; color: var(--muted); }
-.luzes { display: flex; flex-direction: column; gap: 8px; }
+.luzes { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
 .luz { display: flex; align-items: center; gap: 12px; padding: 10px; border-radius: var(--raio-medio); border: 1px solid var(--border); }
 .luz-led { width: 18px; height: 18px; border-radius: 50%; background: var(--off); flex: none; }
 .luz-led.aceso { background: var(--led, var(--accent)); box-shadow: 0 0 8px var(--led, var(--accent)); }
@@ -1316,8 +1317,8 @@ body.sem-administrar #editorPropriedades select,
 body.sem-administrar #editorPropriedades textarea { pointer-events: none; background: var(--soft); color: var(--muted); }
 
 /* Tela de entrada */
-body.entrando > :not(.entrada):not(.toasts):not(script) { visibility: hidden; }
-.entrada {
+body.entrando > :not(.tela-entrada):not(.toasts):not(script) { visibility: hidden; }
+.tela-entrada {
     position: fixed; inset: 0; z-index: 300; display: grid; place-items: center; padding: 24px 16px;
     background: var(--bg); overflow-y: auto;
 }
@@ -1326,7 +1327,7 @@ body.entrando > :not(.entrada):not(.toasts):not(script) { visibility: hidden; }
     border-radius: var(--raio); box-shadow: var(--sombra-alta); padding: 26px 26px 20px;
 }
 .entrada-marca { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }
-.entrada h1 { font-size: 20px; font-weight: 600; margin-bottom: 14px; }
+.tela-entrada h1 { font-size: 20px; font-weight: 600; margin-bottom: 14px; }
 .entrada-form { display: flex; flex-direction: column; gap: 14px; margin-top: 4px; }
 .entrada-form .btn { min-height: 42px; margin-top: 4px; }
 .entrada-texto { color: var(--muted); font-size: 14px; line-height: 1.5; margin-bottom: 14px; }
