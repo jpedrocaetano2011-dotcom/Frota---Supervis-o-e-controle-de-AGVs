@@ -162,6 +162,8 @@ const AgvVirtual = (function () {
         const pose = agv?.virtualPose;
         if (pose) inst.exp.vi_teleportar(pose.x, pose.y, pose.orientacao);
 
+        // relógio do AGV virtual = hora deste computador (o turno usa)
+        if (inst.exp.vi_relogio) inst.exp.vi_relogio(Date.now() / 1000);
         inst.exp.vi_iniciar(motivoReinicio);
         if (!nvs) {
             // Primeira vez: AGV "de fábrica" já com braço, garra e QTR calibrados

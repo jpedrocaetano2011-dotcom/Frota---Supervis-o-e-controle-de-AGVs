@@ -163,6 +163,7 @@ Object.values(agvs).forEach(agv => {
     delete agv.filaMissoesSuspensa;
     agv.fila = null;
     agv.filaPendentes = [];
+    agv.rotinaStatus = null;   // vem do AGV (status/rotina)
 
     if (!("missaoSelecionada" in agv)) {
         agv.missaoSelecionada = null;
@@ -1436,6 +1437,23 @@ function processarMensagemMQTT(topico, valor) {
             break;
 
 
+        case "status/rotina":
+
+            // Berço e turno (estado no AGV); confere se a rotina dele está igual à do site
+            if (valor) {
+                const r = lerJSON();
+                if (r) {
+                    r.recebidoEm = Date.now();
+                    agv.rotinaStatus = r;
+                    if (typeof sincronizarRotina === "function") sincronizarRotina(agv);
+                }
+            } else {
+                agv.rotinaStatus = null;
+            }
+            agendarAtualizacaoTela();
+            if (document.getElementById("rotina")?.classList.contains("ativa") && typeof renderizarRotina === "function") renderizarRotina();
+            break;
+
         case "status/fila":
 
             // Fila de missões guardada no AGV, partida automática e saída do ponto
@@ -1478,8 +1496,9 @@ function processarMensagemMQTT(topico, valor) {
                 agv.heartbeat = Number(valor);
                 agv.uptime = Number(valor);
                 marcarHeartbeat(id);
-                // rotas de saída desatualizadas (planta nova, AGV novo): manda de novo
+                // rotas de saída e rotina desatualizadas (planta nova, AGV novo): manda de novo
                 if (agv.fila) sincronizarSaidas(agv);
+                if (agv.rotinaStatus && typeof sincronizarRotina === "function") sincronizarRotina(agv);
             }
 
             break;
@@ -2073,6 +2092,7 @@ function renderizarFrota() {
                     <dl class="lista-dl">
                         <dt>Posição</dt><dd>${escaparHtml(agv.online || agv.pontoAtual ? descreverPosicaoAGV(agv) : "--")}</dd>
                         <dt>Sinal</dt><dd class="mono">${escaparHtml(rotuloSinal(agv))}</dd>
+                        ${typeof linhaRotinaCard === "function" ? linhaRotinaCard(agv) : ""}
                     </dl>
                     <div class="agv-card-acoes">
                         <button type="button" class="btn ${cat.chave === "emergencia" ? "btn-perigo-cheio" : ""}" data-abrir="${id}">${acao}</button>
@@ -2220,6 +2240,7 @@ const informacoesTelas = {
     configuracoes: ["Configurações", "parâmetros salvos no próprio AGV"],
     controlePlanta: ["Planta", "Layout do galpão: linhas, estações, tags e zonas"],
     agvVirtual: ["AGV virtual", "O firmware real rodando no navegador, num mundo montado a partir da planta publicada"],
+    rotina: ["Rotina da frota", "Berços, turnos e calendário de cada AGV"],
     usuarios: ["Usuários", "Quem acessa o sistema e o que cada um pode fazer"]
 };
 
@@ -2266,6 +2287,7 @@ function mudarTela(nomeTela) {
     if (nomeTela === "visaoGeral") renderizarMapaVisaoGeral();
     if (nomeTela === "agvVirtual") AgvVirtual.abrir();
     if (nomeTela === "missoes") abrirTelaMissoes();
+    if (nomeTela === "rotina" && typeof renderizarRotina === "function") renderizarRotina(true);
     if (nomeTela === "usuarios" && typeof Usuarios !== "undefined") Usuarios.abrir();
     renderizarAlertaGlobal();
     renderizarDadosTelaAtual();
@@ -2806,8 +2828,8 @@ function garantirMissaoCompilada(agv, missaoId) {
     const planta = plantaPublicada();
     let etapas = agv.compiladasFila?.[missaoId] || null;
     if (!etapas) {
-        const saida = /^SAIDA-(.+)$/.exec(missaoId);
-        const missao = saida ? { id: missaoId, etapas: [{ tipo: "IR_PARA", destino: saida[1] }] } : obterMissaoPorId(missaoId);
+        const saida = /^(?:SAIDA|CASA|IDA)-(.+)$/.exec(missaoId);
+        const missao = saida ? { id: missaoId, etapas: [{ tipo: "IR_PARA", destino: saida[1], exato: true }] } : obterMissaoPorId(missaoId);
         const origem = agv.fila?.atual?.origem || (agv.posicaoConhecida ? agv.pontoAtual : null);
         if (missao && origem) {
             const no = Planta.noPorId(planta, origem);
@@ -2818,25 +2840,28 @@ function garantirMissaoCompilada(agv, missaoId) {
     if (etapas) agv.missaoCompilada = { missao: String(missaoId), revisao: planta.revisao, etapas };
 }
 
-// Rotas de saída (para o AGV parado liberar o ponto): o AGV guarda e diz qual versão tem.
-let cacheSaidas = { chave: null, dados: null };
-function saidasDaPlanta() {
+// Rotas de saída do AGV (casa, pontos de espera, ida do berço): o AGV guarda e diz qual versão tem.
+let cacheSaidas = new Map();
+function saidasDaPlanta(berco) {
     const planta = plantaPublicada();
-    const chave = `${planta.revisao}|${JSON.stringify(planta.nos).length}|${JSON.stringify(planta.segmentos).length}`;
-    if (cacheSaidas.chave !== chave) cacheSaidas = { chave, dados: Planta.compilarSaidas(planta) };
-    return cacheSaidas.dados;
+    const chave = `${planta.revisao}|${JSON.stringify(planta.nos).length}|${JSON.stringify(planta.segmentos).length}|${berco || ""}`;
+    if (!cacheSaidas.has(chave)) {
+        if (cacheSaidas.size > 20) cacheSaidas.clear();
+        cacheSaidas.set(chave, Planta.compilarSaidas(planta, { berco: berco && Planta.noPorId(planta, berco)?.tipo === "BERCO" ? berco : null }));
+    }
+    return cacheSaidas.get(chave);
 }
 
 function sincronizarSaidas(agv) {
     if (!agv?.online || !agv.fila || agv.fila.flash === false) return;
     if (window.Nuvem && !Nuvem.pode("operar")) return;
-    const dados = saidasDaPlanta();
+    const dados = saidasDaPlanta(agv.rotina?.berco);
     if (!dados || agv.fila.saidas === dados.rev) return;
     if (agv.saidasEnviadasEm && Date.now() - agv.saidasEnviadasEm < 20000) return;
     agv.saidasEnviadasEm = Date.now();
     const enviar = m => publicar(TOPICOS.comando.saidas, JSON.stringify(m), agv.id, 1);
     if (!enviar({ acao: "LIMPAR" })) return;
-    dados.pontos.forEach(p => enviar({ acao: "PONTO", ponto: p.ponto, rotas: p.rotas.map(r => ({ destino: r.destino, zona: r.zona, missao: r.missao })) }));
+    dados.rotas.forEach(r => enviar({ acao: "ROTA", ponto: r.ponto, tipo: r.tipo, destino: r.destino, zona: r.zona, missao: r.missao }));
     enviar({ acao: "FIM", rev: dados.rev });
 }
 
@@ -2945,6 +2970,19 @@ function processarEventoMissao(agvId, evento) {
         case "LIBERANDO_PONTO":
             agv.pontoBloqueado = null;
             definirAvisoMissao(agv, `Liberando o ponto: ${mensagem}. Parte em ${Number(agv.fila?.aviso) || 10} s.`, "info");
+            break;
+
+        case "FIM_DE_TURNO":
+        case "TURNO_INICIADO":
+        case "INDO_PARA_BERCO":
+        case "POSICAO_BERCO":
+            definirAvisoMissao(agv, mensagem, "info");
+            break;
+
+        case "BERCO_OCUPADO":
+        case "BERCO_INDISPONIVEL":
+        case "ROTA_INVALIDA":
+            definirAvisoMissao(agv, mensagem, "aviso");
             break;
 
         case "PONTO_BLOQUEADO":
@@ -4378,6 +4416,7 @@ function renderizarDadosTelaAtual() {
     if (telaAtual === "configuracoes") renderizarConfiguracoes();
     if (telaAtual === "controleManual") atualizarStatusGarraESP();
     if (telaAtual === "missoes" && !document.querySelector("#modalEtapaMissao:not([hidden])")) renderizarListaMissoes();
+    if (telaAtual === "rotina" && typeof renderizarRotina === "function") renderizarRotina();
 }
 
 /* ============================================================
@@ -4677,7 +4716,10 @@ const SINAIS_LED_SITE = {
     CONFIRMACAO: ["#22D8FF", "pisca", "Aguardando confirmação do operador"],
     CONCLUIDA: ["#22D35B", "flash3", "Missão concluída"],
     TESTE_LEDS: ["#F2F4F7", "fixo", "Teste dos LEDs"],
-    PARTINDO: ["#22D35B", "estrobo", "Vai partir sozinho (fila ou liberar o ponto)"]
+    PARTINDO: ["#22D35B", "estrobo", "Vai partir sozinho (fila ou liberar o ponto)"],
+    PARTINDO_BERCO: ["#9B5CFF", "pisca", "Vai para o berço"],
+    INDO_BERCO: ["#9B5CFF", "perseguicao", "Indo para o berço"],
+    TURNO_ENCERRADO: ["#9B5CFF", "respira", "Turno encerrado"]
 };
 
 const NOMES_EFEITO = { fixo: "aceso", pisca: "piscando", estrobo: "piscando rápido", respira: "respirando", "respira-rapida": "respirando rápido", perseguicao: "correndo", flash3: "3 piscadas" };
@@ -4819,7 +4861,7 @@ function renderizarPainelEntradas(agv) {
     const leds = agv.leds;
     const sinal = SINAIS_LED_SITE[leds];
     const startMissaoAceso = ["EM_EXECUCAO"].includes(agv.estadoMissao) && leds !== "APERTE_START" && leds !== "CONFIRMACAO";
-    const startMissaoPisca = leds === "APERTE_START" || leds === "CONFIRMACAO" || leds === "PARTINDO";
+    const startMissaoPisca = leds === "APERTE_START" || leds === "CONFIRMACAO" || leds === "PARTINDO" || leds === "PARTINDO_BERCO";
     const rearmePisca = agv.aguardandoRearme && !agv.emergencia;
     const luz = (classeLed, cor, nome, texto) => `
         <div class="luz"><span class="luz-led ${classeLed}" style="--led:${cor}"></span><span><b>${nome}</b><small>${texto}</small></span></div>`;

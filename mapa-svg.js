@@ -519,6 +519,16 @@
                     ];
                     el("polygon", { points: ponta.map(q => q.join(",")).join(" "), fill: cor, "pointer-events": "none" }, g);
                 }
+            } else if (no.tipo === "BERCO") {
+                // casinha (berço: casa e carregador do AGV)
+                const r = px(11);
+                const cor = t.purple || t.accent;
+                el("path", {
+                    d: `M${-r},${-r * 0.1}L0,${-r * 1.05}L${r},${-r * 0.1}L${r * 0.78},${-r * 0.1}L${r * 0.78},${r}L${-r * 0.78},${r}L${-r * 0.78},${-r * 0.1}Z`,
+                    fill: t.css("--purple-soft") || t.card, stroke: contorno || cor, "stroke-width": selecionado ? 3 : 2.2,
+                    "stroke-linejoin": "round", "vector-effect": "non-scaling-stroke"
+                }, g);
+                el("path", { d: `M${-r * 0.22},${r}L${-r * 0.22},${r * 0.35}L${r * 0.22},${r * 0.35}L${r * 0.22},${r}`, fill: "none", stroke: cor, "stroke-width": 1.6, "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, g);
             } else if (no.tipo === "ESPERA") {
                 const r = px(10);
                 el("rect", {

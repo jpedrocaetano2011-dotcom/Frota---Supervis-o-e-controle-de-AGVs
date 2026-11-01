@@ -36,7 +36,8 @@ EditorPlanta.iniciar({
         .map(agv => ({ agv: agv.id, codigo: agv.sensores.rfid.ultimo })),
     missoesUsandoNo: id => missoes
         .filter(m => (m.etapas || []).some(e => e.tipo === "IR_PARA" && e.destino === id))
-        .map(m => m.nome || m.id)
+        .map(m => m.nome || m.id),
+    agvsDoBerco: id => Object.values(agvs).filter(a => a.rotina?.berco === id).map(a => a.id)
 });
 
 function plantaPublicada() {
@@ -156,11 +157,11 @@ function preencherSelectPosicao(agv) {
     if (select.dataset.assinatura !== assinatura) {
         const valorAnterior = select.value;
         select.innerHTML = `<option value="">Ponto</option>`;
-        ["ESTACAO", "ESPERA", "REFERENCIA"].forEach(tipo => {
+        ["ESTACAO", "BERCO", "ESPERA", "REFERENCIA"].forEach(tipo => {
             const nos = planta.nos.filter(n => n.tipo === tipo);
             if (!nos.length) return;
             const grupo = document.createElement("optgroup");
-            grupo.label = tipo === "ESTACAO" ? "Estações" : tipo === "ESPERA" ? "Espera" : "Referências";
+            grupo.label = tipo === "ESTACAO" ? "Estações" : tipo === "ESPERA" ? "Espera" : tipo === "BERCO" ? "Berços" : "Referências";
             nos.forEach(no => {
                 const option = document.createElement("option");
                 option.value = no.id;

@@ -174,7 +174,7 @@
     async function baixarDados() {
         const id = empresa.id;
         const [a, p, m] = await Promise.all([
-            cliente.from("agvs").select("id, nome").eq("empresa_id", id).order("id"),
+            cliente.from("agvs").select("id, nome, rotina").eq("empresa_id", id).order("id"),
             cliente.from("plantas").select("rascunho, publicada, revisao").eq("empresa_id", id).maybeSingle(),
             cliente.from("missoes").select("id, nome, etapas, prioridade").eq("empresa_id", id).order("id")
         ]);
@@ -257,13 +257,14 @@
     // (os virtuais são deste navegador e ficam).
     function ajustarFrota(agvs, criarAGV) {
         if (modo !== "nuvem" || !dados) return;
-        const naNuvem = new Map(dados.agvs.map(a => [a.id, a.nome]));
+        const naNuvem = new Map(dados.agvs.map(a => [a.id, a]));
         Object.keys(agvs).forEach(id => {
             if (!agvs[id].virtual && !naNuvem.has(id)) delete agvs[id];
         });
-        naNuvem.forEach((nome, id) => {
-            if (!agvs[id] || agvs[id].virtual) agvs[id] = criarAGV(id, nome);
-            else agvs[id].nome = nome;
+        naNuvem.forEach((a, id) => {
+            if (!agvs[id] || agvs[id].virtual) agvs[id] = criarAGV(id, a.nome);
+            else agvs[id].nome = a.nome;
+            agvs[id].rotina = a.rotina && Object.keys(a.rotina).length ? a.rotina : (agvs[id].rotina || null);
         });
     }
 
@@ -361,6 +362,15 @@
             const { error } = await cliente.from("agvs").upsert({ empresa_id: empresa.id, id, nome });
             if (error) throw error;
         }, `o AGV ${id}`);
+    }
+
+    // Rotina (berço e turno) de um AGV: operador também pode
+    function salvarRotina(id, rotina) {
+        if (modo !== "nuvem" || !pode("operar")) return;
+        enfileirar(async () => {
+            const { error } = await cliente.rpc("salvar_rotina", { p_empresa: empresa.id, p_agv: id, p_rotina: rotina });
+            if (error) throw error;
+        }, `a rotina do AGV ${id}`);
     }
 
     function removerAgv(id) {
@@ -749,7 +759,7 @@
         nomePapel: p => PAPEIS[p] || p,
         PAPEIS,
         ajustarFrota, plantaDaNuvem, conexaoMqtt,
-        salvarMissoes, salvarPlanta, salvarAgv, removerAgv, terminarGravacoes,
+        salvarMissoes, salvarPlanta, salvarAgv, salvarRotina, removerAgv, terminarGravacoes,
         cliente: () => cliente,
         usuario: () => usuario,
         perfil: () => perfil,

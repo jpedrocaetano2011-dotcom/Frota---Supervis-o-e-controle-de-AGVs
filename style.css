@@ -568,6 +568,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 .lg-estacao { width: 12px; height: 12px; border-radius: 3px; border: 2px solid var(--green); background: var(--green-soft); }
 .lg-ref { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--mapa-fita); background: var(--mapa-papel); }
 .lg-espera { width: 10px; height: 10px; transform: rotate(45deg); border: 2px solid var(--amber); background: var(--amber-soft); }
+.lg-berco { width: 12px; height: 12px; background: var(--purple); clip-path: polygon(50% 0, 100% 45%, 86% 45%, 86% 100%, 14% 100%, 14% 45%, 0 45%); }
 .lg-tag { width: 9px; height: 9px; transform: rotate(45deg); background: var(--mapa-tag); }
 .lg-linha { width: 18px; height: 4px; border-radius: 2px; background: var(--mapa-fita); }
 .lg-lateral { width: 18px; height: 0; border-top: 3px dashed var(--mapa-fita); }
@@ -1423,3 +1424,46 @@ body.entrando > :not(.tela-entrada):not(.toasts):not(script) { visibility: hidde
 .frota-trafego { margin-top: 16px; }
 .frota-trafego .card-barra { padding: 14px 16px; }
 .frota-trafego td .pilula + .pilula { margin-left: 4px; }
+
+/* Rotina da frota: berços e turnos */
+.menu-item.menu-sub { padding-left: 34px; font-size: 13px; }
+.menu-item.menu-sub .icone { width: 16px; height: 16px; }
+.pilula.roxo { background: var(--purple-soft); color: var(--purple); border-color: transparent; font-weight: 600; }
+.btn-roxo { color: var(--purple); border-color: var(--purple); }
+.btn-roxo:hover:not(:disabled) { background: var(--purple-soft); }
+.rotina-grade { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.rotina-agvs { display: flex; flex-direction: column; }
+.rotina-agv { padding: 16px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 12px; }
+.rotina-agv-topo { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.rotina-agv-estado { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.rotina-campos { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; align-items: end; }
+.rotina-check { flex-direction: row; align-items: center; gap: 8px; color: var(--text); font-size: 13.5px; min-height: 38px; }
+.rotina-check input { width: 18px; height: 18px; }
+.rotina-dias-campo { grid-column: span 2; }
+.rotina-dias { display: flex; gap: 4px; }
+.rotina-dia { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--border); background: var(--card); color: var(--muted); font-weight: 600; cursor: pointer; }
+.rotina-dia.ativo { background: var(--purple); border-color: var(--purple); color: #fff; }
+.rotina-dia:disabled { cursor: default; opacity: .55; }
+.rotina-unidade { display: flex; align-items: center; gap: 6px; }
+.rotina-unidade input { width: 100%; }
+.rotina-unidade em { font-style: normal; color: var(--muted); }
+.rotina-acoes { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.rotina-acoes-espaco { flex: 1; }
+.rotina-mapa { height: 320px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--mapa-papel); }
+.rotina-bercos { display: flex; flex-direction: column; }
+.rotina-berco { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; }
+.rotina-berco:last-child { border-bottom: 0; }
+.rotina-berco-topo { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rotina-berco-ocupado { margin-left: auto; }
+.rotina-icone-berco { width: 14px; height: 14px; background: var(--purple); clip-path: polygon(50% 0, 100% 45%, 86% 45%, 86% 100%, 14% 100%, 14% 45%, 0 45%); }
+.rotina-vazio { padding: 16px; }
+@media (max-width: 1100px) {
+    .rotina-grade { grid-template-columns: 1fr; }
+}
+@media (max-width: 520px) {
+    .rotina-dias-campo { grid-column: auto; }
+    .rotina-dia { width: 30px; height: 30px; }
+}
+.rotina-aviso { font-size: 12.5px; color: var(--amber); margin: 0; }
+.rotina-aviso::before { content: "● "; }
+.rotina-agv-corpo { display: flex; flex-direction: column; gap: 12px; }

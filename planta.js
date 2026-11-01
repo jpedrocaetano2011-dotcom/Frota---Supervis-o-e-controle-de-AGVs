@@ -24,7 +24,7 @@
 
      // CAMADA DE NAVEGACAO (por onde o AGV anda)
      nos: [ { id, tipo, nome, x, y, rfid, orientacaoChegada, barreira, estacao } ],
-     //   tipo: ESTACAO (acesso de uma estacao) | REFERENCIA | ESPERA
+     //   tipo: ESTACAO (acesso de uma estacao) | REFERENCIA | ESPERA | BERCO (casa/carregador de AGVs)
      segmentos: [ { id, tipo, a, b, sentido, velocidadeMaxima, barreira, tags: [{ rfid, distancia }] } ]
      //   tipo: LINHA (fita no chao) | LATERAL (troca de faixa andando de lado, sem fita)
      //   sentido: DUPLO | A_PARA_B | B_PARA_A
@@ -63,7 +63,7 @@
     // (a troca lateral anda sem a protecao dos sensores de distancia).
     const DISTANCIA_SUGESTAO_LATERAL = 1.0;
 
-    const TIPOS_NO = ["ESTACAO", "REFERENCIA", "ESPERA"];
+    const TIPOS_NO = ["ESTACAO", "REFERENCIA", "ESPERA", "BERCO"];
     const TIPOS_SEGMENTO = ["LINHA", "LATERAL"];
 
     const TIPOS_LAYOUT = {
@@ -194,7 +194,7 @@
     }
 
     function prefixoNo(tipo) {
-        return tipo === "ESTACAO" ? "E" : tipo === "ESPERA" ? "W" : "R";
+        return tipo === "ESTACAO" ? "E" : tipo === "ESPERA" ? "W" : tipo === "BERCO" ? "B" : "R";
     }
 
     function tipoSegmento(segmento) {
@@ -392,6 +392,12 @@
                     no.estacao = id;
                 }
                 delete no.maquina;
+            } else if (no.tipo === "BERCO") {
+                // berço: o AGV estaciona sempre virado para o mesmo lado (para se reconhecer ao ligar)
+                no.orientacaoChegada = no.orientacaoChegada === null || no.orientacaoChegada === undefined ||
+                                       no.orientacaoChegada === "" ? null : normalizarAngulo(no.orientacaoChegada);
+                delete no.estacao;
+                delete no.maquina;
             } else {
                 no.orientacaoChegada = null;
                 delete no.estacao;
@@ -556,6 +562,13 @@
             }
             if (no.tipo === "ESTACAO" && (no.orientacaoChegada === null || no.orientacaoChegada === undefined)) {
                 erros.push({ alvo: no.id, msg: `Acesso ${no.id} sem orientação de chegada.` });
+            }
+            if (no.tipo === "BERCO") {
+                if (no.orientacaoChegada === null || no.orientacaoChegada === undefined) {
+                    erros.push({ alvo: no.id, msg: `Berço ${no.id} sem orientação de chegada (para onde o AGV fica virado nele).` });
+                }
+                const ligacoes = planta.segmentos.filter(s => s.a === no.id || s.b === no.id).length;
+                if (ligacoes > 1) avisos.push({ alvo: no.id, msg: `Berço ${no.id} no meio do caminho: AGV parado nele atrapalha os outros. Coloque-o num ramal (uma linha só).` });
             }
             if (!no.rfid) {
                 avisos.push({ alvo: no.id, msg: `${no.id} sem tag RFID: a chegada será só por odometria.` });
@@ -724,8 +737,8 @@
         }
 
         // Frota: AGV que termina numa estacao sem nada na fila sai para um ponto de espera
-        if (planta.nos.some(n => n.tipo === "ESTACAO") && !planta.nos.some(n => n.tipo === "ESPERA")) {
-            avisos.push({ alvo: null, msg: "Nenhum ponto de espera: com mais de um AGV, um AGV parado numa estação não tem para onde sair e pode travar quem precisa dela." });
+        if (planta.nos.some(n => n.tipo === "ESTACAO") && !planta.nos.some(n => n.tipo === "ESPERA" || n.tipo === "BERCO")) {
+            avisos.push({ alvo: null, msg: "Nenhum berço nem ponto de espera: com mais de um AGV, um AGV parado numa estação não tem para onde sair e pode travar quem precisa dela." });
         }
         return { erros, avisos, valida: erros.length === 0 };
     }
@@ -867,8 +880,9 @@
     }
 
     // Destino de uma missao: estacao (escolhe o acesso) ou ponto
-    function candidatosDestino(planta, destinoId) {
-        const estacao = estacaoPorId(planta, destinoId);
+    // exato: o próprio ponto, mesmo que tenha o id de uma estação com outros acessos
+    function candidatosDestino(planta, destinoId, exato = false) {
+        const estacao = exato ? null : estacaoPorId(planta, destinoId);
         if (estacao) {
             return { estacao, nos: acessosDaEstacao(planta, estacao.id) };
         }
@@ -877,8 +891,8 @@
         return { estacao: estacaoDoNo(planta, no), nos: [no] };
     }
 
-    function compilarIrPara(planta, origemId, orientacao, destinoId) {
-        const candidatos = candidatosDestino(planta, destinoId);
+    function compilarIrPara(planta, origemId, orientacao, destinoId, exato = false) {
+        const candidatos = candidatosDestino(planta, destinoId, exato && Boolean(noPorId(planta, destinoId)));
         if (!candidatos || !candidatos.nos.length) {
             return { sucesso: false, erro: `Destino "${destinoId}" não existe na planta publicada${candidatos ? " (estação sem acessos)" : ""}.` };
         }
@@ -887,7 +901,7 @@
         let ultimoErro = null;
 
         candidatos.nos.forEach(destino => {
-            const chegada = destino.tipo === "ESTACAO" && destino.orientacaoChegada !== null ? destino.orientacaoChegada : null;
+            const chegada = (destino.tipo === "ESTACAO" || destino.tipo === "BERCO") && destino.orientacaoChegada !== null && destino.orientacaoChegada !== undefined ? destino.orientacaoChegada : null;
             if (origemId === destino.id) {
                 const custo = chegada === null ? 0 : custoGiro(calcularGiro(orientacaoInicial, chegada));
                 if (!melhor || custo < melhor.custo) {
@@ -961,7 +975,7 @@
         for (let i = 0; i < missao.etapas.length; i++) {
             const etapa = missao.etapas[i];
             if (etapa.tipo === "IR_PARA") {
-                const r = compilarIrPara(planta, ponto, orientacao, etapa.destino);
+                const r = compilarIrPara(planta, ponto, orientacao, etapa.destino, etapa.exato === true);
                 if (!r.sucesso) return { sucesso: false, erro: `Etapa ${i + 1}: ${r.erro}` };
                 etapas.push(Object.assign({ indice: i }, r.etapa));
                 ponto = r.ponto;
@@ -1256,34 +1270,53 @@
     }
 
 
-    // Rotas de saida: de cada estacao/ponto de espera ate os pontos de espera
-    // mais perto (ate "maximo"), ja compiladas para o AGV. O AGV parado sem
-    // missao usa quando outro AGV precisa do ponto onde ele esta.
-    // Devolve { rev, pontos: [{ ponto, rotas: [{ destino, zona, comprimento, missao }] }] }
-    function compilarSaidas(planta, maximo = 2) {
+    // Rotas de saída de um AGV, já compiladas, que ele guarda na flash:
+    //   CASA   de cada ponto até o berço dele (fim de turno, parado sem missão)
+    //   ESPERA de cada ponto até os pontos de espera mais perto (berço ocupado, liberar o ponto)
+    //   IDA    do berço até cada estação/ponto de espera (começo do turno: até onde a fila começa)
+    // Devolve { rev, rotas: [{ ponto, tipo, destino, zona, comprimento, missao }] }, na ordem
+    // de importância (o AGV pode ficar sem espaço para as últimas).
+    function compilarSaidas(planta, opcoes = {}) {
+        const berco = opcoes.berco ? noPorId(planta, opcoes.berco) : null;
+        const maximoEsperas = opcoes.esperas ?? 2;
         const zonas = zonasDeConflito(planta);
         const zonaDoNo = new Map();
         zonas.forEach(z => z.nos.forEach(n => zonaDoNo.set(n, z.id)));
         const esperas = planta.nos.filter(n => n.tipo === "ESPERA");
-        const pontos = [];
-        planta.nos.filter(n => n.tipo === "ESTACAO" || n.tipo === "ESPERA").forEach(no => {
-            const rotas = [];
-            esperas.forEach(destino => {
-                if (destino.id === no.id) return;
-                const missao = { id: ("SAIDA-" + destino.id).slice(0, 31), nome: "Liberar o ponto", etapas: [{ tipo: "IR_PARA", destino: destino.id }] };
-                const c = compilarMissao(planta, missao, { ponto: no.id, orientacao: no.orientacaoChegada ?? 0 });
-                if (!c.sucesso) return;
-                const comprimento = c.pacote.etapas.reduce((t, e) => t + (e.trechos || []).reduce((u, tr) => u + (tr.comprimento || 0), 0), 0);
-                rotas.push({ destino: destino.id, zona: zonaDoNo.get(destino.id) || "", comprimento: arred(comprimento), missao: pacoteParaESP(c.pacote) });
-            });
-            rotas.sort((a, b) => a.comprimento - b.comprimento);
-            if (rotas.length) pontos.push({ ponto: no.id, rotas: rotas.slice(0, maximo) });
+        const paradas = planta.nos.filter(n => n.tipo === "ESTACAO" || n.tipo === "ESPERA" || n.tipo === "BERCO");
+        const rota = (no, tipo, destino) => {
+            const prefixo = tipo === "CASA" ? "CASA-" : tipo === "IDA" ? "IDA-" : "SAIDA-";
+            const missao = { id: (prefixo + destino.id).slice(0, 31), nome: tipo, etapas: [{ tipo: "IR_PARA", destino: destino.id, exato: true }] };
+            const c = compilarMissao(planta, missao, { ponto: no.id, orientacao: no.orientacaoChegada ?? 0 });
+            if (!c.sucesso) return null;
+            const comprimento = c.pacote.etapas.reduce((t, e) => t + (e.trechos || []).reduce((u, tr) => u + (tr.comprimento || 0), 0), 0);
+            return { ponto: no.id, tipo, destino: destino.id, zona: zonaDoNo.get(destino.id) || "", comprimento: arred(comprimento), missao: pacoteParaESP(c.pacote) };
+        };
+        const rotas = [];
+        // 1. para casa e 2. para os pontos de espera mais perto, de cada parada
+        paradas.forEach(no => {
+            if (berco && no.id !== berco.id) {
+                const r = rota(no, "CASA", berco);
+                if (r) rotas.push(r);
+            }
+            esperas.filter(e => e.id !== no.id)
+                .map(e => rota(no, "ESPERA", e)).filter(Boolean)
+                .sort((a, b) => a.comprimento - b.comprimento)
+                .slice(0, maximoEsperas)
+                .forEach(r => rotas.push(r));
         });
-        // versao: muda quando qualquer rota muda (o AGV compara para saber se precisa de novas)
-        const texto = JSON.stringify(pontos);
+        // 3. do berço para onde a fila pode começar (mais perto primeiro)
+        if (berco) {
+            paradas.filter(n => n.id !== berco.id && n.tipo !== "BERCO")
+                .map(n => rota(berco, "IDA", n)).filter(Boolean)
+                .sort((a, b) => a.comprimento - b.comprimento)
+                .forEach(r => rotas.push(r));
+        }
+        // versão: muda quando qualquer rota muda (o AGV compara para saber se precisa de novas)
+        const texto = JSON.stringify(rotas);
         let h = 2166136261;
         for (let i = 0; i < texto.length; i++) { h ^= texto.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
-        return { rev: h.toString(36), pontos };
+        return { rev: h.toString(36), rotas };
     }
 
     const API = {

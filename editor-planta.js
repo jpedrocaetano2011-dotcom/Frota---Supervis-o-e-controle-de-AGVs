@@ -19,6 +19,7 @@
         ESTACAO:    { tecla: "e", dica: "Clique para criar uma estação (o ponto onde o AGV para). Sobre uma linha, a estação é inserida nela. Para uma estação com mais de uma entrada, use “+ Outro acesso” nas propriedades." },
         REFERENCIA: { tecla: "r", dica: "Clique para criar um ponto de referência (cruzamento, curva, entrada de estação). Sobre uma linha, divide a linha." },
         ESPERA:     { tecla: "w", dica: "Clique para criar um ponto de espera (estacionamento do AGV)." },
+        BERCO:      { tecla: "b", dica: "Clique para criar um berço: a casa (e o carregador) de um ou mais AGVs. Coloque num ramal, fora do caminho. Os AGVs de cada berço são escolhidos em Frota › Rotina." },
         SEGMENTO:   { tecla: "s", dica: "Clique no ponto inicial e depois nos próximos para desenhar a linha. Clicar no vazio cria um ponto. Esc termina." },
         LATERAL:    { tecla: "l", dica: "Troca lateral: clique num ponto de uma faixa e depois no ponto em frente, na faixa paralela. O AGV anda de lado entre eles, sem fita." },
         TAG:        { tecla: "t", dica: "Clique sobre uma linha para colocar uma tag RFID intermediária." },
@@ -195,7 +196,7 @@
         const id = tipo === "ESTACAO" && estacaoId ? idAcessoLivre(estacaoId) : idLivre(Planta.prefixoNo(tipo));
         const no = {
             id, tipo, nome: "", x: Planta.arred(x), y: Planta.arred(y), rfid: "",
-            orientacaoChegada: tipo === "ESTACAO" ? 90 : null, barreira: 0
+            orientacaoChegada: tipo === "ESTACAO" || tipo === "BERCO" ? 90 : null, barreira: 0
         };
         if (tipo === "ESTACAO") {
             if (!estacaoId) {
@@ -530,14 +531,15 @@
             const no = Planta.noPorId(planta, sel.id);
             const estacao = no.tipo === "ESTACAO" ? Planta.estacaoPorId(planta, no.estacao) : null;
             const acessos = estacao ? Planta.acessosDaEstacao(planta, estacao.id) : [];
-            titulo.textContent = no.tipo === "ESTACAO" ? (acessos.length > 1 ? `Acesso da estação ${estacao.id}` : "Estação") : no.tipo === "ESPERA" ? "Ponto de espera" : "Referência";
+            titulo.textContent = no.tipo === "ESTACAO" ? (acessos.length > 1 ? `Acesso da estação ${estacao.id}` : "Estação") : no.tipo === "ESPERA" ? "Ponto de espera" : no.tipo === "BERCO" ? "Berço" : "Referência";
+            const donos = no.tipo === "BERCO" && estado.ganchos.agvsDoBerco ? estado.ganchos.agvsDoBerco(no.id) : [];
             const ligados = planta.segmentos.filter(s => s.a === no.id || s.b === no.id).length;
             const rfids = estado.ganchos.ultimosRfids ? estado.ganchos.ultimosRfids() : [];
             const maquinas = planta.layout.filter(o => Planta.TIPOS_LAYOUT[o.tipo]?.solido);
             painel.innerHTML = `
                 <div class="editor-linha">
                     ${campo("Identificador", "noId", no.id, `maxlength="${Planta.LIMITES.tamanhoId}"`)}
-                    ${campoSelect("Tipo", "noTipo", no.tipo, [["ESTACAO", "Estação"], ["REFERENCIA", "Referência"], ["ESPERA", "Espera"]])}
+                    ${campoSelect("Tipo", "noTipo", no.tipo, [["ESTACAO", "Estação"], ["REFERENCIA", "Referência"], ["ESPERA", "Espera"], ["BERCO", "Berço"]])}
                 </div>
                 ${no.tipo === "ESTACAO" && estacao ? `
                     <div class="editor-bloco destaque">
@@ -561,10 +563,16 @@
                 </div>
                 ${campo("Tag RFID no centro", "noRfid", no.rfid, 'placeholder="ex.: 0A0000001C" maxlength="14" spellcheck="false" title="10 caracteres hexadecimais, como o AGV lê"')}
                 ${rfids.length ? `<div class="editor-rfids">${rfids.map(r => `<button class="btn btn-mini" data-acao="usarRfid" data-rfid="${esc(r.codigo)}" title="Último lido pelo AGV ${esc(r.agv)}">${esc(r.codigo)} <em>AGV ${esc(r.agv)}</em></button>`).join("")}</div>` : ""}
-                ${no.tipo === "ESTACAO" ? `
+                ${no.tipo === "BERCO" ? `
+                    <div class="editor-bloco destaque">
+                        <span class="editor-subtitulo">Casa de</span>
+                        <p class="editor-texto">${donos.length ? donos.map(a => `<strong>${esc(a)}</strong>`).join(", ") : "nenhum AGV ainda"}</p>
+                        <p class="editor-texto suave">Escolha os AGVs de cada berço em Frota › Rotina. Pode ser o mesmo berço para AGVs de turnos diferentes. A tag RFID do berço faz o AGV se reconhecer ao ser ligado aqui.</p>
+                    </div>` : ""}
+                ${no.tipo === "ESTACAO" || no.tipo === "BERCO" ? `
                     <div class="editor-bloco">
                         <span class="editor-subtitulo">Orientação de chegada</span>
-                        <p class="editor-texto suave">Para onde a frente do AGV aponta quando ele para na estação.</p>
+                        <p class="editor-texto suave">Para onde a frente do AGV aponta quando ele para ${no.tipo === "BERCO" ? "no berço" : "na estação"}.</p>
                         <div class="editor-orientacao">
                             ${[[90, "↑"], [0, "→"], [270, "↓"], [180, "←"]].map(([a, s]) => `<button class="btn ${no.orientacaoChegada === a ? "ativo" : ""}" data-acao="orientacao" data-valor="${a}">${s} ${a}°</button>`).join("")}
                             <input type="number" step="1" min="0" max="359" data-campo="noOrientacao" value="${no.orientacaoChegada ?? ""}">
@@ -716,10 +724,10 @@
                 case "noId": if (!renomearNo(no.id, valor)) { estado.desfazer.pop(); renderizarPropriedades(); return; } break;
                 case "noTipo":
                     no.tipo = valor;
-                    if (valor === "ESTACAO" && (no.orientacaoChegada === null || no.orientacaoChegada === undefined)) no.orientacaoChegada = 90;
+                    if ((valor === "ESTACAO" || valor === "BERCO") && (no.orientacaoChegada === null || no.orientacaoChegada === undefined)) no.orientacaoChegada = 90;
                     if (valor === "ESTACAO") tornarEstacao(no);
                     if (valor !== "ESTACAO") {
-                        no.orientacaoChegada = null;
+                        if (valor !== "BERCO") no.orientacaoChegada = null;
                         delete no.estacao;
                         limparEstacoesVazias();
                     }
@@ -1163,7 +1171,7 @@
             return;
         }
 
-        if (ferramenta === "ESTACAO" || ferramenta === "REFERENCIA" || ferramenta === "ESPERA") {
+        if (ferramenta === "ESTACAO" || ferramenta === "REFERENCIA" || ferramenta === "ESPERA" || ferramenta === "BERCO") {
             const acessoDe = ferramenta === "ESTACAO" ? estado.novoAcessoDe : null;
             if (alvo?.tipo === "no") {
                 const existente = Planta.noPorId(planta, alvo.id);

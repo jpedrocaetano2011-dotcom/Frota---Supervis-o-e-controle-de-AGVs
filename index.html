@@ -38,6 +38,7 @@
 
     <nav class="menu" aria-label="Menu principal">
         <a href="#" class="menu-item ativo" data-tela="frota" id="menuFrota"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg><span>Frota</span><b class="menu-badge" id="menuBadgeFrota" hidden>0</b></a>
+        <a href="#" class="menu-item menu-sub" data-tela="rotina"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-7 9 7M5 9.5V20h14V9.5M10 20v-5h4v5"/></svg><span>Rotina e berços</span></a>
         <a href="#" class="menu-item agv-menu" data-tela="visaoGeral"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3zM9 3v15M15 6v15"/></svg><span>Visão geral</span></a>
         <a href="#" class="menu-item agv-menu" data-tela="controleManual"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6zM12 3v3M12 18v3M3 12h3M18 12h3"/></svg><span>Controle manual</span></a>
         <a href="#" class="menu-item agv-menu" data-tela="sensores"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19a10 10 0 0 1 0-14M19 5a10 10 0 0 1 0 14M8.5 15.5a5 5 0 0 1 0-7M15.5 8.5a5 5 0 0 1 0 7"/></svg><span>Sensores</span></a>
@@ -95,12 +96,32 @@
         <div class="barra-acoes">
             <div class="filtros" id="filtrosFrota" role="group" aria-label="Filtrar por estado"></div>
             <div class="grupo">
+                <button type="button" class="btn" onclick="mudarTela('rotina')">Rotina e berços</button>
                 <button type="button" class="btn" id="frotaNovoVirtual">+ AGV virtual</button>
                 <button type="button" class="btn btn-primario" onclick="abrirCadastroAGV()" data-requer="administrar">+ Adicionar AGV</button>
             </div>
         </div>
         <div id="fleetGrid" class="fleet-grid"></div>
         <section class="card card-sem-padding frota-trafego" id="frotaTrafego" aria-label="Tráfego" hidden></section>
+    </section>
+
+    <!-- ========================================================
+         ROTINA: BERÇOS E TURNOS
+         ======================================================== -->
+    <section id="rotina" class="tela">
+        <div class="rotina-grade">
+            <section class="card card-sem-padding" aria-label="Turnos dos AGVs">
+                <div class="card-barra">
+                    <div><h2>Turno de cada AGV</h2><div class="card-sub">Fim de turno (horário ou botão): termina a missão em andamento, guarda o resto da fila e vai para o berço. Início: a fila volta a andar.</div></div>
+                </div>
+                <div id="rotinaAgvs" class="rotina-agvs"></div>
+            </section>
+            <section class="card card-sem-padding rotina-lado" aria-label="Berços">
+                <div class="card-barra"><div><h2>Berços</h2><div class="card-sub">Casa e carregador dos AGVs. Crie em Planta › Berço.</div></div></div>
+                <div class="rotina-mapa" id="mapaRotina"></div>
+                <div id="rotinaBercos" class="rotina-bercos"></div>
+            </section>
+        </div>
     </section>
 
     <!-- ========================================================
@@ -140,6 +161,7 @@
                     <span><i class="lg-estacao"></i>Estação</span>
                     <span><i class="lg-ref"></i>Referência</span>
                     <span><i class="lg-espera"></i>Espera</span>
+                    <span><i class="lg-berco"></i>Berço</span>
                     <span><i class="lg-tag"></i>Tag RFID</span>
                     <span><i class="lg-linha"></i>Linha</span>
                     <span><i class="lg-lateral"></i>Troca lateral</span>
@@ -588,6 +610,7 @@
                 <button type="button" class="btn editor-ferramenta" data-ferramenta="ESTACAO" title="Acesso de estação">Estação <kbd>E</kbd></button>
                 <button type="button" class="btn editor-ferramenta" data-ferramenta="REFERENCIA" title="Ponto de referência">Referência <kbd>R</kbd></button>
                 <button type="button" class="btn editor-ferramenta" data-ferramenta="ESPERA" title="Ponto de espera">Espera <kbd>W</kbd></button>
+                <button type="button" class="btn editor-ferramenta" data-ferramenta="BERCO" title="Berço (casa e carregador do AGV)">Berço <kbd>B</kbd></button>
                 <button type="button" class="btn editor-ferramenta" data-ferramenta="SEGMENTO" title="Linha com fita">Linha <kbd>S</kbd></button>
                 <button type="button" class="btn editor-ferramenta" data-ferramenta="LATERAL" title="Troca lateral entre faixas (sem fita)">Lateral <kbd>L</kbd></button>
                 <button type="button" class="btn editor-ferramenta" data-ferramenta="TAG" title="Tag RFID no meio de uma linha">Tag <kbd>T</kbd></button>
@@ -880,7 +903,7 @@
     // Sem nuvem configurada (config.js) os scripts carregam na hora, como antes.
     // Com nuvem, carregam depois do login e dos dados da empresa.
     Nuvem.iniciar(["planta.js", "planta-exemplo.js", "mapa-svg.js", "editor-planta.js", "operacao-planta.js",
-                   "configuracoes.js", "agv-virtual.js", "script.js", "usuarios.js"]);
+                   "configuracoes.js", "agv-virtual.js", "script.js", "rotina.js", "usuarios.js"]);
 </script>
 </body>
 </html>
