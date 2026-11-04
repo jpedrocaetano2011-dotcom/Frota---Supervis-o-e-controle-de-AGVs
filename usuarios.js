@@ -10,7 +10,9 @@ const Usuarios = (() => {
     "use strict";
 
     const esc = t => ui.escapar(String(t ?? ""));
-    const PAPEIS_EMPRESA = [["admin", "Administrador"], ["operador", "Operador"], ["visualizador", "Visualizador"]];
+    const PAPEIS_EMPRESA = [["admin", "Administrador"], ["operador", "Operador"], ["visualizador", "Visualizador"], ["lider", "Líder"], ["posto", "Posto (tablet)"]];
+    const TEM_PIN = ["admin", "operador", "lider"];
+    let comPin = new Set();
     let carregando = false;
 
     function conteudo() {
@@ -45,6 +47,8 @@ const Usuarios = (() => {
                 fornecedor ? db.from("agvs").select("id, nome").eq("empresa_id", empresa.id).order("id") : nada
             ]);
             [perfis, convites, empresas].forEach(r => { if (r.error) throw r.error; });
+            const pins = await db.rpc("usuarios_com_pin", { p_empresa: empresa.id });
+            comPin = new Set(pins.error ? [] : (pins.data || []).map(x => typeof x === "string" ? x : x.usuarios_com_pin));
             // Banco sem a parte 2 (01_esquema.sql antigo): segue sem a seção de MQTT.
             const semTabelasMqtt = [mqtts, mqttAgvs].some(r => r.error);
             if (semTabelasMqtt) console.warn("Tabelas de MQTT ausentes: rode o 01_esquema.sql novo.", mqtts.error || mqttAgvs.error);
@@ -69,12 +73,15 @@ const Usuarios = (() => {
                 <td>${u.usuario_id === eu
                     ? `<span class="pilula">${esc(Nuvem.nomePapel(u.papel))} · você</span>`
                     : selectPapel(u.papel, `data-papel="${esc(u.usuario_id)}" aria-label="Papel de ${esc(u.email)}"`)}</td>
+                <td>${TEM_PIN.includes(u.papel)
+                    ? `<button type="button" class="btn btn-mini" data-pin-usuario="${esc(u.usuario_id)}" data-email="${esc(u.email)}">${comPin.has(u.usuario_id) ? "Trocar PIN" : "Definir PIN"}</button>${comPin.has(u.usuario_id) ? "" : `<div class="suave">sem PIN</div>`}`
+                    : u.papel === "posto" ? `<span class="suave">vincule em Frota › Postos</span>` : ""}</td>
                 <td class="usuarios-acao">${u.usuario_id === eu ? "" : `<button type="button" class="btn btn-mini btn-perigo" data-remover="${esc(u.usuario_id)}" data-email="${esc(u.email)}">Remover</button>`}</td>
             </tr>`).join("");
         const pendentes = convites.map(c => `
             <tr class="usuarios-pendente">
                 <td><span class="pilula ambar">convite pendente</span><div class="suave mono">${esc(c.email)}</div></td>
-                <td>${esc(Nuvem.nomePapel(c.papel))}</td>
+                <td>${esc(Nuvem.nomePapel(c.papel))}</td><td></td>
                 <td class="usuarios-acao"><button type="button" class="btn btn-mini" data-cancelar="${esc(c.email)}">Cancelar</button></td>
             </tr>`).join("");
         const link = location.origin + location.pathname;
@@ -85,7 +92,7 @@ const Usuarios = (() => {
                 <div class="card-barra"><div><h2>Usuários · ${esc(empresa.nome)}</h2><div class="card-sub">${perfis.length} com acesso${convites.length ? ` · ${convites.length} convite(s) pendente(s)` : ""}</div></div></div>
                 <div class="tabela-rolagem">
                     <table class="tabela-usuarios">
-                        <thead><tr><th>Pessoa</th><th>Papel</th><th></th></tr></thead>
+                        <thead><tr><th>Pessoa</th><th>Papel</th><th>PIN de urgente</th><th></th></tr></thead>
                         <tbody>${linhas}${pendentes}</tbody>
                     </table>
                 </div>
@@ -104,16 +111,18 @@ const Usuarios = (() => {
                 <section class="card">
                     <h2>O que cada papel faz</h2>
                     <table class="tabela-papeis">
-                        <thead><tr><th></th><th>Admin.</th><th>Operador</th><th>Visual.</th></tr></thead>
+                        <thead><tr><th></th><th>Admin.</th><th>Oper.</th><th>Líder</th><th>Visual.</th><th>Posto</th></tr></thead>
                         <tbody>
-                            <tr><td>Ver frota, mapa, sensores, histórico</td><td>✓</td><td>✓</td><td>✓</td></tr>
-                            <tr><td>Comandar AGVs e rodar missões</td><td>✓</td><td>✓</td><td>—</td></tr>
-                            <tr><td>Criar e editar missões</td><td>✓</td><td>✓</td><td>—</td></tr>
-                            <tr><td>Planta, cadastro de AGVs, configurações, firmware</td><td>✓</td><td>—</td><td>—</td></tr>
-                            <tr><td>Usuários</td><td>✓</td><td>—</td><td>—</td></tr>
+                            <tr><td>Ver frota, mapa, sensores, histórico, despacho</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>—</td></tr>
+                            <tr><td>Comandar AGVs e rodar missões</td><td>✓</td><td>✓</td><td>—</td><td>—</td><td>—</td></tr>
+                            <tr><td>Criar e editar missões</td><td>✓</td><td>✓</td><td>—</td><td>—</td><td>—</td></tr>
+                            <tr><td>Pedir missões</td><td>✓</td><td>✓</td><td>—</td><td>—</td><td>só o seu posto</td></tr>
+                            <tr><td>Marcar pedido urgente</td><td>✓</td><td>✓</td><td>✓</td><td>—</td><td>com PIN</td></tr>
+                            <tr><td>Planta, AGVs, postos, configurações, firmware</td><td>✓</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+                            <tr><td>Usuários</td><td>✓</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
                         </tbody>
                     </table>
-                    <p class="suave usuarios-dica">Parar o AGV (STOP) é permitido para todos.</p>
+                    <p class="suave usuarios-dica">Parar o AGV (STOP) é permitido para todos. O papel Posto é o tablet de um posto: só vê a tela do posto. No tablet, “urgente” pede o PIN de um líder, operador ou administrador.</p>
                 </section>
             </div>
 
@@ -276,7 +285,10 @@ const char* MQTT_PASSWORD = "${esc(m.senha)}";</pre>
         if (!alvo || !el || !el.contains(alvo)) return;
         const db = Nuvem.cliente();
         if (alvo.dataset.usuarios === "recarregar") abrir();
-        else if (alvo.dataset.remover) {
+        else if (alvo.dataset.pinUsuario) {
+            const pin = await pedirPin(alvo.dataset.email);
+            if (pin) executar(db.rpc("definir_pin", { p_usuario: alvo.dataset.pinUsuario, p_pin: pin }), `PIN de ${alvo.dataset.email} definido.`);
+        } else if (alvo.dataset.remover) {
             if (!(await ui.confirmar({ titulo: "Remover o acesso?", texto: `${alvo.dataset.email} deixa de acessar a ${Nuvem.empresa().nome}. A conta continua existindo e pode ser liberada de novo.`, confirmar: "Remover", perigo: true }))) return;
             executar(db.rpc("remover_da_empresa", { p_usuario: alvo.dataset.remover }), "Acesso removido.");
         } else if (alvo.dataset.cancelar) {
@@ -301,5 +313,16 @@ const char* MQTT_PASSWORD = "${esc(m.senha)}";</pre>
         }
     });
 
-    return { abrir };
+    // Pede um PIN novo (duas vezes). Devolve o PIN ou null.
+    async function pedirPin(quem) {
+        const pin = await ui.perguntar({ titulo: `PIN de ${quem}`, texto: "4 a 8 números. Usado para autorizar pedido urgente no tablet do posto.", tipo: "password", inputmode: "numeric" });
+        if (pin == null) return null;
+        if (!/^[0-9]{4,8}$/.test(pin)) { ui.aviso("O PIN tem de 4 a 8 números.", "aviso"); return null; }
+        const de_novo = await ui.perguntar({ titulo: "Repita o PIN", tipo: "password", inputmode: "numeric" });
+        if (de_novo == null) return null;
+        if (de_novo !== pin) { ui.aviso("Os dois PINs não batem.", "aviso"); return null; }
+        return pin;
+    }
+
+    return { abrir, pedirPin };
 })();

@@ -1467,3 +1467,122 @@ body.entrando > :not(.tela-entrada):not(.toasts):not(script) { visibility: hidde
 .rotina-aviso { font-size: 12.5px; color: var(--amber); margin: 0; }
 .rotina-aviso::before { content: "● "; }
 .rotina-agv-corpo { display: flex; flex-direction: column; gap: 12px; }
+
+
+/* ============================================================
+   DESPACHO (0.13): pedidos, postos e tela do posto
+   ============================================================ */
+.btn-perigo-suave { color: var(--red); }
+.btn-perigo-suave:hover:not(:disabled) { background: var(--red-soft); border-color: var(--red-line); }
+
+.desp-grade { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.desp-lado { position: sticky; top: 16px; }
+.desp-mapa { height: 460px; background: var(--mapa-papel); }
+.desp-form { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto; gap: 12px; align-items: end; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.desp-lista { display: flex; flex-direction: column; }
+.desp-bloco { padding: 12px 16px 14px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+.desp-bloco:last-child { border-bottom: 0; }
+.desp-bloco h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; }
+.desp-alternar { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; cursor: pointer; }
+.desp-alternar::before { content: "▸ "; }
+.desp-alternar[aria-expanded="true"]::before { content: "▾ "; }
+.desp-vazio { font-size: 13px; }
+.desp-pedido { border: 1px solid var(--border); border-radius: var(--raio-medio); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; cursor: pointer; background: var(--card); }
+.desp-pedido:hover { border-color: var(--border-forte); }
+.desp-pedido.selecionado { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.desp-pedido.urgente { border-left: 4px solid var(--red); }
+.desp-linha1 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.desp-linha1 .suave { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.desp-num { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.desp-linha2 { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; }
+.desp-motivo { font-size: 12.5px; color: var(--muted); background: var(--soft); border-radius: var(--raio-pequeno); padding: 6px 8px; }
+.desp-acoes { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.desp-prio { min-height: 36px; font-size: 13px; padding: 0 8px; }
+
+/* Visão geral: pedidos esperando por um AGV */
+.fila-pedidos { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: var(--raio-medio); background: var(--accent-soft); margin-bottom: 8px; }
+.fila-pedidos-titulo { font-size: 12.5px; font-weight: 600; color: var(--accent-hover); }
+.fila-pedido-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; flex-wrap: wrap; }
+.fila-pedido-acoes { display: flex; gap: 4px; }
+
+/* Frota › Postos */
+.postos-intro { max-width: 70ch; font-size: 13.5px; }
+.postos-pin { display: flex; gap: 16px; align-items: end; flex-wrap: wrap; }
+.postos-pin .campo { max-width: 260px; }
+.postos-lista { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr)); gap: 16px; align-items: start; }
+.posto-cartao { display: flex; flex-direction: column; gap: 14px; }
+.posto-cartao .rotina-check, .posto-usuarios .rotina-check { display: flex; }
+.posto-campos { display: grid; grid-template-columns: 90px minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.posto-botoes { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+.posto-botao-linha { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 32px; gap: 6px; align-items: center; }
+.posto-usuarios { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.posto-acoes { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Tela do posto (tablet) */
+.posto-topo { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.posto-chegada { padding: 18px 20px; border-radius: var(--raio); background: var(--green); color: #fff; font-size: 22px; font-weight: 700; text-align: center; animation: posto-pulso 1s ease-in-out 3; }
+@keyframes posto-pulso { 50% { transform: scale(1.02); filter: brightness(1.12); } }
+.posto-conteudo { display: flex; flex-direction: column; gap: 16px; }
+.posto-colunas { display: grid; gap: 16px; }
+.posto-colunas.n2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.posto-painel { background: var(--card); border: 1px solid var(--border); border-radius: var(--raio); padding: 18px; display: flex; flex-direction: column; gap: 16px; }
+.posto-cabecalho { display: flex; align-items: baseline; gap: 10px; }
+.posto-cabecalho h2 { font-size: 26px; }
+.posto-id { font-family: var(--mono); color: var(--muted); }
+.posto-botoes-grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 14px; }
+.posto-botao-bloco { display: flex; flex-direction: column; gap: 8px; }
+.posto-botao { min-height: 140px; border-radius: var(--raio); border: 0; background: var(--accent); color: #fff; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 16px; font: inherit; touch-action: manipulation; }
+.posto-botao:hover:not(:disabled) { background: var(--accent-hover); }
+.posto-botao:active:not(:disabled) { transform: scale(.98); }
+.posto-botao:disabled { background: var(--off); cursor: not-allowed; }
+.posto-botao-rotulo { font-size: 26px; font-weight: 700; }
+.posto-botao-sub { font-size: 13px; opacity: .85; }
+.posto-botao-entregue { font-size: 13px; background: rgba(255, 255, 255, .2); border-radius: 999px; padding: 2px 10px; }
+.posto-botao-opcoes { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 32px; }
+.posto-junto { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.posto-link-urgente { background: none; border: 0; color: var(--red); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; padding: 4px 0; text-decoration: underline; text-underline-offset: 3px; }
+.posto-pedido { min-height: 140px; border-radius: var(--raio); border: 2px solid var(--border); padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; background: var(--soft); }
+.posto-pedido.azul { border-color: var(--accent); background: var(--accent-soft); }
+.posto-pedido.vermelho { border-color: var(--red); background: var(--red-soft); }
+.posto-pedido.verde, .posto-pedido.chegou { border-color: var(--green); background: var(--green-soft); }
+.posto-pedido-rotulo { font-size: 15px; font-weight: 600; }
+.posto-pedido-status { font-size: 24px; font-weight: 700; }
+.posto-pedido-detalhe { font-size: 15px; color: var(--muted); min-height: 20px; }
+.posto-pedido-acoes { display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto; padding-top: 8px; }
+.posto-abas { display: flex; gap: 8px; flex-wrap: wrap; }
+.posto-aba { min-height: 48px; padding: 0 18px; border-radius: 999px; border: 1px solid var(--border); background: var(--card); color: var(--text); font: inherit; font-size: 16px; font-weight: 600; cursor: pointer; }
+.posto-aba b { display: inline-flex; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px; background: var(--accent); color: #fff; font-size: 12px; align-items: center; justify-content: center; margin-left: 6px; }
+.posto-aba.ativa { background: var(--accent); color: #fff; border-color: var(--accent); }
+.posto-aba.ativa b { background: #fff; color: var(--accent); }
+.posto-aba.chegando { box-shadow: 0 0 0 3px var(--green); }
+.posto-resumo { display: flex; gap: 8px; flex-wrap: wrap; padding: 10px 12px; border-radius: var(--raio-medio); background: var(--soft); font-size: 13.5px; }
+.posto-resumo-item { background: var(--card); border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; }
+.posto-vazio { text-align: center; padding: 60px 20px; }
+.posto-pin-fundo { position: fixed; inset: 0; background: rgba(10, 16, 24, .55); display: flex; align-items: center; justify-content: center; z-index: 200; padding: 16px; }
+.posto-pin-fundo[hidden] { display: none; }
+.posto-pin { background: var(--card); border-radius: var(--raio); padding: 22px; width: min(100%, 340px); display: flex; flex-direction: column; gap: 12px; box-shadow: var(--sombra-alta); text-align: center; }
+.posto-pin-visor { font-size: 30px; letter-spacing: .3em; min-height: 46px; border: 1px solid var(--border); border-radius: var(--raio-medio); display: flex; align-items: center; justify-content: center; }
+.posto-pin-visor .suave { font-size: 15px; letter-spacing: 0; }
+.posto-pin-teclas { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.posto-pin-teclas button { min-height: 58px; border-radius: var(--raio-medio); border: 1px solid var(--border); background: var(--soft); color: var(--text); font: inherit; font-size: 22px; font-weight: 600; cursor: pointer; touch-action: manipulation; }
+.posto-pin-teclas button.ok { background: var(--red); color: #fff; border-color: var(--red); font-size: 18px; }
+.posto-pin-teclas button:disabled { opacity: .45; cursor: not-allowed; }
+
+/* tablet do posto: só a tela do posto */
+body.papel-posto .sidebar, body.papel-posto .topo, body.papel-posto #postoSair,
+body.tela-posto .topo { display: none !important; }
+body.papel-posto .main { padding: 14px; }
+
+@media (max-width: 1100px) {
+    .desp-grade { grid-template-columns: 1fr; }
+    .desp-lado { position: static; order: -1; }
+    .desp-mapa { height: 320px; }
+}
+@media (max-width: 700px) {
+    .posto-colunas.n2 { grid-template-columns: 1fr; }
+    .desp-form { grid-template-columns: 1fr; }
+    .posto-campos { grid-template-columns: 1fr 1fr; }
+    .posto-campos .campo:last-child { grid-column: 1 / -1; }
+}
+.fila-pedido-item small { display: block; color: var(--muted); font-size: 12.5px; }
+.posto-cartao .campo > .btn-mini { align-self: flex-start; }

@@ -102,6 +102,7 @@
                 rascunho = Planta.clonar(publicada);
                 try {
                     if (!localStorage.getItem("missoesAGV")) localStorage.setItem("missoesAGV", JSON.stringify(PlantaExemplo.missoes()));
+                    if (!localStorage.getItem("postosFrota") && PlantaExemplo.postos) localStorage.setItem("postosFrota", JSON.stringify(PlantaExemplo.postos()));
                 } catch (erro) { /* sem espaço: segue sem as missões */ }
             }
         }

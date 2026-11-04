@@ -28,6 +28,8 @@ EditorPlanta.iniciar({
         if (missoes.length) return;
         missoes.push(...PlantaExemplo.missoes());
         salvarMissoesNoNavegador();
+        if (PlantaExemplo.postos && window.Nuvem && !Nuvem.emNuvem() && !Nuvem.postos().length)
+            PlantaExemplo.postos().forEach(p => Nuvem.salvarPosto(p, null));
         if (typeof renderizarListaMissoes === "function") renderizarListaMissoes();
         ui.aviso("Missões de exemplo adicionadas. Publique a planta para usá-las.", "info");
     },

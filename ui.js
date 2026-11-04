@@ -146,6 +146,45 @@
         });
     }
 
+    // Caixa com um campo de texto. Devolve o texto, ou null se voltou.
+    function perguntar(opcoes) {
+        const o = opcoes || {};
+        return new Promise(resolver => {
+            const fundo = document.createElement("div");
+            fundo.className = "modal-overlay ativo";
+            fundo.innerHTML = `
+                <div class="modal ui-confirmar" role="dialog" aria-modal="true" aria-labelledby="uiPerguntarTitulo">
+                    <div class="modal-cabecalho"><div><h2 id="uiPerguntarTitulo">${escapar(o.titulo || "Digite")}</h2></div></div>
+                    <form class="modal-corpo" style="display:flex;flex-direction:column;gap:10px">
+                        ${o.texto ? `<p>${escapar(o.texto)}</p>` : ""}
+                        <input type="${o.tipo === "password" ? "password" : "text"}" ${o.inputmode ? `inputmode="${escapar(o.inputmode)}"` : ""} autocomplete="off" value="${escapar(o.valor || "")}" aria-labelledby="uiPerguntarTitulo">
+                    </form>
+                    <div class="modal-acoes">
+                        <button type="button" class="btn" data-r="0">Voltar</button>
+                        <button type="button" class="btn btn-primario" data-r="1">${escapar(o.confirmar || "OK")}</button>
+                    </div>
+                </div>`;
+            const anterior = document.activeElement;
+            const campo = fundo.querySelector("input");
+            const terminar = valor => {
+                document.removeEventListener("keydown", tecla, true);
+                fundo.remove();
+                if (anterior && anterior.focus) anterior.focus();
+                resolver(valor);
+            };
+            const tecla = e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); terminar(null); } };
+            fundo.querySelector("form").addEventListener("submit", e => { e.preventDefault(); terminar(campo.value); });
+            fundo.addEventListener("click", e => {
+                if (e.target === fundo) terminar(null);
+                const botao = e.target.closest("[data-r]");
+                if (botao) terminar(botao.dataset.r === "1" ? campo.value : null);
+            });
+            document.addEventListener("keydown", tecla, true);
+            document.body.appendChild(fundo);
+            campo.focus();
+        });
+    }
+
     /* ---------------- tema ---------------- */
 
     function temaAtual() {
@@ -227,5 +266,5 @@
         return true;
     }
 
-    raiz.ui = { aviso, confirmar, trocarHtml, campoEmUso, icone, escapar, aplicarTema, alternarTema, temaAtual, cor, numero, milhar, duracao, direcao, ICONES };
+    raiz.ui = { aviso, confirmar, perguntar, trocarHtml, campoEmUso, icone, escapar, aplicarTema, alternarTema, temaAtual, cor, numero, milhar, duracao, direcao, ICONES };
 })(window);

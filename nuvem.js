@@ -13,7 +13,9 @@
    uma cópia local do banco) e avisa a Nuvem quando grava:
      Nuvem.salvarMissoes(lista), Nuvem.salvarPlanta(rascunho, publicada),
      Nuvem.salvarAgv(id, nome, idAntigo), Nuvem.removerAgv(id)
-   Permissões: Nuvem.pode("ver" | "operar" | "administrar").
+   Permissões: Nuvem.pode("ver" | "operar" | "administrar" | "pedir" |
+   "despachar" | "urgente"). Postos (0.13): Nuvem.postos(), salvarPosto,
+   removerPosto; pedidos ficam no despacho.js (usa Nuvem.cliente()).
 */
 (function (raiz) {
     "use strict";
@@ -28,13 +30,18 @@
     cfg.chave = String(cfg.chave || "").trim();
     const CONFIGURADA = Boolean(cfg.url && cfg.chave);
     const URL_BIBLIOTECA = cfg.biblioteca || "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js";
-    const CHAVES_DADOS = ["plantaAGV2", "plantaAGV2Publicada", "missoesAGV", "agvsFrota", "agvSelecionado", "telaAtual"];
-    const PAPEIS = { fornecedor: "Fornecedor", admin: "Administrador", operador: "Operador", visualizador: "Visualizador" };
+    const CHAVES_DADOS = ["plantaAGV2", "plantaAGV2Publicada", "missoesAGV", "agvsFrota", "agvSelecionado", "telaAtual", "postosFrota", "pedidosFrota"];
+    const PAPEIS = { fornecedor: "Fornecedor", admin: "Administrador", operador: "Operador", lider: "Líder", posto: "Posto", visualizador: "Visualizador" };
     const NIVEIS = {
-        ver: ["fornecedor", "admin", "operador", "visualizador"],
+        ver: ["fornecedor", "admin", "operador", "lider", "posto", "visualizador"],
         operar: ["fornecedor", "admin", "operador"],
-        administrar: ["fornecedor", "admin"]
+        administrar: ["fornecedor", "admin"],
+        pedir: ["fornecedor", "admin", "operador", "posto"],
+        despachar: ["fornecedor", "admin", "operador", "posto"],
+        urgente: ["fornecedor", "admin", "operador", "lider"]
     };
+    // Comandos que o despachante manda (o tablet do posto também despacha)
+    const TOPICOS_DESPACHO = /^comando\/(fila|fila\/adicionar|saidas)$/;
     // Comandos que mudam o AGV em si (parâmetros, firmware, calibração): só admin.
     const TOPICOS_ADMIN = /^comando\/(configuracao|ota|calibracao_qtr|calibracao_mecanica|trafego)$/;
 
@@ -173,13 +180,15 @@
 
     async function baixarDados() {
         const id = empresa.id;
-        const [a, p, m] = await Promise.all([
+        const [a, p, m, po] = await Promise.all([
             cliente.from("agvs").select("id, nome, rotina").eq("empresa_id", id).order("id"),
             cliente.from("plantas").select("rascunho, publicada, revisao").eq("empresa_id", id).maybeSingle(),
-            cliente.from("missoes").select("id, nome, etapas, prioridade").eq("empresa_id", id).order("id")
+            cliente.from("missoes").select("id, nome, etapas, prioridade").eq("empresa_id", id).order("id"),
+            cliente.from("postos").select("id, nome, ponto, botoes, permite_urgente, usuarios").eq("empresa_id", id).order("id")
         ]);
         [a, p, m].forEach(r => { if (r.error) throw r.error; });
         dados = {
+            postos: po.error ? [] : po.data.map(postoDoBanco),
             agvs: a.data,
             planta: p.data || { rascunho: null, publicada: null, revisao: 0 },
             missoes: m.data.map(x => Object.assign({ id: x.id, nome: x.nome, etapas: x.etapas }, x.prioridade !== 1 && x.prioridade != null ? { prioridade: x.prioridade } : {}))
@@ -188,6 +197,7 @@
         rascunhoNuvem = JSON.stringify(dados.planta.rascunho);
         fotoMissoes = new Map(dados.missoes.map(x => [x.id, fotoDaMissao(x)]));
         gravar("missoesAGV", JSON.stringify(dados.missoes));
+        gravar("postosFrota", JSON.stringify(dados.postos));
         // Credencial MQTT da empresa (só chega depois do login; nunca fica no código).
         try {
             const r = await cliente.rpc("conexao_mqtt", { p_empresa: id });
@@ -231,6 +241,7 @@
     function podePublicar(caminho) {
         if (modo !== "nuvem") return true;
         if (caminho === "comando/stop") return true;   // parar é sempre permitido
+        if (TOPICOS_DESPACHO.test(caminho) && pode("despachar")) return true;
         const nivel = TOPICOS_ADMIN.test(caminho) ? "administrar" : "operar";
         if (pode(nivel)) return true;
         if (Date.now() - ultimoAvisoBloqueio > 3000) {
@@ -246,6 +257,8 @@
         b.toggle("modo-demo", modo === "demo");
         b.toggle("sem-operar", !pode("operar"));
         b.toggle("sem-administrar", !pode("administrar"));
+        b.toggle("sem-pedir", !pode("pedir"));
+        Object.keys(PAPEIS).forEach(p => b.toggle("papel-" + p, papel() === p));
     }
 
 
@@ -373,6 +386,52 @@
         }, `a rotina do AGV ${id}`);
     }
 
+    /* ---------- postos (0.13) ---------- */
+    function postoDoBanco(x) {
+        return { id: x.id, nome: x.nome, ponto: x.ponto || "", botoes: Array.isArray(x.botoes) ? x.botoes : [],
+                 permiteUrgente: Boolean(x.permite_urgente), usuarios: Array.isArray(x.usuarios) ? x.usuarios : [] };
+    }
+    function postos() {
+        if (modo === "nuvem" && dados) return dados.postos;
+        try { return JSON.parse(ler("postosFrota") || "[]"); } catch (e) { return []; }
+    }
+    function gravarPostosLocal(lista) {
+        if (modo === "nuvem" && dados) dados.postos = lista;
+        gravar("postosFrota", JSON.stringify(lista));
+    }
+    async function salvarPosto(posto, idAntigo) {
+        const lista = postos().filter(p => p.id !== posto.id && p.id !== idAntigo).concat([posto]).sort((a, b) => a.id.localeCompare(b.id));
+        if (modo === "nuvem") {
+            if (!exigir("administrar", "configurar postos")) return false;
+            if (idAntigo && idAntigo !== posto.id) {
+                const { error } = await cliente.from("postos").delete().eq("empresa_id", empresa.id).eq("id", idAntigo);
+                if (error) throw error;
+            }
+            const { error } = await cliente.from("postos").upsert({
+                empresa_id: empresa.id, id: posto.id, nome: posto.nome, ponto: posto.ponto || "",
+                botoes: posto.botoes || [], permite_urgente: Boolean(posto.permiteUrgente), usuarios: posto.usuarios || []
+            });
+            if (error) throw error;
+        }
+        gravarPostosLocal(lista);
+        return true;
+    }
+    async function removerPosto(id) {
+        if (modo === "nuvem") {
+            if (!exigir("administrar", "configurar postos")) return false;
+            const { error } = await cliente.from("postos").delete().eq("empresa_id", empresa.id).eq("id", id);
+            if (error) throw error;
+        }
+        gravarPostosLocal(postos().filter(p => p.id !== id));
+        return true;
+    }
+    async function recarregarPostos() {
+        if (modo !== "nuvem") return postos();
+        const r = await cliente.from("postos").select("id, nome, ponto, botoes, permite_urgente, usuarios").eq("empresa_id", empresa.id).order("id");
+        if (!r.error) gravarPostosLocal(r.data.map(postoDoBanco));
+        return postos();
+    }
+
     function removerAgv(id) {
         if (modo !== "nuvem" || !pode("administrar")) return;
         enfileirar(async () => {
@@ -412,6 +471,9 @@
                     if ((ev.new?.revisao || 0) > revisaoNuvem && !publicando) mudancaRemota(`a planta (revisão ${ev.new.revisao} publicada)`, ev);
                 })
                 .on("postgres_changes", { event: "INSERT", schema: "public", table: "plantas", filter: filtro }, ev => mudancaRemota("a planta", ev))
+                .on("postgres_changes", { event: "*", schema: "public", table: "postos", filter: filtro }, () => {
+                    recarregarPostos().then(() => { if (typeof raiz.aoMudarPostos === "function") raiz.aoMudarPostos(); });
+                })
                 .subscribe();
         } catch (erro) {
             console.warn("Tempo real indisponível:", erro);
@@ -760,6 +822,7 @@
         PAPEIS,
         ajustarFrota, plantaDaNuvem, conexaoMqtt,
         salvarMissoes, salvarPlanta, salvarAgv, salvarRotina, removerAgv, terminarGravacoes,
+        postos, salvarPosto, removerPosto, recarregarPostos,
         cliente: () => cliente,
         usuario: () => usuario,
         perfil: () => perfil,

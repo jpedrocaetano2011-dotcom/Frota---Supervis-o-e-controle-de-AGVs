@@ -39,6 +39,7 @@
     <nav class="menu" aria-label="Menu principal">
         <a href="#" class="menu-item ativo" data-tela="frota" id="menuFrota"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg><span>Frota</span><b class="menu-badge" id="menuBadgeFrota" hidden>0</b></a>
         <a href="#" class="menu-item menu-sub" data-tela="rotina"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-7 9 7M5 9.5V20h14V9.5M10 20v-5h4v5"/></svg><span>Rotina e berços</span></a>
+        <a href="#" class="menu-item menu-sub" data-tela="postos"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21zM12 7a2.5 2.5 0 1 0 0 5a2.5 2.5 0 1 0 0-5z"/></svg><span>Postos</span></a>
         <a href="#" class="menu-item agv-menu" data-tela="visaoGeral"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3zM9 3v15M15 6v15"/></svg><span>Visão geral</span></a>
         <a href="#" class="menu-item agv-menu" data-tela="controleManual"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6zM12 3v3M12 18v3M3 12h3M18 12h3"/></svg><span>Controle manual</span></a>
         <a href="#" class="menu-item agv-menu" data-tela="sensores"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19a10 10 0 0 1 0-14M19 5a10 10 0 0 1 0 14M8.5 15.5a5 5 0 0 1 0-7M15.5 8.5a5 5 0 0 1 0 7"/></svg><span>Sensores</span></a>
@@ -48,6 +49,7 @@
 
         <div class="menu-divider"></div>
         <div class="menu-titulo">Operação</div>
+        <a href="#" class="menu-item" data-tela="despacho"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M4 12h7M4 18h10M17 9l4 3-4 3"/></svg><span>Despacho</span><b class="menu-badge" id="menuBadgeDespacho" hidden>0</b></a>
         <a href="#" class="menu-item" data-tela="missoes"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4h11l-2 4 2 4H5"/></svg><span>Missões</span></a>
         <a href="#" class="menu-item" data-tela="controlePlanta"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h18v18H3zM3 9h8v12M11 14h10"/></svg><span>Planta</span></a>
         <a href="#" class="menu-item so-nuvem" data-tela="usuarios" hidden><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11a4 4 0 1 0 0-8a4 4 0 1 0 0 8zM2 21v-1a6 6 0 0 1 6-6h2a6 6 0 0 1 6 6v1M16 3.5a4 4 0 0 1 0 7.5M22 21v-1a6 6 0 0 0-4-5.6"/></svg><span>Usuários</span></a>
@@ -122,6 +124,59 @@
                 <div id="rotinaBercos" class="rotina-bercos"></div>
             </section>
         </div>
+    </section>
+
+    <!-- ========================================================
+         DESPACHO (pedidos de missão)
+         ======================================================== -->
+    <section id="despacho" class="tela">
+        <div class="desp-grade">
+            <section class="card card-sem-padding" aria-label="Pedidos">
+                <div class="card-barra">
+                    <div><h2>Pedidos</h2><div class="card-sub" id="despachoResumo"></div></div>
+                    <div class="grupo"><button type="button" class="btn btn-mini" id="btnMeuPin" hidden>Meu PIN de urgente</button><div id="despachoLider"></div></div>
+                </div>
+                <form class="desp-form" id="despachoForm" onsubmit="return false" data-requer="operar">
+                    <label class="campo"><span>Missão</span><select id="despachoMissao"></select></label>
+                    <label class="campo"><span>AGV</span><select id="despachoAgv"></select></label>
+                    <button type="button" class="btn btn-primario" id="btnDespachoPedir">Pedir</button>
+                </form>
+                <div id="despachoLista" class="desp-lista"></div>
+            </section>
+            <section class="card card-sem-padding desp-lado" aria-label="Mapa do despacho">
+                <div class="card-barra"><div><h2>Mapa</h2><div class="card-sub">AGVs, postos e o caminho do pedido selecionado.</div></div></div>
+                <div class="desp-mapa" id="mapaDespacho"></div>
+            </section>
+        </div>
+    </section>
+
+    <!-- ========================================================
+         FROTA › POSTOS (cadastro)
+         ======================================================== -->
+    <section id="postos" class="tela">
+        <div class="barra-acoes">
+            <p class="suave postos-intro">Cada posto pede missões pelos botões da sua tela (tablet). A prioridade do pedido é a da missão; “urgente” passa na frente e precisa do PIN de um líder.</p>
+            <div class="grupo"><button type="button" class="btn btn-primario" id="btnNovoPosto">+ Posto</button></div>
+        </div>
+        <div class="card postos-pin" id="postosPinLocal" hidden>
+            <label class="campo"><span>PIN do líder (modo local, só neste navegador)</span><input type="password" inputmode="numeric" id="pinLiderLocal" maxlength="8" autocomplete="off"></label>
+            <p class="suave">Na nuvem, cada líder define o próprio PIN em Usuários.</p>
+        </div>
+        <div id="postosLista" class="postos-lista"></div>
+    </section>
+
+    <!-- ========================================================
+         TELA DO POSTO (tablet)
+         ======================================================== -->
+    <section id="posto" class="tela">
+        <div class="posto-topo">
+            <button type="button" class="btn" id="postoSair">← Voltar aos postos</button>
+            <span class="pilula ambar" id="postoAvisoDespacho" hidden>Nenhum despachante ativo: o pedido fica na fila até alguém abrir o supervisório.</span>
+            <button type="button" class="btn" id="postoTelaCheia">Tela cheia</button>
+        </div>
+        <div class="posto-chegada" id="postoChegada" role="status" hidden></div>
+        <div id="postoConteudo" class="posto-conteudo"></div>
+        <div id="postoPin" class="posto-pin-fundo" hidden></div>
     </section>
 
     <!-- ========================================================
@@ -903,7 +958,8 @@
     // Sem nuvem configurada (config.js) os scripts carregam na hora, como antes.
     // Com nuvem, carregam depois do login e dos dados da empresa.
     Nuvem.iniciar(["planta.js", "planta-exemplo.js", "mapa-svg.js", "editor-planta.js", "operacao-planta.js",
-                   "configuracoes.js", "agv-virtual.js", "script.js", "rotina.js", "usuarios.js"]);
+                   "configuracoes.js", "agv-virtual.js", "script.js", "rotina.js", "usuarios.js",
+                   "despachante.js", "despacho.js", "postos.js"]);
 </script>
 </body>
 </html>

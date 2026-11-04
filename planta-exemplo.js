@@ -92,9 +92,31 @@
             { id: "M002", nome: "Voltar para a espera", etapas: [{ tipo: "IR_PARA", destino: "W01" }] },
             { id: "M003", nome: "Ronda de inspeção", etapas: [
                 { tipo: "IR_PARA", destino: "E01" }, { tipo: "IR_PARA", destino: "E02" }, { tipo: "AGUARDAR", tempo: 5 },
-                { tipo: "IR_PARA", destino: "E04" }, { tipo: "IR_PARA", destino: "W01" }] }
+                { tipo: "IR_PARA", destino: "E04" }, { tipo: "IR_PARA", destino: "W01" }] },
+            // Kit e vazio de cada prensa (pedidos pelos postos P1 e P2):
+            // o vazio começa onde o kit termina, então o despachante faz os dois na mesma viagem.
+            { id: "M010", nome: "Kit para a Prensa 1", prioridade: 2, etapas: [
+                { tipo: "IR_PARA", destino: "E03" }, { tipo: "CARREGAR" }, { tipo: "IR_PARA", destino: "E01" }, { tipo: "DESCARREGAR" }] },
+            { id: "M011", nome: "Vazio da Prensa 1", prioridade: 1, etapas: [
+                { tipo: "IR_PARA", destino: "E01" }, { tipo: "CARREGAR" }, { tipo: "IR_PARA", destino: "E03" }, { tipo: "DESCARREGAR" }] },
+            { id: "M020", nome: "Kit para a Prensa 2", prioridade: 2, etapas: [
+                { tipo: "IR_PARA", destino: "E03" }, { tipo: "CARREGAR" }, { tipo: "IR_PARA", destino: "E02" }, { tipo: "DESCARREGAR" }] },
+            { id: "M021", nome: "Vazio da Prensa 2", prioridade: 1, etapas: [
+                { tipo: "IR_PARA", destino: "E02" }, { tipo: "CARREGAR" }, { tipo: "IR_PARA", destino: "E03" }, { tipo: "DESCARREGAR" }] }
         ];
     }
 
-    return { NOME, planta, missoes };
+    // Postos de exemplo (Frota › Postos): cada um com os seus botões
+    function postos() {
+        return [
+            { id: "P1", nome: "Prensa 1", ponto: "E01", permiteUrgente: true, usuarios: [],
+              botoes: [{ rotulo: "Pedir kit", missao: "M010" }, { rotulo: "Levar vazio", missao: "M011" }] },
+            { id: "P2", nome: "Prensa 2", ponto: "E02", permiteUrgente: true, usuarios: [],
+              botoes: [{ rotulo: "Pedir kit", missao: "M020" }, { rotulo: "Levar vazio", missao: "M021" }] },
+            { id: "P3", nome: "Montagem", ponto: "E04", permiteUrgente: false, usuarios: [],
+              botoes: [{ rotulo: "Abastecer", missao: "M001" }] }
+        ];
+    }
+
+    return { NOME, planta, missoes, postos };
 });
