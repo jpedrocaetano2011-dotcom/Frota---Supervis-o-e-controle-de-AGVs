@@ -1586,3 +1586,7 @@ body.papel-posto .main { padding: 14px; }
 }
 .fila-pedido-item small { display: block; color: var(--muted); font-size: 12.5px; }
 .posto-cartao .campo > .btn-mini { align-self: flex-start; }
+.desp-fora { padding: 10px 16px 14px; border-top: 1px solid var(--border); font-size: 13px; }
+.desp-fora[hidden] { display: none; }
+.desp-fora-titulo { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; margin-bottom: 6px; }
+.desp-fora ul { list-style: none; display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; }

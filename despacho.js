@@ -760,6 +760,7 @@ const Despacho = (function () {
             const cat = categoriaEstadoAGV(agv);
             return Object.assign({}, pose, { id: agv.id, rotulo: `AGV ${agv.id}`, destaque: agv === agvDoPedido, estado: cat.chave, carga: typeof garraCarregada === "function" && garraCarregada(agv) });
         }).filter(Boolean);
+        avisarForaDoMapa(planta);
         const rota = agvDoPedido && (agvDoPedido.missaoAtual === p.missao || agvDoPedido.missaoCarregada === p.missao) ? rotaDoAGV(agvDoPedido) : null;
         mapa.rota = rota;
         const destinos = new Set();
@@ -778,6 +779,21 @@ const Despacho = (function () {
                 renderizarMapa();
             }, 150);
         }
+    }
+
+    // AGVs que não aparecem no mapa, e por quê (sem isso parece que o mapa está quebrado)
+    function avisarForaDoMapa(planta) {
+        const caixa = document.getElementById("despachoForaDoMapa");
+        if (!caixa) return;
+        const desenhados = new Set((mapa?.agvs || []).map(a => a.id));
+        const fora = Object.values(agvs).filter(a => !desenhados.has(a.id)).map(a => {
+            const porque = !a.online ? "offline"
+                : !a.posicaoConhecida || !a.pontoAtual ? "sem posição: use Informar posição"
+                : `está em ${a.pontoAtual}, que não existe na planta publicada`;
+            return `<li><b>AGV ${esc(a.id)}</b> · ${esc(porque)}</li>`;
+        });
+        const html = fora.length ? `<div class="desp-fora-titulo">Fora do mapa</div><ul>${fora.join("")}</ul>` : "";
+        if (caixa.dataset.html !== html) { caixa.dataset.html = html; caixa.innerHTML = html; caixa.hidden = !html; }
     }
 
     // Postos no mapa: nome e quantos pedidos esperando
