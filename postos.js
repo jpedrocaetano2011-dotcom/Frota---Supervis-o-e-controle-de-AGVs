@@ -152,6 +152,35 @@ const Postos = (function () {
         }
         if (acao === "abrirTela") TelaPosto.abrir([cartao.dataset.posto]);
     });
+    // Acrescenta as missões e os postos de exemplo que faltam (não troca nem apaga nada)
+    document.getElementById("btnExemplosDespacho")?.addEventListener("click", async () => {
+        if (typeof PlantaExemplo === "undefined" || !PlantaExemplo.postos) return;
+        const idsMissoes = new Set((missoes || []).map(m => m.id));
+        // só os do Despacho: kit e vazio das prensas e os postos P1 e P2 (a Montagem usa a M001, que pode ser outra aqui)
+        const novasMissoes = PlantaExemplo.missoes().filter(m => ["M010", "M011", "M020", "M021"].includes(m.id) && !idsMissoes.has(m.id));
+        const idsPostos = new Set(Despacho.postos().map(p => p.id));
+        const novosPostos = PlantaExemplo.postos().filter(p => ["P1", "P2"].includes(p.id) && !idsPostos.has(p.id));
+        if (!novasMissoes.length && !novosPostos.length) { ui.aviso("As missões e os postos de exemplo já estão aqui (mesmos IDs).", "info"); return; }
+        const planta = plantaPublicada();
+        const faltam = ["E01", "E02", "E03", "E04"].filter(id => !Planta.noPorId(planta, id) && !(planta.estacoes || []).some(e => e.id === id));
+        const texto = [
+            novasMissoes.length ? `Missões: ${novasMissoes.map(m => m.id).join(", ")}.` : "",
+            novosPostos.length ? `Postos: ${novosPostos.map(p => `${p.id} ${p.nome}`).join(", ")}.` : "",
+            "Nada do que já existe é trocado (IDs repetidos ficam de fora).",
+            faltam.length ? `Atenção: sua planta não tem ${faltam.join(", ")}; essas missões só funcionam na planta de exemplo, ou depois de você trocar os destinos.` : ""
+        ].filter(Boolean).join(" ");
+        if (!await ui.confirmar({ titulo: "Adicionar exemplos do Despacho", texto, confirmar: "Adicionar" })) return;
+        if (novasMissoes.length) {
+            missoes.push(...novasMissoes);
+            salvarMissoesNoNavegador();
+            if (typeof renderizarListaMissoes === "function") renderizarListaMissoes();
+        }
+        try {
+            for (const p of novosPostos) await Nuvem.salvarPosto(p, null);
+        } catch (e) { ui.aviso(`Postos: ${Nuvem.traduzirErro(e)}`, "erro"); }
+        ui.aviso(`Adicionado: ${novasMissoes.length} missão(ões) e ${novosPostos.length} posto(s).`, "sucesso");
+        desenhar();
+    });
     document.getElementById("btnNovoPosto")?.addEventListener("click", () => {
         const usados = new Set(Despacho.postos().map(p => p.id));
         let n = 1;
