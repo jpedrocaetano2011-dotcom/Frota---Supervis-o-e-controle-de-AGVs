@@ -508,7 +508,18 @@
        CONTA (canto do menu) E SAIR
        ======================================================== */
 
+    // Nome do cliente no topo do menu, embaixo da marca E4M (ex.: Scania)
+    function desenharCliente() {
+        const el = document.getElementById("marcaCliente");
+        if (!el) return;
+        const nome = modo === "nuvem" ? empresa?.nome : modo === "demo" ? "Demonstração" : "";
+        el.textContent = nome || "";
+        el.hidden = !nome;
+        el.title = nome ? `Aplicação ${nome}` : "";
+    }
+
     function desenharConta() {
+        desenharCliente();
         const rodape = document.querySelector(".sidebar-footer");
         if (!rodape || modo === "local") return;
         let caixa = document.getElementById("nuvemConta");
@@ -588,8 +599,9 @@
         fundo.innerHTML = `
             <div class="entrada-cartao" role="dialog" aria-modal="true" aria-labelledby="entradaTitulo">
                 <div class="entrada-marca">
-                    <div class="marca-icone"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="4" y="6" width="16" height="12" rx="2"></rect><circle cx="7.5" cy="18.5" r="1.5"></circle><circle cx="16.5" cy="18.5" r="1.5"></circle><path d="M9 10h6"></path></svg></div>
-                    <div><div class="marca-titulo">Frota AGV</div><div class="marca-sub">Supervisão</div></div>
+                    <img class="entrada-logo so-claro" src="img/e4m-entrada-claro.webp" alt="E4M · Engineering for Motion" width="240" height="102">
+                    <img class="entrada-logo so-escuro" src="img/e4m-entrada-escuro.webp" alt="E4M · Engineering for Motion" width="240" height="104">
+                    <div class="marca-sub">Supervisão de frota</div>
                 </div>
                 <div id="entradaConteudo"></div>
             </div>`;

@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Frota AGV · Supervisão</title>
+<title>E4M · Supervisão de frota</title>
+<link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -19,13 +20,10 @@
      ============================================================ -->
 <aside class="sidebar" id="sidebar">
     <div class="marca">
-        <div class="marca-icone">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="4" y="6" width="16" height="12" rx="2"></rect><circle cx="7.5" cy="18.5" r="1.5"></circle><circle cx="16.5" cy="18.5" r="1.5"></circle><path d="M9 10h6"></path></svg>
-        </div>
-        <div>
-            <div class="marca-titulo">Frota AGV</div>
-            <div class="marca-sub">Supervisão</div>
-        </div>
+        <img class="marca-logo so-claro" src="img/e4m-marca-claro.webp" alt="E4M" width="130" height="41">
+        <img class="marca-logo so-escuro" src="img/e4m-marca-escuro.webp" alt="E4M" width="130" height="42">
+        <div class="marca-sub">Supervisão de frota</div>
+        <div class="marca-cliente" id="marcaCliente" hidden></div>
     </div>
 
     <button type="button" class="agv-atual" id="agvAtualBotao" title="Escolher outro AGV">

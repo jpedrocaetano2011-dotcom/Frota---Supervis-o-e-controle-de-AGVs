@@ -52,8 +52,18 @@ const Usuarios = (() => {
             // Banco sem a parte 2 (01_esquema.sql antigo): segue sem a seção de MQTT.
             const semTabelasMqtt = [mqtts, mqttAgvs].some(r => r.error);
             if (semTabelasMqtt) console.warn("Tabelas de MQTT ausentes: rode o 01_esquema.sql novo.", mqtts.error || mqttAgvs.error);
+            // o que a pessoa já digitou nos formulários não se perde quando a lista recarrega
+            const digitado = [...el.querySelectorAll("form[data-form-usuarios] input[name], form[data-form-usuarios] select[name]")]
+                .filter(c => !c.disabled && c.type !== "password" && c.type !== "checkbox" && c.value)
+                .map(c => ({ form: c.form.dataset.formUsuarios, nome: c.name, valor: c.value, foco: c === document.activeElement }));
             el.innerHTML = html(empresa, perfis.data, convites.data, empresas.data, fornecedor) +
                 (fornecedor ? htmlMqtt(empresa, semTabelasMqtt ? null : mqtts.data, semTabelasMqtt ? null : mqttAgvs.data, agvsDb.data || []) : "");
+            digitado.forEach(d => {
+                const c = el.querySelector(`form[data-form-usuarios="${CSS.escape(d.form)}"] [name="${CSS.escape(d.nome)}"]`);
+                if (!c) return;
+                c.value = d.valor;
+                if (d.foco) c.focus();
+            });
         } catch (erro) {
             el.innerHTML = `<section class="card"><p class="entrada-erro">Não foi possível carregar: ${esc(Nuvem.traduzirErro(erro))}</p><button type="button" class="btn" data-usuarios="recarregar">Tentar de novo</button></section>`;
         } finally {
