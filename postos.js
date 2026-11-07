@@ -361,6 +361,13 @@ const TelaPosto = (function () {
         const lista = meusPostos();
         const sairPrevia = document.getElementById("postoSair");
         if (sairPrevia) sairPrevia.hidden = ehTablet();
+        // no tablet o menu lateral fica escondido: o Sair da conta fica aqui em cima
+        const sairConta = document.getElementById("postoSairConta");
+        if (sairConta) {
+            sairConta.hidden = !ehTablet();
+            const quem = Nuvem.perfil?.()?.email || "";
+            sairConta.title = quem ? `Sair da conta ${quem}` : "Sair da conta";
+        }
         const lider = Despacho.lider();
         const aviso = document.getElementById("postoAvisoDespacho");
         if (aviso) {
@@ -561,6 +568,15 @@ const TelaPosto = (function () {
     document.getElementById("postoSair")?.addEventListener("click", () => {
         document.body.classList.remove("tela-posto");
         mudarTela("postos");
+    });
+    document.getElementById("postoSairConta")?.addEventListener("click", async () => {
+        const quem = Nuvem.perfil?.()?.email || "deste posto";
+        const ok = await ui.confirmar({
+            titulo: "Sair deste tablet?",
+            texto: `A conta ${quem} sai deste aparelho. Para pedir de novo por aqui, é preciso entrar com o e-mail e a senha do posto.`,
+            confirmar: "Sair"
+        });
+        if (ok) Nuvem.sair();
     });
     document.getElementById("postoTelaCheia")?.addEventListener("click", () => {
         if (document.fullscreenElement) document.exitFullscreen?.();
