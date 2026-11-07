@@ -188,13 +188,16 @@ const Usuarios = (() => {
         // Um usuario para todos os AGVs da empresa (guardado como agv_id "TODOS"):
         // com o trafego, cada AGV le o estado dos outros da mesma empresa.
         const m = mqttAgvs.find(x => x.agv_id === "TODOS") || null;
+        // endereço do broker para o firmware: wss://HOST:8084/mqtt -> HOST (o AGV usa a porta 8883)
+        const hostBroker = (() => { try { return new URL(urlPadrao).hostname; } catch (e) { return ""; } })() || "SALVE-O-ENDERECO-NO-PASSO-1";
         const linhasAgv = !m ? "" : agvsDb.map(a => `<tr class="usuarios-mqtt-ficha"><td>
                 <details>
                     <summary>Linhas do firmware do AGV <strong class="mono">${esc(a.id)}</strong> <span class="suave">${esc(a.nome)}</span></summary>
                     <pre class="usuarios-codigo" data-copiar>#define EMPRESA "${esc(c)}"
 #define AGV_ID "${esc(a.id)}"
-const char* MQTT_USER     = "${esc(m.usuario)}";
-const char* MQTT_PASSWORD = "${esc(m.senha)}";</pre>
+#define MQTT_HOST_PADRAO "${esc(hostBroker)}"
+#define MQTT_USUARIO_PADRAO "${esc(m.usuario)}"
+#define MQTT_SENHA_PADRAO "${esc(m.senha)}"</pre>
                     <button type="button" class="btn btn-mini" data-copiar-anterior>Copiar linhas</button>
                 </details>
             </td></tr>`).join("");
@@ -206,19 +209,20 @@ const char* MQTT_PASSWORD = "${esc(m.senha)}";</pre>
             </div>
 
             <h3>1. Usuário do site (painel)</h3>
-            <p class="suave usuarios-dica">Todas as telas abertas da ${esc(empresa.nome)} usam este usuário. Crie no HiveMQ › <em>Access Management</em>:</p>
+            <p class="suave usuarios-dica">Todas as telas abertas da ${esc(empresa.nome)} usam este usuário. No console do EMQX, abra o deployment › <em>Access Control</em>:</p>
             <ol class="usuarios-passos">
-                <li><em>Permissions</em> › <em>Create new permission</em>: nome <code>site-${esc(c)}</code>, Topic Filter <code>agv/${esc(c)}/#</code>.</li>
-                <li><em>Access Credentials</em>: o usuário e a senha abaixo, Permission <code>site-${esc(c)}</code> › <em>Create Credential</em>.</li>
-                <li>Salve aqui. Mudanças no HiveMQ levam até 5 minutos para valer.</li>
+                <li><em>Authentication</em> › <em>Add</em>: Username <code>${esc(atual?.usuario || c + "-site")}</code> e a senha abaixo.</li>
+                <li><em>Authorization</em> › <em>Username</em> › <em>Add</em>: o mesmo usuário, Topic <code>agv/${esc(c)}/#</code>, Action <em>Publish &amp; Subscribe</em>, Permission <em>Allow</em>.</li>
+                <li>Uma vez só (vale para todas as empresas): <em>Authorization</em> › <em>All Users</em> › <em>Add</em>: Topic <code>#</code>, <em>Publish &amp; Subscribe</em>, <em>Deny</em>. Assim quem não tem regra não vê nada.</li>
+                <li>Salve aqui com o endereço <code>wss://SEU-ENDERECO:8084/mqtt</code> (está em <em>Overview › Connection Information</em>). No EMQX vale na hora.</li>
             </ol>
             <form class="usuarios-form usuarios-form-mqtt" data-form-usuarios="mqtt">
-                <label class="campo usuarios-campo-largo"><span>Endereço (WebSocket)</span><input name="url" required placeholder="wss://SEU-CLUSTER.s1.eu.hivemq.cloud:8884/mqtt" value="${esc(urlPadrao)}" spellcheck="false"></label>
+                <label class="campo usuarios-campo-largo"><span>Endereço (WebSocket)</span><input name="url" required placeholder="wss://SEU-ENDERECO.emqxsl.com:8084/mqtt" value="${esc(urlPadrao)}" spellcheck="false"></label>
                 <label class="campo"><span>Usuário</span><input name="usuario" required value="${esc(atual?.usuario || c + "-site")}" spellcheck="false"></label>
                 <label class="campo"><span>Senha</span><span class="usuarios-senha"><input name="senha" required class="mono" value="${esc(atual?.senha || "")}" spellcheck="false" autocomplete="off"><button type="button" class="btn btn-mini" data-gerar-senha>Gerar</button></span></label>
                 <details class="usuarios-campo-largo">
                     <summary>Usuário só de leitura para visualizadores (opcional)</summary>
-                    <p class="suave usuarios-dica">Só vale em broker que permite "só assinar" com filtro de tópico. No HiveMQ Serverless não dá: deixe em branco e os visualizadores usam o usuário acima (o site continua bloqueando os comandos deles).</p>
+                    <p class="suave usuarios-dica">Para os visualizadores só lerem, direto no broker: no EMQX, crie o usuário em <em>Authentication</em> e uma regra em <em>Authorization › Username</em> com Topic <code>agv/${esc(c)}/#</code>, Action <em>Subscribe</em>, <em>Allow</em>. Em branco, eles usam o usuário acima (o site continua bloqueando os comandos deles).</p>
                     <div class="usuarios-form-linha-simples">
                         <label class="campo"><span>Usuário de leitura</span><input name="leitura_usuario" value="${esc(atual?.leitura_usuario || "")}" spellcheck="false"></label>
                         <label class="campo"><span>Senha de leitura</span><input name="leitura_senha" class="mono" value="${esc(atual?.leitura_senha || "")}" spellcheck="false" autocomplete="off"></label>
@@ -231,9 +235,9 @@ const char* MQTT_PASSWORD = "${esc(m.senha)}";</pre>
             <p class="suave usuarios-dica">Com o controle de tráfego, cada AGV lê o estado dos outros AGVs da mesma empresa, então o usuário dos AGVs enxerga <code>agv/${esc(c)}/#</code>. Outras empresas continuam separadas.</p>
             ${m ? `
             <ol class="usuarios-passos">
-                <li>HiveMQ › <em>Access Management</em> › <em>Access Credentials</em>: Username <code>${esc(m.usuario)}</code>, Password <code>${esc(m.senha)}</code>, Permission <code>site-${esc(c)}</code> (a mesma do site: filtro <code>agv/${esc(c)}/#</code>) › <em>Create Credential</em>.</li>
-                <li>Se algum AGV desta empresa ainda usa um usuário só dele (permissão com filtro <code>agv/${esc(c)}/&lt;ID&gt;/#</code>), apague essa credencial depois de gravar o AGV com as linhas novas.</li>
-                <li>Em cada AGV, troque as 4 linhas do topo do <span class="mono">AGV_FROTA.ino</span> pelas dele (abaixo) e grave. Só o <code>AGV_ID</code> muda de um para outro.</li>
+                <li>EMQX › <em>Access Control</em> › <em>Authentication</em> › <em>Add</em>: Username <code>${esc(m.usuario)}</code>, Password <code>${esc(m.senha)}</code>.</li>
+                <li><em>Authorization</em> › <em>Username</em> › <em>Add</em>: Username <code>${esc(m.usuario)}</code>, Topic <code>agv/${esc(c)}/#</code>, <em>Publish &amp; Subscribe</em>, <em>Allow</em>.</li>
+                <li>Em cada AGV, troque as 5 linhas do bloco <em>LINHAS DO SITE</em> (seção 2 do <span class="mono">AGV_FROTA.ino</span>) pelas dele, abaixo, e grave. Só o <code>AGV_ID</code> muda de um para outro. O AGV usa o mesmo endereço do site, na porta 8883, com o certificado do EMQX já no firmware.</li>
             </ol>
             ${agvsDb.length ? `<div class="tabela-rolagem"><table class="tabela-usuarios"><tbody>${linhasAgv}</tbody></table></div>` : `<p class="suave">Nenhum AGV cadastrado na frota desta empresa: cadastre na Frota para ver as linhas de cada um.</p>`}
             <div><button type="button" class="btn btn-mini" data-mqtt-agvs="1">Gerar outra senha</button></div>`
@@ -268,7 +272,7 @@ const char* MQTT_PASSWORD = "${esc(m.senha)}";</pre>
         } else if (form.dataset.formUsuarios === "mqtt") {
             const url = v.url.trim();
             if (!/^wss?:\/\/[^/]+/i.test(url)) {
-                ui.aviso("O endereço precisa começar com wss:// (ex.: wss://seu-cluster.s1.eu.hivemq.cloud:8884/mqtt).", "erro");
+                ui.aviso("O endereço precisa começar com wss:// (ex.: wss://seu-endereco.emqxsl.com:8084/mqtt).", "erro");
                 abrir();
                 return;
             }
@@ -307,7 +311,7 @@ const char* MQTT_PASSWORD = "${esc(m.senha)}";</pre>
             const campo = alvo.closest(".usuarios-senha")?.querySelector("input");
             if (campo) campo.value = senhaAleatoria();
         } else if (alvo.dataset.mqttAgvs !== undefined) {
-            if (alvo.dataset.mqttAgvs === "1" && !(await ui.confirmar({ titulo: "Gerar outra senha para os AGVs?", texto: "Troque a senha também no HiveMQ e grave todos os AGVs desta empresa com as linhas novas. Até lá eles não conectam.", confirmar: "Gerar" }))) return;
+            if (alvo.dataset.mqttAgvs === "1" && !(await ui.confirmar({ titulo: "Gerar outra senha para os AGVs?", texto: "Troque a senha também no EMQX (Authentication › editar) e grave todos os AGVs desta empresa com as linhas novas. Até lá eles não conectam.", confirmar: "Gerar" }))) return;
             const codigo = Nuvem.empresa().codigo;
             executar(db.from("mqtt_agvs").upsert({ empresa_id: Nuvem.empresa().id, agv_id: "TODOS", usuario: `${codigo}-agvs`, senha: senhaAleatoria() }),
                 "Usuário dos AGVs gerado. Siga os passos logo abaixo.");

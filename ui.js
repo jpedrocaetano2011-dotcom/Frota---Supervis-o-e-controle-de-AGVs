@@ -185,6 +185,56 @@
         });
     }
 
+    // Caixa com vários campos. campos: [{ nome, rotulo, valor, tipo, opcoes: [[valor, texto]], dica, largo }]
+    // Devolve { nome: valor } ou null se voltou.
+    function formulario(opcoes) {
+        const o = opcoes || {};
+        return new Promise(resolver => {
+            const fundo = document.createElement("div");
+            fundo.className = "modal-overlay ativo";
+            const campo = c => {
+                const id = "uiF_" + c.nome;
+                const controle = c.opcoes
+                    ? `<select id="${id}" name="${escapar(c.nome)}">${c.opcoes.map(([v, t]) => `<option value="${escapar(v)}" ${String(v) === String(c.valor ?? "") ? "selected" : ""}>${escapar(t)}</option>`).join("")}</select>`
+                    : `<input id="${id}" name="${escapar(c.nome)}" type="${c.tipo === "password" ? "password" : c.tipo === "number" ? "number" : "text"}" value="${escapar(c.valor ?? "")}" autocomplete="off" spellcheck="false" ${c.obrigatorio ? "required" : ""}>`;
+                return `<label class="campo" for="${id}" style="${c.largo ? "grid-column:1/-1" : ""}"><span>${escapar(c.rotulo || c.nome)}</span>${controle}${c.dica ? `<small class="suave">${escapar(c.dica)}</small>` : ""}</label>`;
+            };
+            fundo.innerHTML = `
+                <div class="modal ui-confirmar" role="dialog" aria-modal="true" aria-labelledby="uiFormTitulo" style="max-width:560px">
+                    <div class="modal-cabecalho"><div><h2 id="uiFormTitulo">${escapar(o.titulo || "Preencha")}</h2></div></div>
+                    <form class="modal-corpo" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px">
+                        ${o.texto ? `<p style="grid-column:1/-1">${escapar(o.texto)}</p>` : ""}
+                        ${(o.campos || []).map(campo).join("")}
+                        <button type="submit" hidden></button>
+                    </form>
+                    <div class="modal-acoes">
+                        <button type="button" class="btn" data-r="0">Voltar</button>
+                        <button type="button" class="btn btn-primario" data-r="1">${escapar(o.confirmar || "OK")}</button>
+                    </div>
+                </div>`;
+            const anterior = document.activeElement;
+            const form = fundo.querySelector("form");
+            const valores = () => Object.fromEntries(new FormData(form));
+            const terminar = valor => {
+                document.removeEventListener("keydown", tecla, true);
+                fundo.remove();
+                if (anterior && anterior.focus) anterior.focus();
+                resolver(valor);
+            };
+            const enviar = () => { if (form.reportValidity()) terminar(valores()); };
+            const tecla = e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); terminar(null); } };
+            form.addEventListener("submit", e => { e.preventDefault(); enviar(); });
+            fundo.addEventListener("click", e => {
+                if (e.target === fundo) terminar(null);
+                const botao = e.target.closest("[data-r]");
+                if (botao) { if (botao.dataset.r === "1") enviar(); else terminar(null); }
+            });
+            document.addEventListener("keydown", tecla, true);
+            document.body.appendChild(fundo);
+            form.querySelector("input,select")?.focus();
+        });
+    }
+
     /* ---------------- tema ---------------- */
 
     function temaAtual() {
@@ -266,5 +316,5 @@
         return true;
     }
 
-    raiz.ui = { aviso, confirmar, perguntar, trocarHtml, campoEmUso, icone, escapar, aplicarTema, alternarTema, temaAtual, cor, numero, milhar, duracao, direcao, ICONES };
+    raiz.ui = { aviso, confirmar, perguntar, formulario, trocarHtml, campoEmUso, icone, escapar, aplicarTema, alternarTema, temaAtual, cor, numero, milhar, duracao, direcao, ICONES };
 })(window);

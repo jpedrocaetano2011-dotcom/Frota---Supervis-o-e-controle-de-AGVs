@@ -1791,6 +1791,13 @@ function registrarEventoHistorico(agvId, mensagem, caminho = "evento") {
         evento: dados
     });
 
+    // Troca de broker: avisa quem está olhando
+    const nomeEvento = dados && typeof dados === "object" ? dados.evento : "";
+    if (/^BROKER_(TROCADO|FALHOU|RECUSADO)$/.test(nomeEvento || "")) {
+        ui.aviso(`${agv.nome || agv.id}: ${tituloEvento(dados)}${dados.mensagem ? ". " + dados.mensagem : ""}`,
+            nomeEvento === "BROKER_TROCADO" ? "sucesso" : "erro");
+    }
+
     // Limita o histórico local para não crescer sem fim.
     if (agv.historico.length > 1000) {
         agv.historico.length = 1000;
@@ -2424,6 +2431,8 @@ const TEXTOS_EVENTOS = {
     AUTOTESTE_INICIADO: "Autoteste iniciado", AUTOTESTE_RECUSADO: "Autoteste recusado", TESTE_LEDS: "Teste dos LEDs",
     OTA_INICIADA: "Atualização iniciada", OTA_CONCLUIDA: "Atualização concluída", OTA_ERRO: "Erro na atualização",
     OTA_VALIDADA: "Versão nova confirmada", OTA_RECUSADA: "Atualização recusada",
+    BROKER_TROCANDO: "Testando outro broker", BROKER_TROCADO: "Broker trocado", BROKER_FALHOU: "Broker novo não conectou (voltou ao anterior)",
+    BROKER_RECUSADO: "Troca de broker recusada",
     CONFIGURACAO_ALTERADA: "Parâmetros alterados", CONFIGURACAO_RESTAURADA: "Padrão de fábrica restaurado",
     CALIBRACAO_QTR_INICIADA: "Calibração do QTR iniciada", CALIBRACAO_QTR_CONCLUIDA: "Calibração do QTR salva",
     CALIBRACAO_QTR_CANCELADA: "Calibração do QTR cancelada", CALIBRACAO_QTR_ERRO: "Calibração do QTR recusada",
@@ -4575,6 +4584,65 @@ function atualizarPainelCalibracaoQTR(agv = agvAtual()) {
     if (btnCancelar) { btnCancelar.disabled = !canal || !emAndamento; btnCancelar.hidden = !emAndamento; }
 }
 
+// ---------- Broker do AGV (firmware 0.13): mostrar e trocar ----------
+function brokerDoAgv(agv) {
+    const b = agv?.sistema?.broker;
+    if (!b) return null;
+    if (typeof b === "object") return b;
+    try { return JSON.parse(b); } catch (e) { return null; }
+}
+
+function htmlBrokerAgv(agv) {
+    const b = brokerDoAgv(agv);
+    const podeTrocar = !window.Nuvem || Nuvem.pode("administrar");
+    const seg = { tls: "TLS com certificado", tls_sem_verificar: "TLS sem conferir certificado", aberto: "sem TLS (só rede local)" };
+    const linha = b
+        ? `<div class="mono" style="font-size:13px;word-break:break-all">${escaparHtml(b.host)}:${escaparHtml(b.porta)}</div>
+           <div class="suave" style="font-size:12.5px">${escaparHtml(seg[b.seguranca] || b.seguranca || "")} · usuário ${escaparHtml(b.usuario || "--")} · ${b.origem === "site" ? "trocado pelo site" : "gravado no firmware"}</div>`
+        : `<div class="suave" style="font-size:12.5px">${agv.online ? "Este AGV não informa o broker (firmware anterior à 0.13)." : "--"}</div>`;
+    return `<div class="broker-agv" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap">
+        <div style="min-width:0"><div class="suave" style="font-size:12px">Broker MQTT</div>${linha}</div>
+        ${podeTrocar && b ? `<button type="button" class="btn btn-mini" data-trocar-broker>Trocar broker</button>` : ""}
+    </div>`;
+}
+
+async function trocarBrokerAgv() {
+    const agv = agvAtual();
+    if (!agv) { ui.aviso("Escolha um AGV.", "aviso"); return; }
+    if (!agv.online || !canalDisponivel(agv)) { ui.aviso("O AGV precisa estar online para trocar de broker.", "erro"); return; }
+    if (agv.emergencia || Number(agv.velocidade || 0) !== 0 || ["EM_EXECUCAO", "AGUARDANDO_CONFIRMACAO"].includes(agv.estadoMissao)) {
+        ui.aviso("Troque o broker com o AGV parado e sem missão.", "aviso"); return;
+    }
+    const atual = brokerDoAgv(agv) || {};
+    const v = await ui.formulario({
+        titulo: `Trocar o broker do ${agv.nome || agv.id}`,
+        texto: "O AGV testa o broker novo. Se não conectar em 2 minutos, ele volta sozinho para o atual. Use o mesmo endereço nos outros AGVs e no site (Usuários › MQTT), senão eles deixam de se enxergar.",
+        confirmar: "Testar e trocar",
+        campos: [
+            { nome: "modo", rotulo: "O que fazer", valor: "TROCAR", largo: true, opcoes: [["TROCAR", "Usar outro broker"], ["PADRAO", "Voltar ao broker gravado no firmware"]] },
+            { nome: "host", rotulo: "Endereço (sem wss:// e sem porta)", valor: atual.host || "", largo: true, dica: "Ex.: mosquitto.fabrica.local ou 192.168.0.10" },
+            { nome: "porta", rotulo: "Porta", tipo: "number", valor: atual.porta || 8883 },
+            { nome: "seguranca", rotulo: "Segurança", valor: atual.seguranca || "tls", opcoes: [["tls", "TLS com certificado (EMQX)"], ["tls_sem_verificar", "TLS sem conferir certificado"], ["aberto", "Sem TLS (só rede local)"]] },
+            { nome: "usuario", rotulo: "Usuário", valor: atual.usuario || "" },
+            { nome: "senha", rotulo: "Senha", tipo: "password", valor: "", dica: "Não aparece em lugar nenhum depois de enviada." }
+        ]
+    });
+    if (!v) return;
+    let comando;
+    if (v.modo === "PADRAO") comando = { acao: "PADRAO" };
+    else {
+        const host = String(v.host || "").trim().replace(/^(wss?|mqtts?):\/\//, "").replace(/[:/].*$/, "");
+        const porta = Number(v.porta);
+        if (!host || !(porta >= 1 && porta <= 65535)) { ui.aviso("Confira o endereço e a porta.", "erro"); return; }
+        if (v.seguranca === "aberto" && !(await ui.confirmar({ titulo: "Broker sem TLS?", texto: "Sem TLS, usuário, senha e comandos passam sem criptografia. Use só num broker dentro da rede da fábrica.", confirmar: "Usar assim", perigo: true }))) return;
+        comando = { acao: "TROCAR", host, porta, usuario: String(v.usuario || ""), senha: String(v.senha || ""), seguranca: v.seguranca };
+    }
+    const enviado = publicar("comando/broker", JSON.stringify(comando), agv.id);
+    if (enviado === false) { ui.aviso("Não foi possível enviar o comando.", "erro"); return; }
+    ui.aviso("Enviado. O AGV vai testar o broker; o resultado aparece aqui e no histórico.", "info");
+}
+document.addEventListener("click", e => { if (e.target.closest("[data-trocar-broker]")) trocarBrokerAgv(); });
+
 async function enviarComandoCalibracaoQTR(acao) {
     const agv = agvAtual();
     if (!agv) { ui.aviso("Escolha um AGV.", "aviso"); return; }
@@ -5023,7 +5091,8 @@ function renderizarDiagnostico() {
             <div class="tile"><dt>Quedas</dt><dd>${conhecido ? (d.quedasWifi || 0) + (d.quedasMqtt || 0) : "--"} <span class="unidade">desde ligar</span></dd></div>
             <div class="tile"><dt>Na fila</dt><dd>${conhecido ? d.filaEventos ?? 0 : "--"} <span class="unidade">eventos</span></dd></div>
         </dl>
-        ${d.erroMqtt && d.erroMqtt !== 0 ? `<p class="suave" style="font-size:12.5px;margin-top:8px">Último código de erro do MQTT: ${escaparHtml(d.erroMqtt)}</p>` : ""}`);
+        ${d.erroMqtt && d.erroMqtt !== 0 ? `<p class="suave" style="font-size:12.5px;margin-top:8px">Último código de erro do MQTT: ${escaparHtml(d.erroMqtt)}</p>` : ""}
+        ${htmlBrokerAgv(agv)}`);
 
     // firmware
     const heap = Number(d.heap), heapMin = Number(d.heapMinimo);

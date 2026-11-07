@@ -43,7 +43,7 @@
     // Comandos que o despachante manda (o tablet do posto também despacha)
     const TOPICOS_DESPACHO = /^comando\/(fila|fila\/adicionar|saidas)$/;
     // Comandos que mudam o AGV em si (parâmetros, firmware, calibração): só admin.
-    const TOPICOS_ADMIN = /^comando\/(configuracao|ota|calibracao_qtr|calibracao_mecanica|trafego)$/;
+    const TOPICOS_ADMIN = /^comando\/(broker|configuracao|ota|calibracao_qtr|calibracao_mecanica|trafego)$/;
 
     let modo = "local";
     let cliente = null, usuario = null, perfil = null, empresa = null;
