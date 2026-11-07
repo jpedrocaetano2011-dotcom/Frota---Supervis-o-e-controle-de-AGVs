@@ -58,6 +58,7 @@ const Postos = (function () {
             </div>
             <label class="rotina-check"><input type="checkbox" data-campo="permiteUrgente" ${p.permiteUrgente ? "checked" : ""} ${pode}><span>Aceita pedido urgente (com o PIN de um líder)</span></label>
             ${usuarios}
+            ${!criando && typeof Programacao !== "undefined" ? Programacao.htmlPessoas(p, podeEditar()) : ""}
             <div class="posto-acoes">
                 ${podeEditar() ? `<button type="button" class="btn btn-primario" data-postos="salvar">Salvar</button>` : ""}
                 ${!criando ? `<button type="button" class="btn" data-postos="abrirTela">Abrir a tela do posto</button>` : ""}
@@ -74,6 +75,7 @@ const Postos = (function () {
             nome: v("nome").value.trim(),
             ponto: v("ponto").value,
             permiteUrgente: v("permiteUrgente").checked,
+            pinPessoal: Boolean(v("pinPessoal")?.checked),
             botoes: [...cartao.querySelectorAll("[data-botao]")].map(l => ({
                 rotulo: l.querySelector('[data-campo="rotulo"]').value.trim(),
                 missao: l.querySelector('[data-campo="missao"]').value
@@ -330,7 +332,7 @@ const TelaPosto = (function () {
                 if (aberto.estado === "pendente") acoes.push(`<button type="button" class="btn" data-posto="cancelar" data-id="${aberto.id}">Cancelar</button>`);
                 acoes.push(`<button type="button" class="btn" data-posto="maisUm" data-posto-id="${esc(posto.id)}" data-botao="${i}">Pedir mais um</button>`);
                 return `<div class="posto-pedido ${s.cor} ${s.chegou ? "chegou" : ""}" data-pedido="${aberto.id}">
-                    <div class="posto-pedido-rotulo">${esc(b.rotulo)} <span class="suave">#${aberto.id}</span></div>
+                    <div class="posto-pedido-rotulo">${esc(b.rotulo)} <span class="suave">#${aberto.id}</span>${aberto.origem === "programado" ? ` <span class="posto-tag-auto">automático</span>` : ""}</div>
                     <div class="posto-pedido-status">${esc(s.titulo)}</div>
                     <div class="posto-pedido-detalhe">${esc(s.detalhe)}</div>
                     <div class="posto-pedido-acoes">${acoes.join("")}</div>
@@ -343,6 +345,7 @@ const TelaPosto = (function () {
                     <span class="posto-botao-sub">${missao ? esc(`${b.missao} · ${missao.nome || ""}`) : "missão não encontrada"}</span>
                     ${entregue ? `<span class="posto-botao-entregue">Entregue ${typeof tempoRelativo === "function" ? tempoRelativo(entregue.concluidoEm) : ""}</span>` : ""}
                 </button>
+                ${typeof Programacao !== "undefined" ? Programacao.htmlTablet(posto, b, i) : ""}
                 <div class="posto-botao-opcoes">
                     ${junto ? `<label class="posto-junto"><input type="checkbox" data-junto="${esc(posto.id)}|${i}" ${juntos.has(posto.id + "|" + i) ? "checked" : ""}><span>+ ${esc(junto.rotulo)} na mesma viagem</span></label>` : ""}
                     ${posto.permiteUrgente ? `<button type="button" class="posto-link-urgente" data-posto="pedirUrgente" data-posto-id="${esc(posto.id)}" data-botao="${i}">Pedir como urgente</button>` : ""}
@@ -489,6 +492,12 @@ const TelaPosto = (function () {
         pinDigitado = "";
         desenharPin();
     }
+    // PIN pessoal das pessoas do posto (programação: pausar, retomar, pular)
+    function pedirPin(titulo, texto, executar) {
+        pinAberto = { titulo, texto, executar, rotulo: "seu PIN" };
+        pinDigitado = "";
+        desenharPin();
+    }
 
     function desenharPin() {
         const caixa = document.getElementById("postoPin");
@@ -497,8 +506,8 @@ const TelaPosto = (function () {
         caixa.hidden = false;
         const html = `<div class="posto-pin" role="dialog" aria-modal="true" aria-labelledby="postoPinTitulo">
             <h2 id="postoPinTitulo">${esc(pinAberto.titulo)}</h2>
-            <p>Peça para um líder digitar o PIN.</p>
-            <div class="posto-pin-visor" aria-live="polite">${pinDigitado ? "•".repeat(pinDigitado.length) : "<span class='suave'>PIN do líder</span>"}</div>
+            <p>${esc(pinAberto.texto || "Peça para um líder digitar o PIN.")}</p>
+            <div class="posto-pin-visor" aria-live="polite">${pinDigitado ? "•".repeat(pinDigitado.length) : `<span class='suave'>${esc(pinAberto.rotulo || "PIN do líder")}</span>`}</div>
             <div class="posto-pin-teclas">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<button type="button" data-pin="${n}">${n}</button>`).join("")}
                 <button type="button" data-pin="apagar" aria-label="Apagar">⌫</button><button type="button" data-pin="0">0</button>
                 <button type="button" data-pin="ok" class="ok" ${pinDigitado.length >= 4 ? "" : "disabled"}>OK</button></div>
@@ -584,7 +593,7 @@ const TelaPosto = (function () {
     });
     Despacho.ouvir(() => { if (document.getElementById("posto")?.classList.contains("ativa")) desenhar(); });
 
-    return { abrir, desenhar, meusPostos };
+    return { abrir, desenhar, meusPostos, pedirPin };
 })();
 
 // "Meu PIN": líder, operador ou admin define o próprio PIN (nuvem)

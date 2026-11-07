@@ -38,14 +38,15 @@ const Usuarios = (() => {
             const empresa = Nuvem.empresa();
             const fornecedor = Nuvem.perfil().papel === "fornecedor";
             const nada = Promise.resolve({ data: null });
-            const [perfis, convites, empresas, mqtts, mqttAgvs, agvsDb, alertasCfg] = await Promise.all([
+            const [perfis, convites, empresas, mqtts, mqttAgvs, agvsDb, alertasCfg, linksDemo] = await Promise.all([
                 db.from("perfis").select("usuario_id, email, nome, papel, criado_em").eq("empresa_id", empresa.id).order("email"),
                 db.from("convites").select("email, papel, criado_em").eq("empresa_id", empresa.id).order("email"),
                 fornecedor ? db.from("empresas").select("*").order("nome") : nada,
                 fornecedor ? db.from("mqtt_empresas").select("*") : nada,
                 fornecedor ? db.from("mqtt_agvs").select("*").eq("empresa_id", empresa.id).order("agv_id") : nada,
                 fornecedor ? db.from("agvs").select("id, nome").eq("empresa_id", empresa.id).order("id") : nada,
-                db.from("alertas_config").select("*").eq("empresa_id", empresa.id).maybeSingle()
+                db.from("alertas_config").select("*").eq("empresa_id", empresa.id).maybeSingle(),
+                fornecedor ? db.from("links_demo").select("*").order("criado_em", { ascending: false }).limit(40) : nada
             ]);
             [perfis, convites, empresas].forEach(r => { if (r.error) throw r.error; });
             const pins = await db.rpc("usuarios_com_pin", { p_empresa: empresa.id });
@@ -59,6 +60,7 @@ const Usuarios = (() => {
                 .map(c => ({ form: c.form.dataset.formUsuarios, nome: c.name, valor: c.value, foco: c === document.activeElement }));
             el.innerHTML = html(empresa, perfis.data, convites.data, empresas.data, fornecedor) +
                 htmlAlertas(alertasCfg.error ? null : (alertasCfg.data || {})) +
+                (fornecedor ? htmlLinksDemo(linksDemo.error ? null : (linksDemo.data || [])) : "") +
                 (fornecedor ? htmlMqtt(empresa, semTabelasMqtt ? null : mqtts.data, semTabelasMqtt ? null : mqttAgvs.data, agvsDb.data || []) : "");
             digitado.forEach(d => {
                 const c = el.querySelector(`form[data-form-usuarios="${CSS.escape(d.form)}"] [name="${CSS.escape(d.nome)}"]`);
@@ -162,6 +164,42 @@ const Usuarios = (() => {
                 </form>
                 <p class="suave usuarios-dica">Sem domínio próprio no Resend, os e-mails só chegam ao endereço da conta do Resend.</p>
             </section>`;
+    }
+
+    /* ---------------- links de demonstração (só fornecedor, 0.15) ---------------- */
+
+    const linkDemo = codigo => `${location.origin}${location.pathname}?demo=${encodeURIComponent(codigo)}`;
+    function htmlLinksDemo(links) {
+        if (!links) return `<section class="card usuarios-demo"><h2>Links de demonstração</h2><p class="suave">Rode o <span class="mono">01_esquema.sql</span> da versão 0.15 no Supabase.</p></section>`;
+        const data = v => new Date(v).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+        const situacao = l => l.cancelado ? `<span class="pilula">cancelado</span>` : Date.parse(l.expira_em) < Date.now() ? `<span class="pilula">expirou</span>` : `<span class="pilula verde">vale até ${esc(data(l.expira_em))}</span>`;
+        return `
+            <section class="card card-sem-padding usuarios-demo">
+                <div class="card-barra"><div><h2>Links de demonstração</h2><div class="card-sub">Quem abre o link vê o Eciton com a planta e os dados de exemplo, sem conta e sem nada da sua empresa. O link para de funcionar no prazo ou quando você cancela.</div></div></div>
+                <form class="usuarios-form usuarios-form-linha" data-form-usuarios="demo">
+                    <label class="campo"><span>Para quem</span><input name="para" maxlength="80" required placeholder="Metalúrgica Beta · Carlos"></label>
+                    <label class="campo"><span>Vale por (dias)</span><input name="dias" type="number" min="1" max="60" value="7" required></label>
+                    <button type="submit" class="btn btn-primario">Criar link</button>
+                </form>
+                ${links.length ? `<div class="tabela-rolagem"><table class="tabela-usuarios">
+                    <thead><tr><th>Para quem</th><th>Criado</th><th>Situação</th><th>Usos</th><th></th></tr></thead>
+                    <tbody>${links.map(l => {
+                        const vale = !l.cancelado && Date.parse(l.expira_em) > Date.now();
+                        return `<tr>
+                            <td><strong>${esc(l.para || "—")}</strong></td>
+                            <td>${esc(data(l.criado_em))}</td>
+                            <td>${situacao(l)}</td>
+                            <td>${esc(l.usos)}${l.ultimo_uso ? `<br><small class="suave">último ${esc(data(l.ultimo_uso))}</small>` : ""}</td>
+                            <td class="usuarios-acao">${vale ? `<button type="button" class="btn btn-mini" data-demo-copiar="${esc(l.codigo)}">Copiar link</button>
+                                <button type="button" class="btn btn-mini btn-perigo" data-demo-cancelar="${esc(l.codigo)}" data-para="${esc(l.para)}">Cancelar</button>` : ""}</td>
+                        </tr>`;
+                    }).join("")}</tbody></table></div>` : `<p class="suave usuarios-dica">Nenhum link ainda.</p>`}
+            </section>`;
+    }
+    async function copiarLinkDemo(codigo) {
+        const url = linkDemo(codigo);
+        try { await navigator.clipboard.writeText(url); ui.aviso("Link copiado. Mande para a pessoa.", "sucesso"); }
+        catch (e) { await ui.confirmar({ titulo: "Link de demonstração", texto: url, confirmar: "OK" }); }
     }
 
     function htmlEmpresas(empresas, atual) {
@@ -309,6 +347,11 @@ const Usuarios = (() => {
             const emails = String(v.emails || "").split(/[,;\s]+/).map(x => x.trim()).filter(Boolean);
             await executar(db.rpc("salvar_alertas_config", { p_empresa: Nuvem.empresa().id, p_ativo: v.ativo === "1", p_emails: emails, p_espera: Number(v.espera) || 10 }),
                 v.ativo === "1" ? "Alertas ligados." : "Alertas salvos (desligados).");
+        } else if (form.dataset.formUsuarios === "demo") {
+            const { data, error } = await db.rpc("criar_link_demo", { p_para: v.para, p_dias: Number(v.dias) || 7 });
+            if (error) { ui.aviso(Nuvem.traduzirErro(error), "erro"); abrir(); return; }
+            await abrir();
+            await copiarLinkDemo(data.codigo);
         } else if (form.dataset.formUsuarios === "empresa") {
             await executar(db.rpc("criar_empresa", { p_nome: v.nome, p_codigo: v.codigo, p_email_admin: v.email || "" }),
                 `Empresa ${v.nome} criada.${v.email ? ` ${v.email} entra como administrador.` : ""}`);
@@ -324,6 +367,12 @@ const Usuarios = (() => {
     document.addEventListener("click", async evento => {
         const el = conteudo();
         const alvo = evento.target.closest("button");
+        if (alvo?.dataset.demoCopiar) { copiarLinkDemo(alvo.dataset.demoCopiar); return; }
+        if (alvo?.dataset.demoCancelar) {
+            if (!await ui.confirmar({ titulo: "Cancelar link", texto: `O link de ${alvo.dataset.para || "demonstração"} para de funcionar agora, inclusive para quem está com ele aberto.`, confirmar: "Cancelar link", perigo: true })) return;
+            executar(Nuvem.cliente().rpc("cancelar_link_demo", { p_codigo: alvo.dataset.demoCancelar }), "Link cancelado.");
+            return;
+        }
         if (!alvo || !el || !el.contains(alvo)) return;
         const db = Nuvem.cliente();
         if (alvo.dataset.usuarios === "recarregar") abrir();

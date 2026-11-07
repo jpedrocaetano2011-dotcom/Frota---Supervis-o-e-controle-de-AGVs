@@ -1758,3 +1758,84 @@ circle.calor { stroke: #fff; stroke-width: 1px; vector-effect: non-scaling-strok
     .cad-modelo { grid-template-columns: 1fr; }
     .cad-modelo-foto { width: 100%; max-width: 260px; }
 }
+
+/* ============================================================
+   0.15: PROGRAMAÇÃO (pedidos que saem sozinhos)
+   ============================================================ */
+.programacao-tela { display: flex; flex-direction: column; gap: 16px; }
+.prog-capacidade { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 320px); gap: 10px 20px; align-items: center; padding: 16px 18px; }
+.prog-capacidade h2 { font-size: 16px; margin: 0 0 4px; }
+.prog-cap-linha { margin: 0; }
+.prog-cap-barra { position: relative; height: 26px; border-radius: 999px; background: var(--soft); border: 1px solid var(--border); overflow: hidden; }
+.prog-cap-barra i { position: absolute; inset: 0 auto 0 0; background: var(--green-soft); border-right: 2px solid var(--green); }
+.prog-cap-barra.ambar i { background: var(--amber-soft); border-color: var(--amber); }
+.prog-cap-barra.vermelho i { background: var(--red-soft); border-color: var(--red); }
+.prog-cap-barra span { position: relative; display: block; text-align: center; line-height: 24px; font: 600 12.5px var(--mono); }
+.prog-cap-aviso { grid-column: 1 / -1; margin: 0; font-size: 13px; color: var(--amber); }
+.prog-posto { padding: 0; overflow: hidden; }
+.prog-posto .card-barra { padding: 14px 18px 8px; }
+.prog-posto h2 { font-size: 16px; }
+.prog-linhas { display: flex; flex-direction: column; }
+.prog-linha { display: grid; grid-template-columns: minmax(150px, 1.1fr) minmax(170px, 1.3fr) minmax(150px, 1fr) minmax(0, 290px); gap: 8px 16px; align-items: center; padding: 12px 18px; border-top: 1px solid var(--border); }
+.prog-linha.ativa { box-shadow: inset 3px 0 0 var(--green); }
+.prog-linha.pausada { box-shadow: inset 3px 0 0 var(--amber); }
+.prog-botao, .prog-como { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.prog-botao .suave, .prog-como small { font-size: 12.5px; }
+.prog-acoes { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.prog-sugestao { grid-column: 1 / -1; font-size: 13px; padding: 8px 10px; border-radius: var(--raio-pequeno); background: var(--accent-soft); color: var(--text); }
+.prog-editor { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 12px; padding: 14px; margin-top: 4px; border: 1px solid var(--border); border-radius: var(--raio-medio); background: var(--soft); }
+.prog-modos { border: 0; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.prog-modos legend { font-weight: 600; margin-bottom: 6px; padding: 0; }
+.prog-modo { position: relative; cursor: pointer; }
+.prog-modo input { position: absolute; opacity: 0; }
+.prog-modo span { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--raio-pequeno); background: var(--card); height: 100%; }
+.prog-modo input:checked + span { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); background: var(--accent-soft); }
+.prog-modo input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.prog-modo small { font-size: 12px; }
+.prog-campos { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px 12px; }
+.prog-horarios, .prog-dias-campo { grid-column: 1 / -1; }
+.prog-horarios > div { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.prog-hora button { border: 0; background: none; color: inherit; cursor: pointer; padding: 0 0 0 6px; font-size: 14px; }
+.prog-horarios input[type="time"] { width: auto; }
+.prog-dias { display: flex; flex-wrap: wrap; gap: 6px; }
+.prog-dia { position: relative; cursor: pointer; }
+.prog-dia input { position: absolute; opacity: 0; }
+.prog-dia span { display: inline-flex; min-width: 46px; justify-content: center; padding: 6px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--card); font-size: 13px; text-transform: capitalize; }
+.prog-dia input:checked + span { background: var(--accent); color: #fff; border-color: var(--accent); }
+.prog-dia input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.prog-previa { margin: 0; padding: 10px 12px; border-radius: var(--raio-pequeno); background: var(--card); border: 1px dashed var(--border); font-size: 13.5px; }
+.prog-editor-acoes { display: flex; flex-wrap: wrap; gap: 8px; }
+.prog-registro { padding: 14px 18px; }
+.prog-eventos { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; }
+.prog-eventos li { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 10px; }
+@media (max-width: 900px) {
+    .prog-capacidade { grid-template-columns: 1fr; }
+    .prog-linha { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .prog-acoes { justify-content: flex-start; grid-column: 1 / -1; }
+    .prog-modos { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+    .prog-linha { grid-template-columns: 1fr; }
+    .prog-eventos li { grid-template-columns: 1fr; gap: 0; }
+}
+
+/* tablet: linha do automático embaixo do botão */
+.posto-auto { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; margin-top: 8px; padding: 8px 12px; border-radius: var(--raio-pequeno); background: var(--green-soft); color: var(--text); font-size: 14px; }
+.posto-auto b { color: var(--green); }
+.posto-auto.pausado { background: var(--amber-soft); }
+.posto-auto.pausado b { color: var(--amber); }
+.posto-auto.fora, .posto-auto.manual { background: var(--soft); }
+.posto-auto.fora b, .posto-auto.manual b { color: var(--muted); }
+.posto-auto-acoes { display: flex; gap: 6px; flex-wrap: wrap; }
+.posto-auto-acoes .btn-mini { min-height: 36px; padding: 0 12px; font-size: 14px; }
+.posto-tag-auto { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; background: var(--green-soft); color: var(--green); font-size: 12px; font-weight: 600; vertical-align: middle; }
+
+/* Frota › Postos: pessoas do posto (PIN pessoal) */
+.posto-pessoas .pessoas-lista { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.pessoa-linha { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.pessoa-linha .btn-mini:first-of-type { margin-left: auto; }
+
+.prog-registro .card-barra { padding: 0 0 8px; }
+.prog-campos input, .prog-campos select { min-height: 42px; width: 100%; }
+.prog-campos label.campo:has(select) { grid-column: span 2; }
+@media (max-width: 560px) { .prog-campos label.campo:has(select) { grid-column: auto; } }

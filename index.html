@@ -50,6 +50,7 @@
         <div class="menu-divider"></div>
         <div class="menu-titulo">Operação</div>
         <a href="#" class="menu-item" data-tela="despacho"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M4 12h7M4 18h10M17 9l4 3-4 3"/></svg><span>Despacho</span><b class="menu-badge" id="menuBadgeDespacho" hidden>0</b></a>
+        <a href="#" class="menu-item" data-tela="programacao"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2M9 3h6M18.5 6.5l1.5-1.5"/></svg><span>Programação</span></a>
         <a href="#" class="menu-item" data-tela="indicadores"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V4M4 20h16M8 16v-5M12 16V8M16 16v-3M20 16V6"/></svg><span>Indicadores</span></a>
         <a href="#" class="menu-item" data-tela="missoes"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4h11l-2 4 2 4H5"/></svg><span>Missões</span></a>
         <a href="#" class="menu-item" data-tela="controlePlanta"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h18v18H3zM3 9h8v12M11 14h10"/></svg><span>Planta</span></a>
@@ -169,6 +170,13 @@
          ======================================================== -->
     <section id="manutencao" class="tela">
         <div id="manutencaoConteudo" class="manutencao-tela"></div>
+    </section>
+
+    <!-- ========================================================
+         PROGRAMAÇÃO (pedidos que saem sozinhos)
+         ======================================================== -->
+    <section id="programacao" class="tela">
+        <div id="programacaoConteudo" class="programacao-tela"></div>
     </section>
 
     <!-- ========================================================
@@ -995,7 +1003,7 @@
     // Com nuvem, carregam depois do login e dos dados da empresa.
     Nuvem.iniciar(["planta.js", "planta-exemplo.js", "mapa-svg.js", "editor-planta.js", "operacao-planta.js",
                    "configuracoes.js", "agv-virtual.js", "script.js", "rotina.js", "usuarios.js",
-                   "despachante.js", "despacho.js", "postos.js",
+                   "despachante.js", "despacho.js", "postos.js", "programacao.js",
                    "modelos.js", "manutencao.js", "copias.js", "indicadores.js"]);
 </script>
 </body>

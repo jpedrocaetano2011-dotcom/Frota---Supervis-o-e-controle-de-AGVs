@@ -148,28 +148,33 @@ const Indicadores = (function () {
     async function buscar() {
         const { desde, ate } = intervalo();
         if (demo()) return Object.assign(exemplo(desde, ate), { desde, ate, exemplo: true });
-        let estados = [], eventos = [], pedidos = [];
+        let estados = [], eventos = [], pedidos = [], pausas = [];
         if (naNuvem()) {
             const c = Nuvem.cliente(), emp = Nuvem.empresa().id;
             const antes = new Date(desde - 2 * 86400000).toISOString();
             const [e, v, p] = await Promise.all([
                 c.from("estados_frota").select("agv, em, estado, ponto, missao").eq("empresa_id", emp).gte("em", antes).order("em").limit(20000),
                 c.from("eventos_frota").select("agv, em, categoria, evento, mensagem, ponto").eq("empresa_id", emp).gte("em", new Date(desde).toISOString()).order("em").limit(10000),
-                c.from("pedidos").select("id, missao, posto, agv, estado, prioridade, urgente, criado_em, atribuido_em, iniciado_em, concluido_em").eq("empresa_id", emp)
+                c.from("pedidos").select("id, missao, posto, agv, estado, prioridade, urgente, criado_em, atribuido_em, iniciado_em, concluido_em, origem, acaba_em, adiantado").eq("empresa_id", emp)
                     .gte("criado_em", new Date(desde).toISOString()).order("criado_em").limit(10000)
             ]);
             if (e.error && !/does not exist|relation/i.test(e.error.message)) throw e.error;
             estados = e.data || []; eventos = v.data || [];
+            const pz = await c.from("programacao_eventos").select("posto, missao, em, tipo, motivo, por_nome, pessoa").eq("empresa_id", emp)
+                .in("tipo", ["pausada", "retomada"]).gte("em", new Date(desde - 86400000).toISOString()).order("em").limit(5000);
+            pausas = (pz.data || []).map(x => Object.assign({}, x, { em: ms(x.em) }));
             pedidos = (p.data || []).map(x => ({ id: x.id, missao: x.missao, posto: x.posto, agv: x.agv, estado: x.estado, urgente: x.urgente,
-                criadoEm: ms(x.criado_em), atribuidoEm: ms(x.atribuido_em), iniciadoEm: ms(x.iniciado_em), concluidoEm: ms(x.concluido_em) }));
+                criadoEm: ms(x.criado_em), atribuidoEm: ms(x.atribuido_em), iniciadoEm: ms(x.iniciado_em), concluidoEm: ms(x.concluido_em),
+                origem: x.origem || "manual", acabaEm: ms(x.acaba_em), adiantado: Boolean(x.adiantado) }));
         } else {
             const d = Registro.lerLocal();
             estados = d.estados; eventos = d.eventos.filter(x => ms(x.em) >= desde);
             pedidos = (typeof Despacho !== "undefined" ? Despacho.lista() : []).filter(x => ms(x.criadoEm) >= desde);
+            pausas = (typeof Programacao !== "undefined" ? Programacao.eventos() : []).filter(x => ["pausada", "retomada"].includes(x.tipo)).map(x => Object.assign({}, x, { em: ms(x.em) })).sort((a, b) => a.em - b.em);
         }
         const manut = typeof Manutencao !== "undefined" ? Manutencao.historico().concat(Manutencao.lista()) : [];
         return { desde, ate, estados: estados.map(x => Object.assign({}, x, { em: ms(x.em) })), eventos: eventos.map(x => Object.assign({}, x, { em: ms(x.em) })),
-                 pedidos, manutencoes: manut.filter(m => (m.fim || ate) >= desde), exemplo: false };
+                 pedidos, pausas, manutencoes: manut.filter(m => (m.fim || ate) >= desde), exemplo: false };
     }
 
     // Intervalos de cada AGV no período: [{agv, estado, ini, fim, ponto}]
@@ -253,7 +258,12 @@ const Indicadores = (function () {
                 atendimentoMedio: media(atendimento), atendimentoP90: p90(atendimento), esperaMedia: media(espera),
                 porHora: Array.from({ length: 24 }, (_, h) => conc.filter(p => new Date(p.concluidoEm).getHours() === h).length),
                 porDia: porDia(conc, d), porMissao: agrupar(conc, p => p.missao), porPosto: agrupar(conc.filter(p => p.posto), p => p.posto),
-                porAgv: agrupar(conc.filter(p => p.agv), p => p.agv), urgentes: d.pedidos.filter(p => p.urgente).length
+                porAgv: agrupar(conc.filter(p => p.agv), p => p.agv), urgentes: d.pedidos.filter(p => p.urgente).length,
+                // 0.15: programação
+                programados: d.pedidos.filter(p => p.origem === "programado").length, adiantados: d.pedidos.filter(p => p.adiantado).length,
+                comPrazo: conc.filter(p => p.origem === "programado" && p.acabaEm).length,
+                faltou: conc.filter(p => p.origem === "programado" && p.acabaEm && p.concluidoEm > p.acabaEm),
+                pausas: pausasDaProgramacao(d)
             },
             paradas: { n: paradas.length, causas, porPonto: Object.values(porPonto).sort((a, b) => b.tempo - a.tempo || (Object.values(b.causas).reduce((s, v) => s + v, 0) - Object.values(a.causas).reduce((s, v) => s + v, 0))), tempo: total.atencao + total.falha + total.emergencia },
             trafego: { esperas, porZona: Object.values(porZona).sort((a, b) => b.s - a.s), total: esperas.reduce((s, x) => s + x.s, 0) },
@@ -317,6 +327,9 @@ const Indicadores = (function () {
                     estados.push({ agv, em: t, estado: "missao", ponto, missao });
                     const p = { id: pid++, missao, posto: postos.length ? postos[Math.floor(rnd() * postos.length)] : null, agv, estado: "concluido", urgente: rnd() < 0.05,
                                 criadoEm: criado, atribuidoEm: criado + 5000 + rnd() * 40000, iniciadoEm: t, concluidoEm: t + dur };
+                    // 0.15: parte dos pedidos sai da programação (consumo); alguns chegam depois de o material acabar
+                    if (p.posto && rnd() < 0.6) { p.origem = "programado"; p.acabaEm = t + dur + (rnd() < 0.08 ? -1 : 1) * (0.5 + rnd() * 3) * 60000; }
+                    else { p.origem = "manual"; p.adiantado = Boolean(p.posto) && rnd() < 0.15; }
                     if (rnd() < 0.18) {
                         const meio = t + dur * (0.3 + rnd() * 0.4);
                         const pp = pontos[Math.floor(rnd() * Math.min(pontos.length, 4))] || ponto;
@@ -351,7 +364,19 @@ const Indicadores = (function () {
                 }
             }
         });
-        return { estados: estados.filter(s => s.em <= ate), eventos: eventos.filter(e => e.em <= ate), pedidos, manutencoes };
+        // pausas de exemplo da programação: troca de ferramenta de manhã, linha parada à tarde
+        const pausas = [];
+        for (let dia = ini.getTime(); dia < ate; dia += 86400000) {
+            const sem = new Date(dia).getDay();
+            if (sem === 0 || sem === 6 || !postos.length) continue;
+            const p1 = postos[0], p2 = postos[1] || postos[0];
+            [[p1, 9.5 * 3600000, 18, "troca de ferramenta"], [p2, 14 * 3600000, 35, "linha parada"]].forEach(([posto, h, min, motivo]) => {
+                if (dia + h + min * 60000 > ate) return;
+                pausas.push({ posto, missao: "", em: dia + h, tipo: "pausada", motivo, por_nome: "Exemplo" });
+                pausas.push({ posto, missao: "", em: dia + h + min * 60000, tipo: "retomada", motivo: "", por_nome: "Exemplo" });
+            });
+        }
+        return { estados: estados.filter(s => s.em <= ate), eventos: eventos.filter(e => e.em <= ate), pedidos, manutencoes, pausas };
     }
 
     /* ---------------- desenho ---------------- */
@@ -417,6 +442,25 @@ const Indicadores = (function () {
             </section>`;
     }
 
+    // Pausas da programação no período: por posto e motivo, com o tempo pausado
+    function pausasDaProgramacao(d) {
+        const abertas = {}, soma = {};
+        (d.pausas || []).forEach(ev => {
+            const k = ev.posto + "|" + ev.missao;
+            if (ev.tipo === "pausada") abertas[k] = ev;
+            else if (abertas[k]) { somar(abertas[k], ev.em); delete abertas[k]; }
+        });
+        Object.values(abertas).forEach(ev => somar(ev, d.ate));
+        function somar(ev, fim) {
+            const ini = Math.max(ev.em, d.desde), f = Math.min(fim, d.ate);
+            if (f <= ini) return;
+            const k = ev.posto + "|" + (ev.motivo || "sem motivo");
+            const x = soma[k] || (soma[k] = { posto: ev.posto, motivo: ev.motivo || "sem motivo", n: 0, s: 0 });
+            x.n++; x.s += (f - ini) / 1000;
+        }
+        return Object.values(soma).sort((a, b) => b.s - a.s);
+    }
+
     function htmlEntregas(r) {
         const e = r.entregas;
         return `
@@ -426,11 +470,17 @@ const Indicadores = (function () {
                 ${tile("Espera até sair um AGV", durS(e.esperaMedia), "média, do pedido ao despacho")}
                 ${tile("Atendimento", durS(e.atendimentoMedio), `90% em até ${durS(e.atendimentoP90)}`)}
             </div>
+            ${e.programados || e.adiantados ? `<div class="ind-tiles">
+                ${tile("Programados", ui.milhar(e.programados), e.pedidos ? `${pct(e.programados / e.pedidos)} dos pedidos saíram sozinhos` : "")}
+                ${tile("Pedidos à mão", ui.milhar(e.pedidos - e.programados), `${e.adiantados} adiantaram o automático`)}
+                ${tile("Faltou material", ui.milhar(e.faltou.length), e.comPrazo ? `${pct(e.faltou.length / e.comPrazo)} dos programados chegaram depois de acabar` : "kit que chegou depois de o anterior acabar")}
+            </div>` : ""}
             <section class="card ind-card"><h3>Concluídas por hora do dia</h3>${barras(e.porHora.map((n, h) => ({ rotulo: String(h), valor: n, dica: `${h}h: ${n}` })), { passo: 2 })}</section>
             <div class="ind-duas">
                 <section class="card ind-card"><h3>Por missão</h3>${tabela(["Missão", "Entregas", "Atendimento médio"], e.porMissao.slice(0, 12).map(x => [esc(x.chave) + (typeof Despacho !== "undefined" ? ` <span class="suave">${esc(Despacho.nomeMissao(x.chave) !== x.chave ? Despacho.nomeMissao(x.chave) : "")}</span>` : ""), ui.milhar(x.n), durS(x.s / x.n)]))}</section>
                 <section class="card ind-card"><h3>Por posto</h3>${tabela(["Posto", "Entregas", "Atendimento médio"], e.porPosto.slice(0, 12).map(x => [esc(x.chave), ui.milhar(x.n), durS(x.s / x.n)]), "Nenhum pedido de posto no período.")}</section>
-            </div>`;
+            </div>
+            ${e.pausas.length ? `<section class="card ind-card"><h3>Pausas da programação</h3>${tabela(["Posto", "Motivo", "Vezes", "Tempo pausado"], e.pausas.slice(0, 12).map(x => [esc(x.posto), esc(x.motivo), ui.milhar(x.n), dur(x.s * 1000)]))}</section>` : ""}`;
     }
 
     function htmlFrota(r) {

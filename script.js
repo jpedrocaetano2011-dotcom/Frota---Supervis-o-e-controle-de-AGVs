@@ -2303,7 +2303,8 @@ const informacoesTelas = {
     usuarios: ["Usuários", "Quem acessa o sistema e o que cada um pode fazer"],
     modelos: ["Modelos", "Catálogo do Atta: ficha técnica, foto e documentação de cada modelo"],
     manutencao: ["Manutenção", "AGVs fora da operação, uso da frota, cópias da configuração e documentação"],
-    indicadores: ["Indicadores", "O que a frota fez: entregas, disponibilidade, paradas, tráfego e ganhos"]
+    indicadores: ["Indicadores", "O que a frota fez: entregas, disponibilidade, paradas, tráfego e ganhos"],
+    programacao: ["Programação", "Botões dos postos que pedem sozinhos: pelo consumo, a cada X minutos ou em horários fixos"]
 };
 
 const TELAS_DO_AGV = ["visaoGeral", "controleManual", "sensores", "diagnostico", "historico", "configuracoes"];
@@ -2331,7 +2332,7 @@ function mudarTela(nomeTela) {
     // o tablet do posto só tem a tela do posto
     if (document.body.classList.contains("papel-posto")) nomeTela = "posto";
     // papel Manutenção: sem planta, missões, despacho, postos, rotina e usuários
-    if (document.body.classList.contains("papel-manutencao") && ["despacho", "missoes", "controlePlanta", "postos", "rotina", "usuarios", "posto"].includes(nomeTela)) nomeTela = "frota";
+    if (document.body.classList.contains("papel-manutencao") && ["despacho", "programacao", "missoes", "controlePlanta", "postos", "rotina", "usuarios", "posto"].includes(nomeTela)) nomeTela = "frota";
     if (nomeTela !== "posto") document.body.classList.remove("tela-posto");
     if (TELAS_DO_AGV.includes(nomeTela) && !agvSelecionado) {
         ui.aviso("Escolha um AGV na frota primeiro.", "aviso");
@@ -2362,6 +2363,7 @@ function mudarTela(nomeTela) {
     if (nomeTela === "modelos" && typeof Modelos !== "undefined") Modelos.abrir();
     if (nomeTela === "manutencao" && typeof Manutencao !== "undefined") Manutencao.abrir();
     if (nomeTela === "indicadores" && typeof Indicadores !== "undefined") Indicadores.abrir();
+    if (nomeTela === "programacao" && typeof Programacao !== "undefined") Programacao.abrir();
     if (nomeTela === "configuracoes" && typeof Copias !== "undefined") Copias.abrir();
     renderizarAlertaGlobal();
     renderizarDadosTelaAtual();

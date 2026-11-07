@@ -79,12 +79,44 @@
        INÍCIO
        ======================================================== */
 
+    // Demonstração (0.15): só por link com prazo (?demo=código), conferido no banco
+    // toda vez que o site abre. Sem botão público na entrada.
+    let demoExpira = null, avisoDemo = "";
+    async function conferirDemo() {
+        const daUrl = new URLSearchParams(location.search).get("demo");
+        if (daUrl) {
+            try { sessionStorage.setItem("codigoDemo", daUrl); } catch (e) { /* ignora */ }
+            const q = new URLSearchParams(location.search);
+            q.delete("demo");
+            history.replaceState(null, "", location.pathname + (q.toString() ? "?" + q : "") + location.hash);
+        }
+        sessionStorage.removeItem("modoDemo");          // o botão antigo
+        let codigo = null;
+        try { codigo = sessionStorage.getItem("codigoDemo"); } catch (e) { /* ignora */ }
+        if (!codigo) return false;
+        try {
+            if (!raiz.supabase) await carregarScript(URL_BIBLIOTECA);
+            const anonimo = raiz.supabase.createClient(cfg.url, cfg.chave, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
+            const { data, error } = await anonimo.rpc("entrar_demo", { p_codigo: codigo, p_contar: Boolean(daUrl) });
+            if (error) throw error;
+            if (data?.ok) { demoExpira = Date.parse(data.expira_em); return true; }
+            avisoDemo = data?.motivo === "expirado" ? "Este link de demonstração expirou. Peça um novo para a E4M."
+                : data?.motivo === "cancelado" ? "Este link de demonstração foi cancelado." : "Link de demonstração inválido.";
+        } catch (e) {
+            avisoDemo = "Não deu para conferir o link de demonstração agora. Tente de novo em instantes.";
+        }
+        try { sessionStorage.removeItem("codigoDemo"); } catch (e) { /* ignora */ }
+        return false;
+    }
+
     async function iniciar(scripts) {
         try {
             if (!CONFIGURADA) {
                 modo = "local";
-            } else if (sessionStorage.getItem("modoDemo") === "1") {
+            } else if (await conferirDemo()) {
                 modo = "demo";
+                // o fornecedor pode cancelar a qualquer hora: confere de novo de tempos em tempos
+                setInterval(async () => { if (!(await conferirDemo())) { limparCopiaLocal(); location.reload(); } }, 5 * 60000);
             } else {
                 modo = "nuvem";
                 montarEntrada();
@@ -192,7 +224,7 @@
                 .then(r => r.error ? cliente.from("agvs").select("id, nome, rotina").eq("empresa_id", id).order("id") : r),
             cliente.from("plantas").select("rascunho, publicada, revisao").eq("empresa_id", id).maybeSingle(),
             cliente.from("missoes").select("id, nome, etapas, prioridade").eq("empresa_id", id).order("id"),
-            cliente.from("postos").select("id, nome, ponto, botoes, permite_urgente, usuarios").eq("empresa_id", id).order("id")
+            cliente.from("postos").select("id, nome, ponto, botoes, permite_urgente, usuarios, pin_pessoal").eq("empresa_id", id).order("id")
         ]);
         [a, p, m].forEach(r => { if (r.error) throw r.error; });
         dados = {
@@ -404,7 +436,7 @@
     /* ---------- postos (0.13) ---------- */
     function postoDoBanco(x) {
         return { id: x.id, nome: x.nome, ponto: x.ponto || "", botoes: Array.isArray(x.botoes) ? x.botoes : [],
-                 permiteUrgente: Boolean(x.permite_urgente), usuarios: Array.isArray(x.usuarios) ? x.usuarios : [] };
+                 permiteUrgente: Boolean(x.permite_urgente), usuarios: Array.isArray(x.usuarios) ? x.usuarios : [], pinPessoal: Boolean(x.pin_pessoal) };
     }
     function postos() {
         if (modo === "nuvem" && dados) return dados.postos;
@@ -424,7 +456,8 @@
             }
             const { error } = await cliente.from("postos").upsert({
                 empresa_id: empresa.id, id: posto.id, nome: posto.nome, ponto: posto.ponto || "",
-                botoes: posto.botoes || [], permite_urgente: Boolean(posto.permiteUrgente), usuarios: posto.usuarios || []
+                botoes: posto.botoes || [], permite_urgente: Boolean(posto.permiteUrgente), usuarios: posto.usuarios || [],
+                pin_pessoal: Boolean(posto.pinPessoal)
             });
             if (error) throw error;
         }
@@ -442,7 +475,7 @@
     }
     async function recarregarPostos() {
         if (modo !== "nuvem") return postos();
-        const r = await cliente.from("postos").select("id, nome, ponto, botoes, permite_urgente, usuarios").eq("empresa_id", empresa.id).order("id");
+        const r = await cliente.from("postos").select("id, nome, ponto, botoes, permite_urgente, usuarios, pin_pessoal").eq("empresa_id", empresa.id).order("id");
         if (!r.error) gravarPostosLocal(r.data.map(postoDoBanco));
         return postos();
     }
@@ -547,7 +580,7 @@
         if (modo === "demo") {
             caixa.innerHTML = `
                 <div class="conta-nome">Demonstração</div>
-                <div class="conta-detalhe">Nada é salvo na nuvem</div>
+                <div class="conta-detalhe">Nada é salvo na nuvem${demoExpira ? ` · link vale até ${new Date(demoExpira).toLocaleDateString("pt-BR")}` : ""}</div>
                 <div class="conta-acoes"><button type="button" class="btn btn-mini" data-conta="sairDemo">Entrar com uma conta</button></div>`;
         } else {
             const fornecedor = perfil.papel === "fornecedor";
@@ -595,6 +628,7 @@
 
     function sairDaDemonstracao() {
         sessionStorage.removeItem("modoDemo");
+        sessionStorage.removeItem("codigoDemo");
         limparCopiaLocal();
         location.reload();
     }
@@ -646,14 +680,14 @@
         const conteudo = fundo.querySelector("#entradaConteudo");
         const erro = opcoes.erro ? `<p class="entrada-erro" role="alert">${esc(opcoes.erro)}</p>` : "";
         const info = opcoes.info ? `<p class="entrada-info" role="status">${esc(opcoes.info)}</p>` : "";
-        const demo = `<div class="entrada-rodape"><button type="button" class="btn-link" data-entrada="demo">Ver demonstração sem conta</button></div>`;
+        const demo = "";   // 0.15: a demonstração é só por link com prazo (Usuários › Links de demonstração)
         let html = "";
         switch (tipo) {
             case "carregando":
                 html = `<div class="entrada-carregando"><span class="entrada-roda" aria-hidden="true"></span><p>${esc(opcoes.texto || "Carregando…")}</p></div>`;
                 break;
             case "entrar":
-                html = `<h1 id="entradaTitulo">Entrar</h1>${erro}${info}
+                html = `<h1 id="entradaTitulo">Entrar</h1>${erro}${info}${avisoDemo ? `<p class="entrada-erro" role="alert">${esc(avisoDemo)}</p>` : ""}
                     <form data-form="entrar" class="entrada-form">
                         ${campo("E-mail", "email", "email", `autocomplete="username" required value="${esc(opcoes.email || "")}"`)}
                         ${campo("Senha", "senha", "password", 'autocomplete="current-password" required')}
@@ -810,10 +844,6 @@
         if (acao === "criar" || acao === "esqueci" || acao === "entrar") {
             if (resolverPainel) resolverPainel.tipo = acao;
             mostrarPainel(acao);
-        } else if (acao === "demo") {
-            sessionStorage.setItem("modoDemo", "1");
-            limparCopiaLocal();
-            location.reload();
         } else if (acao === "sair" || acao === "tentar") {
             responder(acao);
         } else if (acao === "empresa") {

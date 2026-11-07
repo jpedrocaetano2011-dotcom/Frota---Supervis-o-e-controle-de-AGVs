@@ -65,7 +65,9 @@ const Despacho = (function () {
             estado: x.estado, agv: x.agv || null, motivo: x.motivo || "", eta: x.eta_s ?? null,
             vinculo: x.vinculo != null ? Number(x.vinculo) : null, criadoPor: x.criado_por_nome || "",
             criadoEm: ms(x.criado_em), atribuidoEm: ms(x.atribuido_em), iniciadoEm: ms(x.iniciado_em),
-            concluidoEm: ms(x.concluido_em)
+            concluidoEm: ms(x.concluido_em),
+            // 0.15: pedido criado pela programação, quando devia sair e quando o material acaba
+            origem: x.origem || "manual", devidoEm: ms(x.devido_em), acabaEm: ms(x.acaba_em), adiantado: Boolean(x.adiantado)
         };
     }
 
@@ -198,7 +200,46 @@ const Despacho = (function () {
                 id: ++d.seq, missao, posto, agvFixo, prioridade: urgente ? 3 : Math.max(0, Math.min(3, Number(m.prioridade ?? 1))),
                 urgente, urgentePor: urgente ? "líder (PIN)" : null, estado: "pendente", agv: null, motivo: "", eta: null,
                 vinculo: dados.vinculo ?? null, criadoPor: dados.criadoPor || (posto ? `Posto ${posto}` : "Despacho"),
-                criadoEm: agora(), atribuidoEm: null, iniciadoEm: null, concluidoEm: null
+                criadoEm: agora(), atribuidoEm: null, iniciadoEm: null, concluidoEm: null, origem: "manual", devidoEm: null, acabaEm: null, adiantado: false
+            };
+            // pedido à mão num botão programado: adiantou o automático
+            if (posto && typeof Programacao !== "undefined" && Programacao.aoPedidoManual(posto, missao, novo.id)) novo.adiantado = true;
+            d.lista.push(novo);
+            gravarLocal(d);
+            acordar();
+            return { ok: true, pedido: novo };
+        } catch (e) {
+            return { ok: false, erro: erroDe(e) };
+        }
+    }
+
+    // Pedido da programação (só a aba que despacha). { posto, missao, devidoEm, acabaEm }
+    async function criarProgramado(dados) {
+        if (!lider.eu) return { ok: false, erro: "só a aba que despacha cria os pedidos programados" };
+        try {
+            if (usarNuvem()) {
+                const { data, error } = await Nuvem.cliente().rpc("criar_pedido_programado", {
+                    p_empresa: Nuvem.empresa().id, p_sessao: SESSAO, p_posto: dados.posto, p_missao: dados.missao,
+                    p_devido: dados.devidoEm ? new Date(dados.devidoEm).toISOString() : null, p_acaba: dados.acabaEm ? new Date(dados.acabaEm).toISOString() : null
+                });
+                if (error) return { ok: false, erro: erroDe(error) };
+                if (data?.pulou) return { ok: false, pulou: true };
+                if (!data?.criado) return { ok: false, erro: data?.motivo || "não criado" };
+                const novo = doBanco(data.pedido);
+                if (!lista.some(p => p.id === novo.id)) lista.push(novo);
+                avisar();
+                acordar();
+                return { ok: true, pedido: novo };
+            }
+            const m = missaoPorId(dados.missao);
+            if (!m) return { ok: false, erro: `A missão ${dados.missao} não existe.` };
+            const d = lerLocal();
+            if (d.lista.some(x => x.missao === dados.missao && x.posto === dados.posto && ESTADOS_ATIVOS.includes(x.estado))) return { ok: false, erro: "já tem pedido em aberto" };
+            const novo = {
+                id: ++d.seq, missao: dados.missao, posto: dados.posto, agvFixo: null, prioridade: Math.max(0, Math.min(2, Number(m.prioridade ?? 1))),
+                urgente: false, urgentePor: null, estado: "pendente", agv: null, motivo: "", eta: null, vinculo: null,
+                criadoPor: `Programação do posto ${dados.posto}`, criadoEm: agora(), atribuidoEm: null, iniciadoEm: null, concluidoEm: null,
+                origem: "programado", devidoEm: dados.devidoEm || null, acabaEm: dados.acabaEm || null, adiantado: false
             };
             d.lista.push(novo);
             gravarLocal(d);
@@ -537,6 +578,7 @@ const Despacho = (function () {
             if (usarNuvem() && agora() - ultimaLeitura > (tempoRealOk ? 15000 : 2500)) await recarregar();
             if (lider.eu) {
                 await acompanhar();
+                if (typeof Programacao !== "undefined") await Programacao.verificar();
                 await despachar();
             }
         } catch (e) {
@@ -659,6 +701,7 @@ const Despacho = (function () {
                 <span class="desp-num">#${p.id}</span>
                 <strong>${esc(p.missao)}</strong><span class="suave">${esc(nomeMissao(p.missao))}</span>
                 <span class="pilula ${p.urgente ? "vermelho" : p.prioridade >= 2 ? "ambar" : ""}">${nomePrioridade(p)}</span>
+                ${p.origem === "programado" ? `<span class="pilula azul" title="Criado pela programação do posto">programado</span>` : p.adiantado ? `<span class="pilula" title="Pedido à mão antes do automático">adiantado</span>` : ""}
                 <span class="pilula ${corEstado(p)}">${textoEstado(p)}</span>
             </div>
             <div class="desp-linha2">
@@ -826,7 +869,7 @@ const Despacho = (function () {
     return {
         iniciar, abrir, desenhar, acordar,
         lista: () => lista.slice(), lider: () => Object.assign({}, lider), sessao: SESSAO,
-        criar, tornarUrgente, alterarPrioridade, cancelar, liberar,
+        criar, criarProgramado, tornarUrgente, alterarPrioridade, cancelar, liberar,
         aoStatusMissao, aoEventoMissao, aoRemoverDaFila, ouvir: f => ouvintes.add(f),
         nomeMissao, textoEstado, corEstado, faltam, textoTempo, porQue, nomePrioridade, postos: postosAtuais,
         ESTADOS_ATIVOS, pinLocal
