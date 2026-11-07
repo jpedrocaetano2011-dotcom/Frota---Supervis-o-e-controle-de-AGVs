@@ -45,6 +45,7 @@ const Despacho = (function () {
     const agora = () => Date.now();
 
     function nomeDestaAba() {
+        if (window.E4M_SERVICO) return "Servidor de despacho";   // despacho-servidor/servico.js
         if (usarNuvem()) {
             const p = Nuvem.perfil();
             return (p?.nome || p?.email || "aba") + (Nuvem.papel() === "posto" ? " (tablet)" : "");
