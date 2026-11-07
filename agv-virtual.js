@@ -453,6 +453,8 @@ const AgvVirtual = (function () {
         while (agvs["V" + n]) n++;
         const id = "V" + n;
         agvs[id] = criarAGV(id, `Virtual ${n}`);
+        // o virtual já nasce do primeiro modelo do catálogo (dá para trocar em editar)
+        if (typeof Modelos !== "undefined" && Modelos.disponiveis()[0]) agvs[id].modelo = Modelos.disponiveis()[0].id;
         agvs[id].virtual = true;
         // começa numa estação da planta, se houver
         const planta = plantaPublicada();

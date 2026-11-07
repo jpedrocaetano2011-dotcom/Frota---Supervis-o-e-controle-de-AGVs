@@ -3399,18 +3399,49 @@ function preencherModeloCadastro(modelo, serie) {
     const serieEl = document.getElementById("novoAgvSerie");
     if (serieEl) serieEl.value = serie || "";
     if (!sel || typeof Modelos === "undefined") return;
-    sel.innerHTML = Modelos.opcoesHtml(modelo);
-    sel.value = modelo || "";
-    resumoModeloCadastro();
+    // sem a opção "Sem modelo": todo AGV novo é de um modelo do catálogo.
+    // AGV antigo sem modelo: já vem com o primeiro marcado, para escolher.
+    const ops = Modelos.disponiveis();
+    sel.innerHTML = Modelos.opcoesHtml(modelo, false);
+    sel.value = modelo && [...sel.options].some(o => o.value === modelo) ? modelo : (ops[0]?.id || "");
+    sel.disabled = !sel.options.length;
+    resumoModeloCadastro(!modelo && agvEmEdicao !== null);
 }
-function resumoModeloCadastro() {
+function resumoModeloCadastro(semModeloAntes = false) {
     const sel = document.getElementById("novoAgvModelo");
     const el = document.getElementById("novoAgvModeloResumo");
     if (!sel || !el || typeof Modelos === "undefined") return;
     const m = Modelos.porId(sel.value);
-    el.textContent = m ? `${Modelos.resumo(m)}. A ficha técnica vem do catálogo (Frota › Modelos).` : "Sem modelo: o despacho não confere em quais estações ele pode ir.";
+    if (!m) {
+        el.innerHTML = `<p class="cad-modelo-aviso">${window.Nuvem && Nuvem.emNuvem() && Nuvem.papel() !== "fornecedor"
+            ? "Nenhum modelo liberado para esta empresa. Peça ao fornecedor para liberar o modelo em Frota › Modelos."
+            : "Nenhum modelo no catálogo. Cadastre o modelo em Frota › Modelos."}</p>`;
+        return;
+    }
+    el.innerHTML = (semModeloAntes ? `<p class="cad-modelo-aviso">Este AGV ainda não tinha modelo. Confira e salve.</p>` : "") + Modelos.cartaoCadastroHtml(m);
 }
-document.getElementById("novoAgvModelo")?.addEventListener("change", resumoModeloCadastro);
+document.getElementById("novoAgvModelo")?.addEventListener("change", () => resumoModeloCadastro());
+document.getElementById("novoAgvModeloResumo")?.addEventListener("click", e => {
+    const b = e.target.closest("[data-cad-ficha]");
+    if (!b) return;
+    fecharCadastroAGV();
+    mudarTela("modelos");
+    Modelos.abrir(b.dataset.cadFicha);
+});
+// Busca da frota: o navegador costuma colar o e-mail do login no primeiro
+// campo de texto da página. Fica travada até alguém clicar nela e nunca
+// começa preenchida.
+(function () {
+    const b = document.getElementById("buscaFrota");
+    if (!b) return;
+    const liberar = () => b.removeAttribute("readonly");
+    b.addEventListener("focus", liberar);
+    b.addEventListener("pointerdown", liberar);
+    const limpar = () => { if (b.value && document.activeElement !== b) { b.value = ""; if (typeof renderizarFrota === "function") renderizarFrota(); } };
+    b.value = "";
+    setTimeout(limpar, 300); setTimeout(limpar, 1500);
+    window.addEventListener("pageshow", limpar);
+})();
 
 function fecharCadastroAGV() {
     agvEmEdicao = null;
@@ -3437,6 +3468,10 @@ function adicionarAGV() {
     const serie = (document.getElementById("novoAgvSerie")?.value || "").trim().slice(0, 40);
     if (!id || !nome) {
         ui.aviso("Preencha o ID e o nome do AGV.", "aviso");
+        return;
+    }
+    if (!modelo && typeof Modelos !== "undefined") {
+        ui.aviso("Escolha o modelo do AGV. Sem modelo liberado, peça ao fornecedor em Frota › Modelos.", "aviso");
         return;
     }
     if (!/^[A-Za-z0-9_-]{1,12}$/.test(id)) {

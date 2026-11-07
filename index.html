@@ -100,7 +100,7 @@
             <div class="filtros" id="filtrosFrota" role="group" aria-label="Filtrar por estado"></div>
             <div class="filtros-extra">
                 <select id="filtroModeloFrota" aria-label="Filtrar por modelo"><option value="">Todos os modelos</option></select>
-                <label class="busca"><svg class="icone icone-p" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4a7 7 0 1 0 0 14a7 7 0 1 0 0-14zM20 20l-4-4"/></svg><input type="search" id="buscaFrota" placeholder="Nome ou ID" autocomplete="off" aria-label="Buscar AGV por nome ou ID"></label>
+                <label class="busca"><svg class="icone icone-p" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4a7 7 0 1 0 0 14a7 7 0 1 0 0-14zM20 20l-4-4"/></svg><input type="search" id="buscaFrota" name="busca-frota-agv" placeholder="Nome ou ID" autocomplete="off" readonly aria-label="Buscar AGV por nome ou ID"></label>
             </div>
             <div class="grupo">
                 <button type="button" class="btn" onclick="mudarTela('rotina')">Rotina e berços</button>
@@ -976,8 +976,8 @@
             <label>ID do AGV (o mesmo AGV_ID do firmware)<input id="novoAgvId" type="text" placeholder="Ex.: 04"></label>
             <label>Nome<input id="novoAgvNome" type="text" placeholder="Ex.: Atlas"></label>
             <label>Modelo<select id="novoAgvModelo"></select></label>
-            <p class="suave" id="novoAgvModeloResumo" style="margin:-4px 0 4px;font-size:12.5px"></p>
-            <label>Número de série <span class="suave">(opcional)</span><input id="novoAgvSerie" type="text" maxlength="40" placeholder="Ex.: ATG-0001"></label>
+            <div id="novoAgvModeloResumo" class="cad-modelo-caixa"></div>
+            <label>Número de série (opcional)<input id="novoAgvSerie" type="text" maxlength="40" placeholder="Ex.: ATG-0001"></label>
         </div>
         <div class="modal-agv-footer">
             <button type="button" class="btn" onclick="fecharCadastroAGV()">Cancelar</button>

@@ -1643,6 +1643,13 @@ body.papel-manutencao .menu-item[data-tela="rotina"], body.papel-manutencao .men
 .modelo-cartao-texto { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .modelo-cartao-texto small { font-size: 12.5px; }
 .modelo-detalhe-topo { display: grid; grid-template-columns: minmax(0, 300px) minmax(0, 1fr); gap: 18px; align-items: start; }
+/* a ficha se ajusta à largura do próprio cartão (menu aberto, tela de notebook):
+   estreito, a foto fica em cima e o texto embaixo, sem espremer */
+.modelo-detalhe { container-type: inline-size; }
+@container (max-width: 620px) {
+    .modelo-detalhe-topo { grid-template-columns: 1fr; }
+    .modelo-detalhe-foto { max-width: 420px; }
+}
 .modelo-detalhe-foto { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; border-radius: var(--raio-medio); background: #0e1116; }
 .modelo-detalhe-foto.vazia svg { width: 45%; }
 .modelo-pilulas { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
@@ -1658,6 +1665,7 @@ body.papel-manutencao .menu-item[data-tela="rotina"], body.papel-manutencao .men
 .modelo-edicao-topo .largo, .modelo-edicao > .campo.largo { grid-column: 1 / -1; }
 .modelo-edicao textarea { font: 13px var(--mono); padding: 10px; border-radius: var(--raio-pequeno); border: 1px solid var(--border); background: var(--card); color: var(--text); }
 .editor-modelos { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+@media (max-width: 1180px) { .modelos-grade { grid-template-columns: 1fr; } }
 @media (max-width: 960px) {
     .modelos-grade, .modelo-detalhe-topo { grid-template-columns: 1fr; }
     .modelo-edicao-topo { grid-template-columns: 1fr; }
@@ -1730,4 +1738,23 @@ circle.calor { stroke: #fff; stroke-width: 1px; vector-effect: non-scaling-strok
     #relatorioImpressao input { border: 0; }
     #relatorioImpressao .rel-rodape { margin-top: 20px; font-size: 9pt; color: #566574; text-align: center; }
     @page { size: A4; margin: 14mm; }
+}
+
+/* 0.14.3: cartão do modelo no cadastro do AGV */
+.cad-modelo-caixa { margin: -2px 0 6px; }
+.cad-modelo { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 14px; padding: 12px; border: 1px solid var(--border); border-radius: var(--raio-medio); background: var(--soft); }
+.cad-modelo-foto { width: 132px; aspect-ratio: 4 / 3; object-fit: cover; border-radius: var(--raio-pequeno); background: #0e1116; display: block; }
+.cad-modelo-foto.vazia { display: flex; align-items: center; justify-content: center; color: var(--muted); }
+.cad-modelo-foto.vazia svg { width: 60%; }
+.cad-modelo-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 13px; }
+.cad-modelo-info > b { font-size: 15px; }
+.cad-modelo-info dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 12px; margin: 8px 0 4px; }
+.cad-modelo-info dt { color: var(--muted); }
+.cad-modelo-info dd { margin: 0; text-align: right; font-weight: 600; overflow-wrap: anywhere; }
+.cad-modelo-info dd i { font-weight: 400; color: var(--muted); }
+.cad-modelo-info .btn-link { align-self: flex-start; }
+.cad-modelo-aviso { margin: 0 0 8px; padding: 8px 10px; border-radius: var(--raio-pequeno); background: var(--amber-soft, rgba(245, 158, 11, .12)); color: var(--text); font-size: 13px; }
+@media (max-width: 520px) {
+    .cad-modelo { grid-template-columns: 1fr; }
+    .cad-modelo-foto { width: 100%; max-width: 260px; }
 }

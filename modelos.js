@@ -187,6 +187,26 @@ const Modelos = (function () {
             ops.concat(extra).map(m => `<option value="${esc(m.id)}" ${m.id === atual ? "selected" : ""}>${esc(m.nome)}</option>`).join("");
     }
 
+    // Cartão do modelo no cadastro do AGV: foto, o que ele é e os números que a operação usa
+    function cartaoCadastroHtml(m) {
+        if (!m) return "";
+        const f = foto(m);
+        const v = (chave, unidade) => { const x = valorFicha(m, chave); return !x ? "—" : x === "a medir" ? `<i>a medir</i>` : esc(x) + (unidade ? ` ${unidade}` : ""); };
+        const dim = ["comprimento_mm", "largura_mm", "altura_mm"].map(k => valorFicha(m, k));
+        const medidas = dim.every(x => x && x !== "a medir") ? `${dim.join(" × ")} mm` : `<i>a medir</i>`;
+        const linhas = [["Carga máxima", v("carga_kg", "kg")], ["Velocidade máxima", v("vel_max_ms", "m/s")], ["Medidas (C × L × A)", medidas],
+            ["Corredor mínimo", v("corredor_min_mm", "mm")], ["Como pega a carga", v("indexacao")], ["Precisão de parada", v("precisao_parada_mm", "± mm")]];
+        return `<div class="cad-modelo">
+            ${f ? `<img class="cad-modelo-foto" src="${esc(f)}" alt="${esc(m.nome)}">` : `<div class="cad-modelo-foto vazia">${silhuetaSvg(m.modulo)}</div>`}
+            <div class="cad-modelo-info">
+                <b>${esc(m.nome)}</b>
+                <span class="suave">${esc(nomeModulo(m.modulo))} · ${esc(GUIAMENTOS[m.guiamento] || "")}</span>
+                <dl>${linhas.map(([r, x]) => `<dt>${r}</dt><dd>${x}</dd>`).join("")}</dl>
+                <button type="button" class="btn-link" data-cad-ficha="${esc(m.id)}">Ver a ficha completa</button>
+            </div>
+        </div>`;
+    }
+
     async function documentacao(id) {
         const m = porId(id);
         if (!m || !podeVerDoc()) return "";
@@ -469,8 +489,9 @@ const Modelos = (function () {
         }
     }
 
-    function abrir() {
+    function abrir(id) {
         editando = null;
+        if (id && porId(id)) selecionado = id;
         if (!carregado) carregar().then(desenhar);
         desenhar();
     }
@@ -483,7 +504,7 @@ const Modelos = (function () {
     return {
         MODULOS, GUIAMENTOS, CAMPOS, GRUPOS, PADRAO,
         carregar, lista: () => lista.slice(), disponiveis, porId, doAgv, modulo, nome, foto, resumo, valorFicha,
-        nomeModulo, opcoesHtml, documentacao, abrirDocumentacao, salvar, liberar, abrir, desenhar, silhuetaSvg,
+        nomeModulo, opcoesHtml, cartaoCadastroHtml, documentacao, abrirDocumentacao, salvar, liberar, abrir, desenhar, silhuetaSvg,
         podeEditar, podeVerDoc
     };
 })();
