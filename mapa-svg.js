@@ -24,7 +24,7 @@
 
     const CORES_ESTADO = {
         missao: "--accent", pronto: "--green", atencao: "--amber", falha: "--red",
-        emergencia: "--red", offline: "--muted", manual: "--accent", virtual: "--purple"
+        emergencia: "--red", offline: "--muted", manual: "--accent", virtual: "--purple", manutencao: "--muted"
     };
 
     function el(tag, atributos = {}, pai = null) {
@@ -609,19 +609,43 @@
             const varre = restante > 0 ? 0 : 1;
             el("path", { d: `M${r},0 A${r},${r} 0 ${grande} ${varre} ${fimX},${fimY}`, fill: "none", stroke: cor, "stroke-width": 2, "stroke-dasharray": "3 4", "vector-effect": "non-scaling-stroke" }, g);
         }
+        if (agv.manutencao) g.setAttribute("opacity", "0.6");
+        // módulo (0.14): G garra na frente, T engate atrás, R roletes, E plataforma de elevação
+        if (agv.modulo === "G") {
+            [[-12], [8]].forEach(([y]) => el("rect", { x: 19, y, width: 10, height: 4, rx: 1.2, fill: cor }, g));
+        } else if (agv.modulo === "T") {
+            el("line", { x1: -21, y1: 0, x2: -29, y2: 0, stroke: cor, "stroke-width": 2.5, "vector-effect": "non-scaling-stroke" }, g);
+            el("circle", { cx: -31, cy: 0, r: 3.2, fill: "none", stroke: cor, "stroke-width": 2, "vector-effect": "non-scaling-stroke" }, g);
+        }
         el("rect", {
             x: -21, y: -17, width: 42, height: 34, rx: 6, fill: t.agv, stroke: cor, "stroke-width": 2.5,
-            "vector-effect": "non-scaling-stroke", "stroke-dasharray": agv.estimado ? "4 3" : null
+            "vector-effect": "non-scaling-stroke", "stroke-dasharray": agv.estimado || agv.manutencao ? "4 3" : null
         }, g);
         [[-17, -21], [7, -21], [-17, 16], [7, 16]].forEach(([x, y]) => el("rect", { x, y, width: 10, height: 5, rx: 1.5, fill: t.roda }, g));
+        if (agv.modulo === "R") {
+            [-12, -6, 0, 6].forEach(x => el("line", { x1: x, y1: -11, x2: x, y2: 11, stroke: t.roda, "stroke-width": 1.6, "vector-effect": "non-scaling-stroke" }, g));
+        } else if (agv.modulo === "E") {
+            el("circle", { cx: -2, cy: 0, r: 9, fill: "none", stroke: t.roda, "stroke-width": 1.6, "vector-effect": "non-scaling-stroke" }, g);
+        }
         if (agv.carga) el("rect", { x: -12, y: -9, width: 18, height: 18, rx: 2, fill: t.carga }, g);
         el("path", { d: "M18 0 l-9 -8 v16 z", fill: cor }, g);
+        if (agv.manutencao) {
+            // chave inglesa (não gira com o AGV)
+            const k = el("g", { transform: `translate(${agv.x},${Y(agv.y)}) scale(${Math.max(px(1), 0.34 / 42)})`, "pointer-events": "none" }, c.agvs);
+            el("circle", { cx: 20, cy: -20, r: 11, fill: t.card, stroke: cor, "stroke-width": 1.5, "vector-effect": "non-scaling-stroke" }, k);
+            el("path", { d: "M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z", transform: "translate(11,-29) scale(0.75)",
+                fill: "none", stroke: t.texto, "stroke-width": 2, "stroke-linejoin": "round", "vector-effect": "non-scaling-stroke" }, k);
+        }
 
         // rótulo (não gira)
         if (mapa.opcoes.rotulos !== false || agv.destaque) {
             const rotulo = agv.rotulo || `AGV ${agv.id}`;
             const abaixo = 34 * s + px(14);
-            pilula(c.textos, agv.x, Y(agv.y) + abaixo, rotulo, px, { fundo: cor, cor: "#ffffff", mono: true, tamanho: 11, altura: 21, raio: 5 });
+            // perto da borda, o rótulo não sai da área visível do mapa
+            const meia = (Math.max(px(24), rotulo.length * px(11) * 0.62 + px(16))) / 2 + px(4);
+            const v = mapa.vista;
+            const xr = v && v.largura > 2 * meia ? Math.min(Math.max(agv.x, v.x + meia), v.x + v.largura - meia) : agv.x;
+            pilula(c.textos, xr, Y(agv.y) + abaixo, rotulo, px, { fundo: cor, cor: "#ffffff", mono: true, tamanho: 11, altura: 21, raio: 5 });
         }
     }
 

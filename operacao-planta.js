@@ -537,6 +537,7 @@ function desenharAGVsVisaoGeral(dt = 50) {
     const selecionado = agvSelecionado ? agvs[agvSelecionado] : null;
     mapaVisaoGeral.agvs = Object.values(agvs)
         .map(agv => {
+            if (typeof Manutencao !== "undefined" && Manutencao.foraDaLinha(agv)) return null;
             const pose = poseSuavizada(agv, poseEstimadaAGV(agv), dt);
             if (!pose) return null;
             const categoria = typeof categoriaEstadoAGV === "function" ? categoriaEstadoAGV(agv) : { chave: "pronto", curto: "" };
@@ -548,6 +549,8 @@ function desenharAGVsVisaoGeral(dt = 50) {
                 destaque: agv.id === agvSelecionado,
                 estado: categoria.chave,
                 carga: garraCarregada(agv),
+                modulo: typeof Modelos !== "undefined" ? Modelos.modulo(agv) : null,
+                manutencao: categoria.chave === "manutencao",
                 cone: agv.online && (agv.id === agvSelecionado) ? agv.barreira : null
             });
         })

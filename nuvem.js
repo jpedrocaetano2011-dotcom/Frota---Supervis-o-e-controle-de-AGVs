@@ -30,20 +30,27 @@
     cfg.chave = String(cfg.chave || "").trim();
     const CONFIGURADA = Boolean(cfg.url && cfg.chave);
     const URL_BIBLIOTECA = cfg.biblioteca || "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js";
-    const CHAVES_DADOS = ["plantaAGV2", "plantaAGV2Publicada", "missoesAGV", "agvsFrota", "agvSelecionado", "telaAtual", "postosFrota", "pedidosFrota"];
-    const PAPEIS = { fornecedor: "Fornecedor", admin: "Administrador", operador: "Operador", lider: "Líder", posto: "Posto", visualizador: "Visualizador" };
+    const CHAVES_DADOS = ["plantaAGV2", "plantaAGV2Publicada", "missoesAGV", "agvsFrota", "agvSelecionado", "telaAtual", "postosFrota", "pedidosFrota",
+                          "manutencoesFrota", "copiasConfig", "historicoFrota"];
+    const PAPEIS = { fornecedor: "Fornecedor", admin: "Administrador", operador: "Operador", lider: "Líder", posto: "Posto", manutencao: "Manutenção", visualizador: "Visualizador" };
     const NIVEIS = {
-        ver: ["fornecedor", "admin", "operador", "lider", "posto", "visualizador"],
+        ver: ["fornecedor", "admin", "operador", "lider", "posto", "manutencao", "visualizador"],
         operar: ["fornecedor", "admin", "operador"],
         administrar: ["fornecedor", "admin"],
         pedir: ["fornecedor", "admin", "operador", "posto"],
         despachar: ["fornecedor", "admin", "operador", "posto"],
-        urgente: ["fornecedor", "admin", "operador", "lider"]
+        urgente: ["fornecedor", "admin", "operador", "lider"],
+        // 0.14
+        manutencao: ["fornecedor", "admin", "operador", "manutencao"],
+        documentacao: ["fornecedor", "admin", "manutencao"],
+        copiar_config: ["fornecedor", "admin", "operador", "posto", "manutencao"]
     };
     // Comandos que o despachante manda (o tablet do posto também despacha)
     const TOPICOS_DESPACHO = /^comando\/(fila|fila\/adicionar|saidas)$/;
     // Comandos que mudam o AGV em si (parâmetros, firmware, calibração): só admin.
     const TOPICOS_ADMIN = /^comando\/(broker|configuracao|ota|calibracao_qtr|calibracao_mecanica|trafego)$/;
+    // Papel Manutenção (0.14): mexe no AGV (manual, calibração, configuração, autoteste), não roda missão
+    const TOPICOS_MANUTENCAO = /^comando\/(manutencao|manual|garra\/movimento|garra\/parar|definir_posicao|calibracao_qtr|calibracao_mecanica|configuracao|autoteste|trafego)$/;
 
     let modo = "local";
     let cliente = null, usuario = null, perfil = null, empresa = null;
@@ -181,7 +188,8 @@
     async function baixarDados() {
         const id = empresa.id;
         const [a, p, m, po] = await Promise.all([
-            cliente.from("agvs").select("id, nome, rotina").eq("empresa_id", id).order("id"),
+            cliente.from("agvs").select("id, nome, rotina, modelo, serie").eq("empresa_id", id).order("id")
+                .then(r => r.error ? cliente.from("agvs").select("id, nome, rotina").eq("empresa_id", id).order("id") : r),
             cliente.from("plantas").select("rascunho, publicada, revisao").eq("empresa_id", id).maybeSingle(),
             cliente.from("missoes").select("id, nome, etapas, prioridade").eq("empresa_id", id).order("id"),
             cliente.from("postos").select("id, nome, ponto, botoes, permite_urgente, usuarios").eq("empresa_id", id).order("id")
@@ -242,6 +250,8 @@
         if (modo !== "nuvem") return true;
         if (caminho === "comando/stop") return true;   // parar é sempre permitido
         if (TOPICOS_DESPACHO.test(caminho) && pode("despachar")) return true;
+        if (caminho === "comando/manutencao" && pode("manutencao")) return true;
+        if (papel() === "manutencao" && TOPICOS_MANUTENCAO.test(caminho)) return true;
         const nivel = TOPICOS_ADMIN.test(caminho) ? "administrar" : "operar";
         if (pode(nivel)) return true;
         if (Date.now() - ultimoAvisoBloqueio > 3000) {
@@ -258,6 +268,7 @@
         b.toggle("sem-operar", !pode("operar"));
         b.toggle("sem-administrar", !pode("administrar"));
         b.toggle("sem-pedir", !pode("pedir"));
+        b.toggle("sem-manutencao", !pode("manutencao"));
         Object.keys(PAPEIS).forEach(p => b.toggle("papel-" + p, papel() === p));
     }
 
@@ -278,6 +289,8 @@
             if (!agvs[id] || agvs[id].virtual) agvs[id] = criarAGV(id, a.nome);
             else agvs[id].nome = a.nome;
             agvs[id].rotina = a.rotina && Object.keys(a.rotina).length ? a.rotina : (agvs[id].rotina || null);
+            agvs[id].modelo = a.modelo || null;
+            agvs[id].serie = a.serie || "";
         });
     }
 
@@ -365,14 +378,16 @@
         }, "o rascunho da planta");
     }
 
-    function salvarAgv(id, nome, idAntigo) {
+    function salvarAgv(id, nome, idAntigo, extra) {
         if (modo !== "nuvem" || !pode("administrar")) return;
         enfileirar(async () => {
             if (idAntigo && idAntigo !== id) {
                 const { error } = await cliente.from("agvs").delete().eq("empresa_id", empresa.id).eq("id", idAntigo);
                 if (error) throw error;
             }
-            const { error } = await cliente.from("agvs").upsert({ empresa_id: empresa.id, id, nome });
+            const linha = { empresa_id: empresa.id, id, nome };
+            if (extra) { linha.modelo = extra.modelo || null; linha.serie = extra.serie || null; }
+            const { error } = await cliente.from("agvs").upsert(linha);
             if (error) throw error;
         }, `o AGV ${id}`);
     }

@@ -117,6 +117,8 @@ function processarConfiguracaoESP(agv, dados) {
             agv.envioConfigPendente = false;
             agv.erroConfiguracao = null;
         }
+        // cópia da configuração (0.14): guarda se mudou
+        if (typeof Copias !== "undefined") Copias.aoReceber(agv);
     } else if (dados.status === "OK") {
         // firmware antigo (0.5): campos soltos
         agv.configuracao = {
@@ -335,6 +337,7 @@ function renderizarConfiguracoes(forcar = false) {
     atualizarBotoesConfig(agv, pendentes.length);
     renderizarCalibracao();
     renderizarOta();
+    if (typeof Copias !== "undefined") Copias.desenhar();
 }
 
 function renderizarNavConfig(pendentes) {
@@ -1022,7 +1025,9 @@ function exportarHistoricoCSV() {
         arquivo.text().then(texto => {
             try {
                 const dados = JSON.parse(texto);
-                carregarNoRascunho(agvAtual(), dados.parametros || dados, "arquivo");
+                const alvoImportar = agvAtual();
+                if (alvoImportar) alvoImportar.restauracao = { origem: "importada", ate: Date.now() + 10 * 60000 };
+                carregarNoRascunho(alvoImportar, dados.parametros || dados, "arquivo");
             } catch (erro) {
                 ui.aviso("Arquivo inválido.");
             }

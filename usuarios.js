@@ -10,7 +10,7 @@ const Usuarios = (() => {
     "use strict";
 
     const esc = t => ui.escapar(String(t ?? ""));
-    const PAPEIS_EMPRESA = [["admin", "Administrador"], ["operador", "Operador"], ["visualizador", "Visualizador"], ["lider", "Líder"], ["posto", "Posto (tablet)"]];
+    const PAPEIS_EMPRESA = [["admin", "Administrador"], ["operador", "Operador"], ["visualizador", "Visualizador"], ["lider", "Líder"], ["posto", "Posto (tablet)"], ["manutencao", "Manutenção"]];
     const TEM_PIN = ["admin", "operador", "lider"];
     let comPin = new Set();
     let carregando = false;
@@ -38,13 +38,14 @@ const Usuarios = (() => {
             const empresa = Nuvem.empresa();
             const fornecedor = Nuvem.perfil().papel === "fornecedor";
             const nada = Promise.resolve({ data: null });
-            const [perfis, convites, empresas, mqtts, mqttAgvs, agvsDb] = await Promise.all([
+            const [perfis, convites, empresas, mqtts, mqttAgvs, agvsDb, alertasCfg] = await Promise.all([
                 db.from("perfis").select("usuario_id, email, nome, papel, criado_em").eq("empresa_id", empresa.id).order("email"),
                 db.from("convites").select("email, papel, criado_em").eq("empresa_id", empresa.id).order("email"),
                 fornecedor ? db.from("empresas").select("*").order("nome") : nada,
                 fornecedor ? db.from("mqtt_empresas").select("*") : nada,
                 fornecedor ? db.from("mqtt_agvs").select("*").eq("empresa_id", empresa.id).order("agv_id") : nada,
-                fornecedor ? db.from("agvs").select("id, nome").eq("empresa_id", empresa.id).order("id") : nada
+                fornecedor ? db.from("agvs").select("id, nome").eq("empresa_id", empresa.id).order("id") : nada,
+                db.from("alertas_config").select("*").eq("empresa_id", empresa.id).maybeSingle()
             ]);
             [perfis, convites, empresas].forEach(r => { if (r.error) throw r.error; });
             const pins = await db.rpc("usuarios_com_pin", { p_empresa: empresa.id });
@@ -57,6 +58,7 @@ const Usuarios = (() => {
                 .filter(c => !c.disabled && c.type !== "password" && c.type !== "checkbox" && c.value)
                 .map(c => ({ form: c.form.dataset.formUsuarios, nome: c.name, valor: c.value, foco: c === document.activeElement }));
             el.innerHTML = html(empresa, perfis.data, convites.data, empresas.data, fornecedor) +
+                htmlAlertas(alertasCfg.error ? null : (alertasCfg.data || {})) +
                 (fornecedor ? htmlMqtt(empresa, semTabelasMqtt ? null : mqtts.data, semTabelasMqtt ? null : mqttAgvs.data, agvsDb.data || []) : "");
             digitado.forEach(d => {
                 const c = el.querySelector(`form[data-form-usuarios="${CSS.escape(d.form)}"] [name="${CSS.escape(d.nome)}"]`);
@@ -121,23 +123,45 @@ const Usuarios = (() => {
                 <section class="card">
                     <h2>O que cada papel faz</h2>
                     <table class="tabela-papeis">
-                        <thead><tr><th></th><th>Admin.</th><th>Oper.</th><th>Líder</th><th>Visual.</th><th>Posto</th></tr></thead>
+                        <thead><tr><th></th><th>Admin.</th><th>Oper.</th><th>Manut.</th><th>Líder</th><th>Visual.</th><th>Posto</th></tr></thead>
                         <tbody>
-                            <tr><td>Ver frota, mapa, sensores, histórico, despacho</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>—</td></tr>
-                            <tr><td>Comandar AGVs e rodar missões</td><td>✓</td><td>✓</td><td>—</td><td>—</td><td>—</td></tr>
-                            <tr><td>Criar e editar missões</td><td>✓</td><td>✓</td><td>—</td><td>—</td><td>—</td></tr>
-                            <tr><td>Pedir missões</td><td>✓</td><td>✓</td><td>—</td><td>—</td><td>só o seu posto</td></tr>
-                            <tr><td>Marcar pedido urgente</td><td>✓</td><td>✓</td><td>✓</td><td>—</td><td>com PIN</td></tr>
-                            <tr><td>Planta, AGVs, postos, configurações, firmware</td><td>✓</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
-                            <tr><td>Usuários</td><td>✓</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+                            <tr><td>Ver frota, mapa, sensores, histórico, indicadores</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>—</td></tr>
+                            <tr><td>Comandar AGVs e rodar missões</td><td>✓</td><td>✓</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+                            <tr><td>Criar e editar missões</td><td>✓</td><td>✓</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+                            <tr><td>Pedir missões</td><td>✓</td><td>✓</td><td>—</td><td>—</td><td>—</td><td>só o seu posto</td></tr>
+                            <tr><td>Marcar pedido urgente</td><td>✓</td><td>✓</td><td>—</td><td>✓</td><td>—</td><td>com PIN</td></tr>
+                            <tr><td>Pôr e tirar da manutenção</td><td>✓</td><td>✓</td><td>✓</td><td>—</td><td>—</td><td>—</td></tr>
+                            <tr><td>Manual, calibração, configuração, autoteste, cópias</td><td>✓</td><td>manual</td><td>✓</td><td>—</td><td>—</td><td>—</td></tr>
+                            <tr><td>Documentação dos modelos</td><td>✓</td><td>—</td><td>✓</td><td>—</td><td>—</td><td>—</td></tr>
+                            <tr><td>Planta, AGVs, postos, firmware</td><td>✓</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+                            <tr><td>Usuários e alertas</td><td>✓</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
                         </tbody>
                     </table>
-                    <p class="suave usuarios-dica">Parar o AGV (STOP) é permitido para todos. O papel Posto é o tablet de um posto: só vê a tela do posto. No tablet, “urgente” pede o PIN de um líder, operador ou administrador.</p>
+                    <p class="suave usuarios-dica">Parar o AGV (STOP) é permitido para todos. O papel Posto é o tablet de um posto: só vê a tela do posto. O papel Manutenção não vê planta, missões, despacho, postos nem usuários. No tablet, “urgente” pede o PIN de um líder, operador ou administrador.</p>
                 </section>
             </div>
 
             ${fornecedor ? htmlEmpresas(empresas, empresa) : ""}
         </div>`;
+    }
+
+    // Alertas por e-mail (0.14): o banco confere a cada minuto (03_alertas.sql)
+    function htmlAlertas(cfg) {
+        if (!cfg) {
+            return `<section class="card usuarios-alertas"><h2>Alertas por e-mail</h2><p class="suave">Rode o <span class="mono">01_esquema.sql</span> da versão 0.14 no Supabase para ligar os alertas.</p></section>`;
+        }
+        return `
+            <section class="card usuarios-alertas">
+                <h2>Alertas por e-mail</h2>
+                <p class="suave usuarios-dica">Um e-mail quando algo acontece e outro quando se resolve: AGV em emergência ou falha por mais de 2 min, sem sinal por mais de 3 min dentro do turno, pedido esperando demais e nenhuma tela despachando há 5 min. AGVs em manutenção não geram alerta. Precisa do <span class="mono">03_alertas.sql</span> rodado no Supabase.</p>
+                <form class="usuarios-form" data-form-usuarios="alertas">
+                    <label class="config-chave"><input type="checkbox" name="ativo" value="1" ${cfg.ativo ? "checked" : ""}><span>Mandar alertas</span></label>
+                    <label class="campo"><span>E-mails (até 5, separados por vírgula)</span><input name="emails" value="${esc((cfg.emails || []).join(", "))}" placeholder="manutencao@empresa.com"></label>
+                    <label class="campo"><span>Avisar quando um pedido esperar mais de (min)</span><input name="espera" type="number" min="2" max="240" value="${esc(cfg.pedido_espera_min || 10)}"></label>
+                    <button type="submit" class="btn btn-primario">Salvar alertas</button>
+                </form>
+                <p class="suave usuarios-dica">Sem domínio próprio no Resend, os e-mails só chegam ao endereço da conta do Resend.</p>
+            </section>`;
     }
 
     function htmlEmpresas(empresas, atual) {
@@ -281,6 +305,10 @@ const Usuarios = (() => {
                 leitura_usuario: (v.leitura_usuario || "").trim() || null, leitura_senha: v.leitura_senha || null
             }), null);
             if (ok) Nuvem.avisoComAcao("MQTT da empresa salvo. Atualize a página para o site conectar com ele.", "Atualizar", () => location.reload());
+        } else if (form.dataset.formUsuarios === "alertas") {
+            const emails = String(v.emails || "").split(/[,;\s]+/).map(x => x.trim()).filter(Boolean);
+            await executar(db.rpc("salvar_alertas_config", { p_empresa: Nuvem.empresa().id, p_ativo: v.ativo === "1", p_emails: emails, p_espera: Number(v.espera) || 10 }),
+                v.ativo === "1" ? "Alertas ligados." : "Alertas salvos (desligados).");
         } else if (form.dataset.formUsuarios === "empresa") {
             await executar(db.rpc("criar_empresa", { p_nome: v.nome, p_codigo: v.codigo, p_email_admin: v.email || "" }),
                 `Empresa ${v.nome} criada.${v.email ? ` ${v.email} entra como administrador.` : ""}`);

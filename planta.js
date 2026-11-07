@@ -20,7 +20,7 @@
      // (pontos de parada do tipo ESTACAO), cada acesso com a sua tag e a
      // sua orientacao de chegada. "IR PARA" uma estacao escolhe o acesso
      // pelo caminho mais curto.
-     estacoes: [ { id, nome, maquina } ],
+     estacoes: [ { id, nome, maquina, modelos? } ],   modelos = só esses modelos atendem (0.14)
 
      // CAMADA DE NAVEGACAO (por onde o AGV anda)
      nos: [ { id, tipo, nome, x, y, rfid, orientacaoChegada, barreira, estacao } ],
@@ -368,6 +368,7 @@
             e.id = String(e.id || "");
             e.nome = e.nome || "";
             if (!e.maquina) delete e.maquina;
+            if (Array.isArray(e.modelos)) { e.modelos = e.modelos.map(String).filter(Boolean); if (!e.modelos.length) delete e.modelos; } else delete e.modelos;
         });
         p.nos.forEach(no => {
             no.x = Number(no.x) || 0;

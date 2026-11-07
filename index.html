@@ -37,6 +37,8 @@
     <nav class="menu" aria-label="Menu principal">
         <a href="#" class="menu-item ativo" data-tela="frota" id="menuFrota"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg><span>Frota</span><b class="menu-badge" id="menuBadgeFrota" hidden>0</b></a>
         <a href="#" class="menu-item menu-sub" data-tela="rotina"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-7 9 7M5 9.5V20h14V9.5M10 20v-5h4v5"/></svg><span>Rotina e berços</span></a>
+        <a href="#" class="menu-item menu-sub" data-tela="modelos"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l8-4 8 4v10l-8 4-8-4zM4 7l8 4 8-4M12 11v10"/></svg><span>Modelos</span></a>
+        <a href="#" class="menu-item menu-sub" data-tela="manutencao"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"/></svg><span>Manutenção</span><b class="menu-badge cinza" id="menuBadgeManutencao" hidden>0</b></a>
         <a href="#" class="menu-item menu-sub" data-tela="postos"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21zM12 7a2.5 2.5 0 1 0 0 5a2.5 2.5 0 1 0 0-5z"/></svg><span>Postos</span></a>
         <a href="#" class="menu-item agv-menu" data-tela="visaoGeral"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3zM9 3v15M15 6v15"/></svg><span>Visão geral</span></a>
         <a href="#" class="menu-item agv-menu" data-tela="controleManual"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6zM12 3v3M12 18v3M3 12h3M18 12h3"/></svg><span>Controle manual</span></a>
@@ -48,6 +50,7 @@
         <div class="menu-divider"></div>
         <div class="menu-titulo">Operação</div>
         <a href="#" class="menu-item" data-tela="despacho"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M4 12h7M4 18h10M17 9l4 3-4 3"/></svg><span>Despacho</span><b class="menu-badge" id="menuBadgeDespacho" hidden>0</b></a>
+        <a href="#" class="menu-item" data-tela="indicadores"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V4M4 20h16M8 16v-5M12 16V8M16 16v-3M20 16V6"/></svg><span>Indicadores</span></a>
         <a href="#" class="menu-item" data-tela="missoes"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4h11l-2 4 2 4H5"/></svg><span>Missões</span></a>
         <a href="#" class="menu-item" data-tela="controlePlanta"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h18v18H3zM3 9h8v12M11 14h10"/></svg><span>Planta</span></a>
         <a href="#" class="menu-item so-nuvem" data-tela="usuarios" hidden><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11a4 4 0 1 0 0-8a4 4 0 1 0 0 8zM2 21v-1a6 6 0 0 1 6-6h2a6 6 0 0 1 6 6v1M16 3.5a4 4 0 0 1 0 7.5M22 21v-1a6 6 0 0 0-4-5.6"/></svg><span>Usuários</span></a>
@@ -95,12 +98,17 @@
     <section id="frota" class="tela ativa">
         <div class="barra-acoes">
             <div class="filtros" id="filtrosFrota" role="group" aria-label="Filtrar por estado"></div>
+            <div class="filtros-extra">
+                <select id="filtroModeloFrota" aria-label="Filtrar por modelo"><option value="">Todos os modelos</option></select>
+                <label class="busca"><svg class="icone icone-p" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4a7 7 0 1 0 0 14a7 7 0 1 0 0-14zM20 20l-4-4"/></svg><input type="search" id="buscaFrota" placeholder="Nome ou ID" autocomplete="off" aria-label="Buscar AGV por nome ou ID"></label>
+            </div>
             <div class="grupo">
                 <button type="button" class="btn" onclick="mudarTela('rotina')">Rotina e berços</button>
                 <button type="button" class="btn" id="frotaNovoVirtual">+ AGV virtual</button>
                 <button type="button" class="btn btn-primario" onclick="abrirCadastroAGV()" data-requer="administrar">+ Adicionar AGV</button>
             </div>
         </div>
+        <div id="frotaManutencaoFaixa"></div>
         <div id="fleetGrid" class="fleet-grid"></div>
         <section class="card card-sem-padding frota-trafego" id="frotaTrafego" aria-label="Tráfego" hidden></section>
     </section>
@@ -147,6 +155,27 @@
                 <div class="desp-fora" id="despachoForaDoMapa" hidden></div>
             </section>
         </div>
+    </section>
+
+    <!-- ========================================================
+         FROTA › MODELOS (catálogo)
+         ======================================================== -->
+    <section id="modelos" class="tela">
+        <div id="modelosConteudo"></div>
+    </section>
+
+    <!-- ========================================================
+         FROTA › MANUTENÇÃO
+         ======================================================== -->
+    <section id="manutencao" class="tela">
+        <div id="manutencaoConteudo" class="manutencao-tela"></div>
+    </section>
+
+    <!-- ========================================================
+         INDICADORES
+         ======================================================== -->
+    <section id="indicadores" class="tela">
+        <div id="indicadoresConteudo" class="indicadores"></div>
     </section>
 
     <!-- ========================================================
@@ -211,6 +240,7 @@
                     <div id="mapaVisaoGeral" class="mapa-svg-host"></div>
                     <div class="mapa-aviso" id="mapaAvisoCaixa" hidden><span id="mapaLegenda"></span></div>
                 </div>
+                <div id="vgManutencaoFaixa"></div>
                 <div class="card-rodape legenda">
                     <span><i class="lg-estacao"></i>Estação</span>
                     <span><i class="lg-ref"></i>Referência</span>
@@ -231,12 +261,14 @@
                         <h2>Estado</h2>
                         <span class="estado-pilula" id="vgEstadoPilula"><span class="ponto"></span><span id="statusOnline">--</span></span>
                     </div>
+                    <div id="vgManutencao" class="vg-manutencao"></div>
                     <dl class="lista-dl">
                         <dt>Modo</dt><dd id="statusModo">--</dd>
                         <dt>Posição</dt><dd id="estacaoAtual">--</dd>
                         <dt>Orientação</dt><dd class="mono" id="vgOrientacao">--</dd>
                         <dt>Velocidade</dt><dd class="mono" id="velocidade">--</dd>
                         <dt>Garra</dt><dd id="vgGarra">--</dd>
+                        <dt>Modelo</dt><dd id="vgModelo">--</dd>
                     </dl>
                     <details class="posicao-form" id="vgPosicao">
                         <summary class="btn btn-mini" style="width:max-content">Informar posição</summary>
@@ -646,6 +678,7 @@
                     <div id="calibConteudo" class="calib-conteudo"></div>
                     <div id="calibStatus" class="calib-status"></div>
                 </section>
+                <section class="card" id="cardCopias"></section>
                 <section class="card" id="cardOta">
                     <div class="card-header"><div><h2>Firmware</h2><span>Atualização pelo Wi-Fi, sem cabo</span></div></div>
                     <div id="otaConteudo" class="ota-conteudo"></div>
@@ -941,6 +974,9 @@
         <div class="modal-agv-body">
             <label>ID do AGV (o mesmo AGV_ID do firmware)<input id="novoAgvId" type="text" placeholder="Ex.: 04"></label>
             <label>Nome<input id="novoAgvNome" type="text" placeholder="Ex.: Atlas"></label>
+            <label>Modelo<select id="novoAgvModelo"></select></label>
+            <p class="suave" id="novoAgvModeloResumo" style="margin:-4px 0 4px;font-size:12.5px"></p>
+            <label>Número de série <span class="suave">(opcional)</span><input id="novoAgvSerie" type="text" maxlength="40" placeholder="Ex.: ATG-0001"></label>
         </div>
         <div class="modal-agv-footer">
             <button type="button" class="btn" onclick="fecharCadastroAGV()">Cancelar</button>
@@ -958,7 +994,8 @@
     // Com nuvem, carregam depois do login e dos dados da empresa.
     Nuvem.iniciar(["planta.js", "planta-exemplo.js", "mapa-svg.js", "editor-planta.js", "operacao-planta.js",
                    "configuracoes.js", "agv-virtual.js", "script.js", "rotina.js", "usuarios.js",
-                   "despachante.js", "despacho.js", "postos.js"]);
+                   "despachante.js", "despacho.js", "postos.js",
+                   "modelos.js", "manutencao.js", "copias.js", "indicadores.js"]);
 </script>
 </body>
 </html>

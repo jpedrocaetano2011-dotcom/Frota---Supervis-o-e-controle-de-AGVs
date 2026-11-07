@@ -383,7 +383,10 @@ const Despacho = (function () {
             noBerco: no?.tipo === "BERCO",
             semFila: !f || f.flash === false,
             filaCheia: f ? itens >= (Number(f.max) || 8) : false,
-            usoHoje
+            usoHoje,
+            modelo: agv.modelo || null,
+            modeloNome: typeof Modelos !== "undefined" ? Modelos.nome(agv.modelo) : (agv.modelo || ""),
+            manutencao: typeof Manutencao !== "undefined" && Manutencao.ativa(agv)
         };
     }
 
@@ -756,10 +759,12 @@ const Despacho = (function () {
         const p = lista.find(x => x.id === selecionado) || null;
         const agvDoPedido = p && p.agv ? agvs[p.agv] : null;
         mapa.agvs = Object.values(agvs).map(agv => {
+            if (typeof Manutencao !== "undefined" && Manutencao.foraDaLinha(agv)) return null;
             const pose = typeof poseEstimadaAGV === "function" ? poseSuavizada(agv, poseEstimadaAGV(agv), 100) : null;
             if (!pose) return null;
             const cat = categoriaEstadoAGV(agv);
-            return Object.assign({}, pose, { id: agv.id, rotulo: `AGV ${agv.id}`, destaque: agv === agvDoPedido, estado: cat.chave, carga: typeof garraCarregada === "function" && garraCarregada(agv) });
+            return Object.assign({}, pose, { id: agv.id, rotulo: `AGV ${agv.id}${cat.chave === "manutencao" ? " · MANUTENÇÃO" : ""}`, destaque: agv === agvDoPedido, estado: cat.chave,
+                carga: typeof garraCarregada === "function" && garraCarregada(agv), modulo: typeof Modelos !== "undefined" ? Modelos.modulo(agv) : null, manutencao: cat.chave === "manutencao" });
         }).filter(Boolean);
         avisarForaDoMapa(planta);
         const rota = agvDoPedido && (agvDoPedido.missaoAtual === p.missao || agvDoPedido.missaoCarregada === p.missao) ? rotaDoAGV(agvDoPedido) : null;
@@ -788,7 +793,7 @@ const Despacho = (function () {
         if (!caixa) return;
         const desenhados = new Set((mapa?.agvs || []).map(a => a.id));
         const fora = Object.values(agvs).filter(a => !desenhados.has(a.id)).map(a => {
-            const porque = !a.online ? "offline"
+            const porque = typeof Manutencao !== "undefined" && Manutencao.foraDaLinha(a) ? "em manutenção, fora da linha" : !a.online ? "offline"
                 : !a.posicaoConhecida || !a.pontoAtual ? "sem posição: use Informar posição"
                 : `está em ${a.pontoAtual}, que não existe na planta publicada`;
             return `<li><b>AGV ${esc(a.id)}</b> · ${esc(porque)}</li>`;

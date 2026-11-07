@@ -55,7 +55,12 @@
         rfid: "M12 2l3 7h7l-5.5 4.5 2 7.5-6.5-4.5L5.5 21l2-7.5L2 9h7z",
         wifi: "M2 9a15 15 0 0 1 20 0M5.5 12.5a10 10 0 0 1 13 0M9 16a5 5 0 0 1 6 0M12 19.5v.5",
         led: "M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.8.8 1 1.5 1 2.5h6c0-1 .2-1.7 1-2.5A6 6 0 0 0 12 3z",
-        lateral: "M4 12h16M8 8l-4 4 4 4M16 8l4 4-4 4"
+        lateral: "M4 12h16M8 8l-4 4 4 4M16 8l4 4-4 4",
+        chave: "M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z",
+        grafico: "M4 20V4M4 20h16M8 16v-5M12 16V8M16 16v-3M20 16V6",
+        modelo: "M4 7l8-4 8 4v10l-8 4-8-4zM4 7l8 4 8-4M12 11v10",
+        documento: "M6 3h8l4 4v14H6zM14 3v4h4M9 12h6M9 16h6",
+        pdf: "M6 3h8l4 4v14H6zM14 3v4h4M9 17v-5h1.5a1.5 1.5 0 0 1 0 3H9"
     };
 
     function icone(nome, classe = "") {
@@ -194,16 +199,25 @@
             fundo.className = "modal-overlay ativo";
             const campo = c => {
                 const id = "uiF_" + c.nome;
+                if (c.tipo === "checkbox") {
+                    return `<label class="config-chave" for="${id}" style="${c.largo !== false ? "grid-column:1/-1" : ""}"><input id="${id}" type="checkbox" name="${escapar(c.nome)}" value="1" ${c.valor ? "checked" : ""}><span>${escapar(c.rotulo || c.nome)}${c.dica ? `<small class="suave" style="display:block">${escapar(c.dica)}</small>` : ""}</span></label>`;
+                }
+                if (c.tipo === "radio") {
+                    return `<fieldset class="campo ui-radios" style="grid-column:1/-1"><legend>${escapar(c.rotulo || c.nome)}</legend>${(c.opcoes || []).map(([v, t, d], i) => `<label><input type="radio" name="${escapar(c.nome)}" value="${escapar(v)}" ${String(v) === String(c.valor ?? "") || (c.valor == null && i === 0) ? "checked" : ""}><span><b>${escapar(t)}</b>${d ? `<small class="suave">${escapar(d)}</small>` : ""}</span></label>`).join("")}</fieldset>`;
+                }
+                const tipoInput = ["password", "number", "date", "datetime-local", "email", "url"].includes(c.tipo) ? c.tipo : "text";
                 const controle = c.opcoes
                     ? `<select id="${id}" name="${escapar(c.nome)}">${c.opcoes.map(([v, t]) => `<option value="${escapar(v)}" ${String(v) === String(c.valor ?? "") ? "selected" : ""}>${escapar(t)}</option>`).join("")}</select>`
-                    : `<input id="${id}" name="${escapar(c.nome)}" type="${c.tipo === "password" ? "password" : c.tipo === "number" ? "number" : "text"}" value="${escapar(c.valor ?? "")}" autocomplete="off" spellcheck="false" ${c.obrigatorio ? "required" : ""}>`;
+                    : c.tipo === "textarea"
+                        ? `<textarea id="${id}" name="${escapar(c.nome)}" rows="${c.linhas || 3}" ${c.max ? `maxlength="${c.max}"` : ""} ${c.obrigatorio ? "required" : ""}>${escapar(c.valor ?? "")}</textarea>`
+                        : `<input id="${id}" name="${escapar(c.nome)}" type="${tipoInput}" value="${escapar(c.valor ?? "")}" autocomplete="off" spellcheck="false" ${c.obrigatorio ? "required" : ""} ${c.max ? `maxlength="${c.max}"` : ""} ${c.placeholder ? `placeholder="${escapar(c.placeholder)}"` : ""}>`;
                 return `<label class="campo" for="${id}" style="${c.largo ? "grid-column:1/-1" : ""}"><span>${escapar(c.rotulo || c.nome)}</span>${controle}${c.dica ? `<small class="suave">${escapar(c.dica)}</small>` : ""}</label>`;
             };
             fundo.innerHTML = `
                 <div class="modal ui-confirmar" role="dialog" aria-modal="true" aria-labelledby="uiFormTitulo" style="max-width:560px">
                     <div class="modal-cabecalho"><div><h2 id="uiFormTitulo">${escapar(o.titulo || "Preencha")}</h2></div></div>
                     <form class="modal-corpo" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px">
-                        ${o.texto ? `<p style="grid-column:1/-1">${escapar(o.texto)}</p>` : ""}
+                        ${o.texto ? `<p style="grid-column:1/-1;white-space:pre-line">${escapar(o.texto)}</p>` : ""}
                         ${(o.campos || []).map(campo).join("")}
                         <button type="submit" hidden></button>
                     </form>
@@ -214,7 +228,11 @@
                 </div>`;
             const anterior = document.activeElement;
             const form = fundo.querySelector("form");
-            const valores = () => Object.fromEntries(new FormData(form));
+            const valores = () => {
+                const v = Object.fromEntries(new FormData(form));
+                (o.campos || []).filter(c => c.tipo === "checkbox").forEach(c => { v[c.nome] = v[c.nome] === "1"; });
+                return v;
+            };
             const terminar = valor => {
                 document.removeEventListener("keydown", tecla, true);
                 fundo.remove();

@@ -1489,6 +1489,14 @@ function processarMensagemMQTT(topico, valor) {
             break;
 
 
+        case "status/manutencao":
+
+            // Firmware 0.14: o AGV está (1) ou não (0) em manutenção
+            agv.manutencaoAgv = valor === "" ? null : valor === "1";
+            if (typeof Manutencao !== "undefined") Manutencao.sincronizar(agv);
+            break;
+
+
         case "status/heartbeat":
 
             // O ESP envia o tempo ligado, em segundos.
@@ -1499,6 +1507,7 @@ function processarMensagemMQTT(topico, valor) {
                 // rotas de saída e rotina desatualizadas (planta nova, AGV novo): manda de novo
                 if (agv.fila) sincronizarSaidas(agv);
                 if (agv.rotinaStatus && typeof sincronizarRotina === "function") sincronizarRotina(agv);
+                if (typeof Manutencao !== "undefined") Manutencao.sincronizar(agv);
             }
 
             break;
@@ -1790,6 +1799,7 @@ function registrarEventoHistorico(agvId, mensagem, caminho = "evento") {
         categoria,
         evento: dados
     });
+    if (typeof Registro !== "undefined") Registro.evento(agv.id, dados, categoria);
 
     // Troca de broker: avisa quem está olhando
     const nomeEvento = dados && typeof dados === "object" ? dados.evento : "";
@@ -1861,6 +1871,9 @@ function publicar(caminho, mensagem, id = agvSelecionado, qos = 1) {
 
 // chave: missao | pronto | atencao | falha | emergencia | offline | desligado
 function categoriaEstadoAGV(agv) {
+    if (agv && typeof Manutencao !== "undefined" && Manutencao.ativa(agv)) {
+        return { chave: "manutencao", texto: "EM MANUTENÇÃO", curto: "MANUTENÇÃO", filtro: "manutencao" };
+    }
     if (!agv || !agv.online) {
         return { chave: "offline", texto: "OFFLINE", curto: "OFFLINE", filtro: "offline" };
     }
@@ -1902,7 +1915,7 @@ function categoriaEstadoAGV(agv) {
 
 const CLASSE_CARD_ESTADO = {
     missao: "estado-missao", pronto: "estado-pronto", atencao: "estado-atencao", falha: "estado-falha",
-    emergencia: "estado-falha emergencia", offline: "estado-offline", desligado: "estado-offline"
+    emergencia: "estado-falha emergencia", offline: "estado-offline", desligado: "estado-offline", manutencao: "estado-manutencao"
 };
 
 function textoModoAGV(agv) {
@@ -1959,7 +1972,7 @@ function resumoMissaoCard(agv) {
 }
 
 function contarFiltrosFrota(lista) {
-    const n = { todos: lista.length, missao: 0, pronto: 0, atencao: 0, falha: 0, offline: 0 };
+    const n = { todos: lista.length, missao: 0, pronto: 0, atencao: 0, falha: 0, offline: 0, manutencao: 0 };
     lista.forEach(agv => { n[categoriaEstadoAGV(agv).filtro]++; });
     return n;
 }
@@ -1970,9 +1983,10 @@ function renderizarFiltrosFrota(lista) {
     const n = contarFiltrosFrota(lista);
     const itens = [
         ["todos", "Todos", null], ["missao", "Em missão", "var(--accent)"], ["pronto", "Prontos", "var(--green)"],
-        ["atencao", "Atenção", "var(--amber)"], ["falha", "Falha", "var(--red)"], ["offline", "Offline", "var(--muted)"]
+        ["atencao", "Atenção", "var(--amber)"], ["falha", "Falha", "var(--red)"], ["offline", "Offline", "var(--muted)"],
+        ["manutencao", "Manutenção", "var(--purple)"]
     ];
-    ui.trocarHtml(caixa, itens.map(([chave, nome, cor]) => `
+    ui.trocarHtml(caixa, itens.filter(([chave]) => chave !== "manutencao" || n.manutencao > 0 || filtroFrota === "manutencao").map(([chave, nome, cor]) => `
         <button type="button" class="filtro ${filtroFrota === chave ? "ativo" : ""}" data-filtro="${chave}" aria-pressed="${filtroFrota === chave}">
             ${cor ? `<span class="ponto" style="color:${cor}"></span>` : ""}${nome} <span class="n">${n[chave]}</span>
         </button>`).join(""));
@@ -2050,13 +2064,19 @@ function renderizarFrota() {
     if (!grid) return;
     renderizarTrafegoFrota();
 
-    const ordem = { emergencia: 0, falha: 1, atencao: 2, missao: 3, pronto: 4, desligado: 5, offline: 6 };
+    const ordem = { emergencia: 0, falha: 1, atencao: 2, missao: 3, pronto: 4, desligado: 5, offline: 6, manutencao: 7 };
     const todos = Object.values(agvs).sort((a, b) => {
         const ca = categoriaEstadoAGV(a).chave, cb = categoriaEstadoAGV(b).chave;
         return (ordem[ca] - ordem[cb]) || String(a.id).localeCompare(String(b.id), "pt-BR", { numeric: true });
     });
     renderizarFiltrosFrota(todos);
-    const lista = todos.filter(agv => filtroFrota === "todos" || categoriaEstadoAGV(agv).filtro === filtroFrota);
+    renderizarFiltroModeloFrota(todos);
+    const busca = (document.getElementById("buscaFrota")?.value || "").trim().toLowerCase();
+    const lista = todos.filter(agv => (filtroFrota === "todos" || categoriaEstadoAGV(agv).filtro === filtroFrota) &&
+        passaFiltroModelo(agv) &&
+        (!busca || String(agv.id).toLowerCase().includes(busca) || String(agv.nome || "").toLowerCase().includes(busca)));
+    const faixa = document.getElementById("frotaManutencaoFaixa");
+    if (faixa && typeof Manutencao !== "undefined") { const h = Manutencao.faixaMapa(); if (faixa.dataset.html !== h) { faixa.dataset.html = h; faixa.innerHTML = h; } }
 
     if (document.querySelector(".tela.ativa")?.id === "frota") {
         const planta = plantaPublicada();
@@ -2074,8 +2094,11 @@ function renderizarFrota() {
         return;
     }
 
+    const podeManut = typeof Manutencao !== "undefined" && Manutencao.podeMexer();
     ui.trocarHtml(grid, lista.map(agv => {
         const cat = categoriaEstadoAGV(agv);
+        const emManut = cat.chave === "manutencao";
+        const modelo = typeof Modelos !== "undefined" ? Modelos.doAgv(agv) : null;
         const m = resumoMissaoCard(agv);
         const id = escaparHtml(agv.id);
         const acao = !agv.online ? "Ver último estado" : cat.chave === "emergencia" ? "Abrir agora" : agv.virtual ? "Abrir painel" : "Abrir painel";
@@ -2086,10 +2109,10 @@ function renderizarFrota() {
                     <div class="agv-card-topo">
                         <span class="agv-card-id">${id}</span>
                         <div style="min-width:0;flex:1">
-                            <div class="agv-card-nome"><h2>${escaparHtml(agv.nome)}</h2>${agv.virtual ? `<span class="tag-virtual">VIRTUAL</span>` : ""}</div>
-                            <div class="agv-card-modo">${escaparHtml(textoModoAGV(agv))}</div>
+                            <div class="agv-card-nome"><h2>${escaparHtml(agv.nome)}</h2>${agv.virtual ? `<span class="tag-virtual">VIRTUAL</span>` : ""}${emManut ? `<span class="tag-manutencao" title="Em manutenção">${ui.icone("chave", "icone-p")}</span>` : ""}</div>
+                            <div class="agv-card-modo">${escaparHtml(textoModoAGV(agv))}${modelo ? ` · <span title="${escaparHtml(Modelos.resumo(modelo))}">${escaparHtml(modelo.nome)}</span>` : ""}</div>
                         </div>
-                        <span class="agv-card-estado">${cat.texto}</span>
+                        <span class="agv-card-estado">${emManut ? cat.curto : cat.texto}</span>
                     </div>
                     <div class="agv-card-missao">
                         <strong>${escaparHtml(m.titulo)}</strong>
@@ -2100,9 +2123,11 @@ function renderizarFrota() {
                         <dt>Posição</dt><dd>${escaparHtml(agv.online || agv.pontoAtual ? descreverPosicaoAGV(agv) : "--")}</dd>
                         <dt>Sinal</dt><dd class="mono">${escaparHtml(rotuloSinal(agv))}</dd>
                         ${typeof linhaRotinaCard === "function" ? linhaRotinaCard(agv) : ""}
+                        ${typeof Manutencao !== "undefined" ? Manutencao.linhaCartao(agv) : ""}
                     </dl>
                     <div class="agv-card-acoes">
                         <button type="button" class="btn ${cat.chave === "emergencia" ? "btn-perigo-cheio" : ""}" data-abrir="${id}">${acao}</button>
+                        ${podeManut && Manutencao.podeMexerNo(agv) ? `<button type="button" class="btn btn-icone ${emManut ? "ativo" : ""}" data-manut-alternar="${id}" title="${emManut ? "Voltar à operação" : "Pôr em manutenção"}" aria-label="${emManut ? "Tirar da manutenção" : "Pôr em manutenção"} o AGV ${id}">${ui.icone("chave")}</button>` : ""}
                         <button type="button" class="btn btn-icone" data-editar="${id}" data-requer="administrar" title="Editar nome e ID" aria-label="Editar AGV ${id}">${ui.icone("lapis")}</button>
                         <button type="button" class="btn btn-icone btn-perigo" data-excluir="${id}" data-requer="administrar" title="Excluir da frota" aria-label="Excluir AGV ${id}">${ui.icone("lixo")}</button>
                     </div>
@@ -2110,6 +2135,30 @@ function renderizarFrota() {
             </article>`;
     }).join(""));
 }
+
+// Filtro por modelo (e por módulo: G, T, R, E)
+let filtroModeloFrota = "";
+function passaFiltroModelo(agv) {
+    if (!filtroModeloFrota) return true;
+    if (filtroModeloFrota === "-") return !agv.modelo;
+    if (filtroModeloFrota.startsWith("modulo:")) return typeof Modelos !== "undefined" && Modelos.modulo(agv) === filtroModeloFrota.slice(7);
+    return agv.modelo === filtroModeloFrota;
+}
+function renderizarFiltroModeloFrota(todos) {
+    const sel = document.getElementById("filtroModeloFrota");
+    if (!sel || typeof Modelos === "undefined") return;
+    const usados = [...new Set(todos.map(a => a.modelo).filter(Boolean))];
+    const modulos = [...new Set(usados.map(id => Modelos.porId(id)?.modulo).filter(Boolean))];
+    const html = `<option value="">Todos os modelos</option>` +
+        usados.map(id => `<option value="${escaparHtml(id)}">${escaparHtml(Modelos.nome(id))}</option>`).join("") +
+        (modulos.length > 1 ? modulos.map(m => `<option value="modulo:${m}">Módulo ${m} · ${escaparHtml(Modelos.nomeModulo(m))}</option>`).join("") : "") +
+        (todos.some(a => !a.modelo) && usados.length ? `<option value="-">Sem modelo</option>` : "");
+    if (sel.dataset.html !== html) { sel.dataset.html = html; sel.innerHTML = html; sel.value = filtroModeloFrota; }
+    sel.hidden = !usados.length && !filtroModeloFrota;
+}
+document.getElementById("filtroModeloFrota")?.addEventListener("change", e => { filtroModeloFrota = e.target.value; renderizarFrota(); });
+document.getElementById("buscaFrota")?.addEventListener("input", () => renderizarFrota());
+document.addEventListener("modelosmudaram", () => { renderizarFrota(); atualizarPainel(); });
 
 document.getElementById("filtrosFrota")?.addEventListener("click", evento => {
     const botao = evento.target.closest("[data-filtro]");
@@ -2251,7 +2300,10 @@ const informacoesTelas = {
     despacho: ["Despacho", "Pedidos de missão: o sistema escolhe o AGV, ou vai o AGV que você fixar"],
     postos: ["Postos", "Botões de cada posto, quem usa e se aceita pedido urgente"],
     posto: ["Posto", ""],
-    usuarios: ["Usuários", "Quem acessa o sistema e o que cada um pode fazer"]
+    usuarios: ["Usuários", "Quem acessa o sistema e o que cada um pode fazer"],
+    modelos: ["Modelos", "Catálogo do Atta: ficha técnica, foto e documentação de cada modelo"],
+    manutencao: ["Manutenção", "AGVs fora da operação, uso da frota, cópias da configuração e documentação"],
+    indicadores: ["Indicadores", "O que a frota fez: entregas, disponibilidade, paradas, tráfego e ganhos"]
 };
 
 const TELAS_DO_AGV = ["visaoGeral", "controleManual", "sensores", "diagnostico", "historico", "configuracoes"];
@@ -2278,6 +2330,8 @@ function atualizarCabecalho(nomeTela) {
 function mudarTela(nomeTela) {
     // o tablet do posto só tem a tela do posto
     if (document.body.classList.contains("papel-posto")) nomeTela = "posto";
+    // papel Manutenção: sem planta, missões, despacho, postos, rotina e usuários
+    if (document.body.classList.contains("papel-manutencao") && ["despacho", "missoes", "controlePlanta", "postos", "rotina", "usuarios", "posto"].includes(nomeTela)) nomeTela = "frota";
     if (nomeTela !== "posto") document.body.classList.remove("tela-posto");
     if (TELAS_DO_AGV.includes(nomeTela) && !agvSelecionado) {
         ui.aviso("Escolha um AGV na frota primeiro.", "aviso");
@@ -2305,6 +2359,10 @@ function mudarTela(nomeTela) {
     if (nomeTela === "postos" && typeof Postos !== "undefined") Postos.abrir();
     if (nomeTela === "posto" && typeof TelaPosto !== "undefined") TelaPosto.abrir();
     if (nomeTela === "usuarios" && typeof Usuarios !== "undefined") Usuarios.abrir();
+    if (nomeTela === "modelos" && typeof Modelos !== "undefined") Modelos.abrir();
+    if (nomeTela === "manutencao" && typeof Manutencao !== "undefined") Manutencao.abrir();
+    if (nomeTela === "indicadores" && typeof Indicadores !== "undefined") Indicadores.abrir();
+    if (nomeTela === "configuracoes" && typeof Copias !== "undefined") Copias.abrir();
     renderizarAlertaGlobal();
     renderizarDadosTelaAtual();
     window.scrollTo({ top: 0 });
@@ -2339,7 +2397,7 @@ document.getElementById("btnVerFila")?.addEventListener("click", () => {
 
 const COR_ESTADO_PILULA = {
     missao: "var(--accent)", pronto: "var(--green)", atencao: "var(--amber)", falha: "var(--red)",
-    emergencia: "var(--red)", offline: "var(--muted)", desligado: "var(--muted)"
+    emergencia: "var(--red)", offline: "var(--muted)", desligado: "var(--muted)", manutencao: "var(--purple)"
 };
 
 function textoGarra(agv) {
@@ -2399,6 +2457,18 @@ function atualizarPainel() {
     set("vgOrientacao", pose ? `${Math.round(Planta.normalizarAngulo(pose.orientacao))}° · ${ui.direcao(pose.orientacao)}` : "--");
     set("velocidade", `${ui.numero(agv.velocidade || 0, 3)} m/s`);
     set("vgGarra", textoGarra(agv));
+    const modeloVg = typeof Modelos !== "undefined" ? Modelos.doAgv(agv) : null;
+    set("vgModelo", modeloVg ? `${modeloVg.nome}${agv.serie ? " · série " + agv.serie : ""}` : (agv.serie ? `série ${agv.serie}` : "--"));
+    const caixaManut = document.getElementById("vgManutencao");
+    if (caixaManut && typeof Manutencao !== "undefined") {
+        const r = Manutencao.atual(agv);
+        const pode = Manutencao.podeMexerNo(agv);
+        const h = r ? `<div class="alerta-faixa manutencao">${ui.icone("chave", "icone-p")}<span><b>Em manutenção</b> · ${escaparHtml(Manutencao.textoCurto(r))}</span>${pode ? `<button type="button" class="btn btn-mini" data-manut-editar="${escaparHtml(agv.id)}">Editar</button><button type="button" class="btn btn-mini btn-primario" data-manut-sair="${escaparHtml(agv.id)}">Voltar à operação</button>` : ""}</div>`
+            : pode ? `<button type="button" class="btn btn-mini vg-manut-botao" data-manut-entrar="${escaparHtml(agv.id)}">${ui.icone("chave", "icone-p")}Pôr em manutenção</button>` : "";
+        if (caixaManut.dataset.html !== h) { caixaManut.dataset.html = h; caixaManut.innerHTML = h; }
+    }
+    const faixaVg = document.getElementById("vgManutencaoFaixa");
+    if (faixaVg && typeof Manutencao !== "undefined") { const h = Manutencao.faixaMapa(); if (faixaVg.dataset.html !== h) { faixaVg.dataset.html = h; faixaVg.innerHTML = h; } }
 
     // segurança
     definirTile("tileEmergencia", agv.emergencia ? "alarme" : agv.online ? "verde" : "", agv.emergencia ? "Acionada" : agv.online ? "Normal" : "--");
@@ -2433,6 +2503,8 @@ const TEXTOS_EVENTOS = {
     OTA_VALIDADA: "Versão nova confirmada", OTA_RECUSADA: "Atualização recusada",
     BROKER_TROCANDO: "Testando outro broker", BROKER_TROCADO: "Broker trocado", BROKER_FALHOU: "Broker novo não conectou (voltou ao anterior)",
     BROKER_RECUSADO: "Troca de broker recusada",
+    MANUTENCAO_INICIADA: "Entrou em manutenção", MANUTENCAO_ENCERRADA: "Saiu da manutenção", MANUTENCAO_RECUSADA: "Manutenção recusada (missão em andamento)",
+    MANUTENCAO_ALTERADA: "Manutenção alterada",
     CONFIGURACAO_ALTERADA: "Parâmetros alterados", CONFIGURACAO_RESTAURADA: "Padrão de fábrica restaurado",
     CALIBRACAO_QTR_INICIADA: "Calibração do QTR iniciada", CALIBRACAO_QTR_CONCLUIDA: "Calibração do QTR salva",
     CALIBRACAO_QTR_CANCELADA: "Calibração do QTR cancelada", CALIBRACAO_QTR_ERRO: "Calibração do QTR recusada",
@@ -3317,9 +3389,28 @@ function abrirCadastroAGV() {
     document.getElementById("tituloModalAgv").textContent = "Adicionar AGV";
     document.getElementById("novoAgvId").value = "";
     document.getElementById("novoAgvNome").value = "";
+    preencherModeloCadastro(typeof Modelos !== "undefined" ? (Modelos.disponiveis()[0]?.id || "") : "", "");
     document.getElementById("modalAdicionarAGV").classList.add("ativo");
     document.getElementById("novoAgvId").focus();
 }
+
+function preencherModeloCadastro(modelo, serie) {
+    const sel = document.getElementById("novoAgvModelo");
+    const serieEl = document.getElementById("novoAgvSerie");
+    if (serieEl) serieEl.value = serie || "";
+    if (!sel || typeof Modelos === "undefined") return;
+    sel.innerHTML = Modelos.opcoesHtml(modelo);
+    sel.value = modelo || "";
+    resumoModeloCadastro();
+}
+function resumoModeloCadastro() {
+    const sel = document.getElementById("novoAgvModelo");
+    const el = document.getElementById("novoAgvModeloResumo");
+    if (!sel || !el || typeof Modelos === "undefined") return;
+    const m = Modelos.porId(sel.value);
+    el.textContent = m ? `${Modelos.resumo(m)}. A ficha técnica vem do catálogo (Frota › Modelos).` : "Sem modelo: o despacho não confere em quais estações ele pode ir.";
+}
+document.getElementById("novoAgvModelo")?.addEventListener("change", resumoModeloCadastro);
 
 function fecharCadastroAGV() {
     agvEmEdicao = null;
@@ -3334,6 +3425,7 @@ function abrirEdicaoAGV(id) {
     document.getElementById("tituloModalAgv").textContent = `Editar AGV ${agv.id}`;
     document.getElementById("novoAgvId").value = agv.id;
     document.getElementById("novoAgvNome").value = agv.nome;
+    preencherModeloCadastro(agv.modelo || "", agv.serie || "");
     document.getElementById("modalAdicionarAGV").classList.add("ativo");
     document.getElementById("novoAgvNome").focus();
 }
@@ -3341,6 +3433,8 @@ function abrirEdicaoAGV(id) {
 function adicionarAGV() {
     const id = document.getElementById("novoAgvId").value.trim();
     const nome = document.getElementById("novoAgvNome").value.trim();
+    const modelo = document.getElementById("novoAgvModelo")?.value || null;
+    const serie = (document.getElementById("novoAgvSerie")?.value || "").trim().slice(0, 40);
     if (!id || !nome) {
         ui.aviso("Preencha o ID e o nome do AGV.", "aviso");
         return;
@@ -3359,9 +3453,11 @@ function adicionarAGV() {
         delete agvs[idAntigo];
         dadosAGV.id = id;
         dadosAGV.nome = nome;
+        dadosAGV.modelo = modelo;
+        dadosAGV.serie = serie;
         agvs[id] = dadosAGV;
         if (agvSelecionado === idAntigo) agvSelecionado = id;
-        if (window.Nuvem && !dadosAGV.virtual) Nuvem.salvarAgv(id, nome, idAntigo);
+        if (window.Nuvem && !dadosAGV.virtual) Nuvem.salvarAgv(id, nome, idAntigo, { modelo, serie });
         agvEmEdicao = null;
         salvarAgvsFrotaAgora();
         renderizarFrota();
@@ -3375,7 +3471,9 @@ function adicionarAGV() {
         return;
     }
     agvs[id] = criarAGV(id, nome);
-    if (window.Nuvem) Nuvem.salvarAgv(id, nome);
+    agvs[id].modelo = modelo;
+    agvs[id].serie = serie;
+    if (window.Nuvem) Nuvem.salvarAgv(id, nome, null, { modelo, serie });
     salvarAgvsFrotaAgora();
     renderizarFrota();
     fecharCadastroAGV();
@@ -4824,7 +4922,8 @@ const SINAIS_LED_SITE = {
     PARTINDO: ["#22D35B", "estrobo", "Vai partir sozinho (fila ou liberar o ponto)"],
     PARTINDO_BERCO: ["#9B5CFF", "pisca", "Vai para o berço"],
     INDO_BERCO: ["#9B5CFF", "perseguicao", "Indo para o berço"],
-    TURNO_ENCERRADO: ["#9B5CFF", "respira", "Turno encerrado"]
+    TURNO_ENCERRADO: ["#9B5CFF", "respira", "Turno encerrado"],
+    EM_MANUTENCAO: ["#F2F4F7", "fixo", "Em manutenção: não aceita missão"]
 };
 
 const NOMES_EFEITO = { fixo: "aceso", pisca: "piscando", estrobo: "piscando rápido", respira: "respirando", "respira-rapida": "respirando rápido", perseguicao: "correndo", flash3: "3 piscadas" };

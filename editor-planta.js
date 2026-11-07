@@ -550,6 +550,11 @@
                             ${campo("Nome", "estacaoNome", estacao.nome, 'placeholder="Ex.: Prensa 1"')}
                         </div>
                         ${maquinas.length ? campoSelect("Máquina atendida", "estacaoMaquina", estacao.maquina || "", [["", "—"]].concat(maquinas.map(m => [m.id, m.nome || m.id]))) : ""}
+                        ${typeof Modelos !== "undefined" && Modelos.lista().length ? `
+                            <div class="editor-campo"><span>Atendida por</span>
+                                <div class="editor-modelos">${Modelos.lista().map(m => `<label class="config-chave"><input type="checkbox" data-campo="estacaoModelo" data-modelo="${esc(m.id)}" ${(estacao.modelos || []).includes(m.id) ? "checked" : ""}><span>${esc(m.nome)}</span></label>`).join("")}</div>
+                                <small class="suave">Nenhum marcado: qualquer modelo. Marcados: o despacho só manda AGVs desses modelos para esta estação.</small>
+                            </div>` : ""}
                         <div class="editor-acessos">
                             ${acessos.map(a => `<div class="editor-acesso ${a.id === no.id ? "atual" : ""}"><span>${esc(a.id)}${a.nome ? " · " + esc(a.nome) : ""} · chega a ${a.orientacaoChegada ?? "?"}°</span>${a.id === no.id ? "<span>este</span>" : `<button class="btn btn-mini" data-acao="selecionarNo" data-id="${esc(a.id)}">Ver</button>`}</div>`).join("")}
                         </div>
@@ -736,6 +741,15 @@
                 case "estacaoId": if (!renomearEstacao(no.estacao, valor)) { estado.desfazer.pop(); renderizarPropriedades(); return; } break;
                 case "estacaoNome": { const e = Planta.estacaoPorId(planta, no.estacao); if (e) e.nome = valor.trim(); break; }
                 case "estacaoMaquina": { const e = Planta.estacaoPorId(planta, no.estacao); if (e) { if (valor) e.maquina = valor; else delete e.maquina; } break; }
+                case "estacaoModelo": {
+                    const e = Planta.estacaoPorId(planta, no.estacao);
+                    if (e) {
+                        const l = new Set(e.modelos || []);
+                        if (alvo.checked) l.add(alvo.dataset.modelo); else l.delete(alvo.dataset.modelo);
+                        if (l.size) e.modelos = [...l].sort(); else delete e.modelos;
+                    }
+                    break;
+                }
                 case "noEstacao":
                     if (Planta.estacaoPorId(planta, valor)) { no.estacao = valor; limparEstacoesVazias(); }
                     break;

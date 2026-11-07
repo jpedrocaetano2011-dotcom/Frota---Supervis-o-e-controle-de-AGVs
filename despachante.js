@@ -16,6 +16,8 @@
       sobe um nível a cada N minutos esperando, depois quem pediu antes.
    4. Aproveitar a viagem: um pedido que começa exatamente onde outro
       termina vai para o mesmo AGV, em seguida (kit e vazio do posto).
+   5. (0.14) AGV em manutenção não recebe. Estação com "Atendida por"
+      (lista de modelos na planta) só recebe AGVs desses modelos.
 */
 (function (raiz, fabrica) {
     if (typeof module === "object" && module.exports) module.exports = fabrica(require("./planta.js"));
@@ -112,6 +114,7 @@
 
     // Por que um AGV não pode receber pedido agora (null = pode)
     function impedimento(agv, cfg) {
+        if (agv.manutencao) return "em manutenção";
         if (!agv.online) return "offline";
         if (agv.semFila) return "com firmware sem fila (atualize)";
         if (agv.filaCheia) return "com a fila cheia";
@@ -122,6 +125,26 @@
         if (agv.bateria != null && Number(agv.bateria) < cfg.bateriaMinima) return `bateria baixa (${Math.round(agv.bateria)}%)`;
         if (!agv.posicaoConhecida || !agv.pontoAtual) return "posição desconhecida";
         return null;
+    }
+
+    // Estações da missão que limitam os modelos (planta › estação › "Atendida por")
+    function estacoesRestritas(planta, missao) {
+        const vistas = new Map();
+        (missao?.etapas || []).filter(e => e.tipo === "IR_PARA" && e.destino).forEach(e => {
+            const c = Planta.candidatosDestino(planta, e.destino);
+            const est = c?.estacao;
+            if (est && Array.isArray(est.modelos) && est.modelos.length) vistas.set(est.id, est);
+        });
+        return [...vistas.values()];
+    }
+    // Por que o modelo do AGV não serve para a missão (null = serve)
+    function recusaModelo(planta, missao, agv) {
+        const restritas = estacoesRestritas(planta, missao);
+        if (!restritas.length) return null;
+        const nomeEst = e => e.nome ? `${e.id} (${e.nome})` : e.id;
+        if (!agv.modelo) return `sem modelo cadastrado, e ${nomeEst(restritas[0])} só aceita modelos escolhidos`;
+        const nao = restritas.find(e => !e.modelos.includes(agv.modelo));
+        return nao ? `${agv.modeloNome || agv.modelo} não atende ${nomeEst(nao)}` : null;
     }
 
     const tempoTexto = s => s < 90 ? `~${Math.max(1, Math.round(s))} s` : `~${Math.round(s / 60)} min`;
@@ -236,8 +259,10 @@
             if (pedido.agvFixo) {
                 const agv = agvs.find(a => a.id === pedido.agvFixo);
                 if (!agv) { espera[pedido.id] = `o AGV ${pedido.agvFixo} não está cadastrado`; continue; }
-                const barra = !agv.online ? "offline" : agv.semFila ? "com firmware sem fila (atualize)" : agv.filaCheia ? "com a fila cheia" : null;
+                const barra = agv.manutencao ? "em manutenção" : !agv.online ? "offline" : agv.semFila ? "com firmware sem fila (atualize)" : agv.filaCheia ? "com a fila cheia" : null;
                 if (barra) { espera[pedido.id] = `aguardando o AGV ${agv.id} ${barra}`; continue; }
+                const naoServe = recusaModelo(planta, missao, agv);
+                if (naoServe) { espera[pedido.id] = `o AGV ${agv.id} não pode fazer esta missão: ${naoServe}`; continue; }
                 const livreAgora = !agv.ocupado && !reservados.has(agv.id) && !usados.has(agv.id);
                 const ponto = livreAgora ? (agv.posicaoConhecida ? agv.pontoAtual : null) : agv.fimPrevisto;
                 if (!ponto) {
@@ -260,6 +285,8 @@
                 if (pedido.agvFixo && agv.id !== pedido.agvFixo) continue;
                 if (usados.has(agv.id)) { recusas.push(`${agv.id} acabou de receber outro pedido`); continue; }
                 if (agv.impedimento) { recusas.push(`${agv.id} ${agv.impedimento}`); continue; }
+                const naoServe = recusaModelo(planta, missao, agv);
+                if (naoServe) { recusas.push(`${agv.id}: ${naoServe}`); continue; }
                 let custo, eta, motivo, p;
                 if (agv.livre) {
                     p = prever(planta, missao, agv.pontoAtual, agv.orientacao);
@@ -309,6 +336,6 @@
 
     return {
         CONFIG_PADRAO, NOMES_PRIORIDADE, configuracao, prioridadeEfetiva, ordenar,
-        tempoEtapa, tempoPacote, prever, impedimento, decidir, tempoTexto, metrosTexto
+        tempoEtapa, tempoPacote, prever, impedimento, decidir, tempoTexto, metrosTexto, recusaModelo, estacoesRestritas
     };
 });
