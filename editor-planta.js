@@ -483,6 +483,44 @@
         return "Referência visual.";
     }
 
+    // A estação: o que ela é, quem atende e os acessos (0.18.1: sem formulário dentro de formulário)
+    function blocoEstacao(planta, no, estacao, acessos, maquinas, unico) {
+        const carga = Planta.CARGAS[estacao.carga] ? estacao.carga : "";
+        const modulo = carga ? Planta.CARGAS[carga].modulo : null;
+        const catalogo = typeof Modelos !== "undefined" ? Modelos.lista() : [];
+        const servem = catalogo.filter(m => !modulo || m.modulo === modulo);
+        const marcados = (estacao.modelos || []).filter(id => servem.some(m => m.id === id));
+        const nomes = ids => ids.map(id => catalogo.find(m => m.id === id)?.nome || id).join(", ");
+        let quem;
+        if (!servem.length) quem = `<p class="editor-aviso">Não há nenhum Atta ${esc(modulo)} no catálogo da empresa: ninguém vai atender esta estação. Troque o tipo de carga ou cadastre o modelo em Modelos.</p>`;
+        else if (marcados.length) quem = `<p class="editor-resumo">Vêm para cá: <b>${esc(nomes(marcados))}</b>.</p>`;
+        else quem = `<p class="editor-resumo">Vêm para cá: <b>${modulo ? (servem.length === 1 ? esc(servem[0].nome) : `qualquer Atta ${esc(modulo)}`) : "qualquer Atta"}</b>.</p>`;
+        const escolha = servem.length > 1 ? `
+            <div class="editor-campo"><span>Só estes modelos <em class="suave">(opcional)</em></span>
+                <div class="editor-modelos">${servem.map(m => `<label class="config-chave"><input type="checkbox" data-campo="estacaoModelo" data-modelo="${esc(m.id)}" ${marcados.includes(m.id) ? "checked" : ""}><span>${esc(m.nome)}</span></label>`).join("")}</div>
+            </div>` : "";
+        return `
+            <span class="editor-subtitulo editor-secao-titulo">Estação</span>
+            ${unico ? "" : campo("ID da estação (o destino das missões)", "estacaoId", estacao.id, `maxlength="${Planta.LIMITES.tamanhoId}"`)}
+            ${campo("Nome", "estacaoNome", estacao.nome, 'placeholder="Ex.: Prensa 1"')}
+            ${maquinas.length ? campoSelect("Máquina atendida", "estacaoMaquina", estacao.maquina || "", [["", "—"]].concat(maquinas.map(m => [m.id, m.nome || m.id]))) : ""}
+            <span class="editor-subtitulo editor-secao-titulo">Quem atende</span>
+            ${campoSelect("Tipo de carga", "estacaoCarga", carga, [["", "Qualquer carga · qualquer Atta"]].concat(Object.entries(Planta.CARGAS).map(([k, v]) => [k, `${v.nome} · Atta ${v.modulo}`])))}
+            ${escolha}
+            ${quem}
+            <p class="editor-texto suave">${modulo ? `A planta confere se o Atta ${esc(modulo)} consegue chegar e sair daqui${modulo === "T" ? " (o comboio não anda de ré nem gira no ponto)" : ""}. ` : ""}Para dar preferência a um Atta em cada botão, use Postos › quem atende.</p>
+            <span class="editor-subtitulo editor-secao-titulo">Acessos</span>
+            ${acessos.length > 1 ? `<div class="editor-acessos">
+                ${acessos.map(a => `<div class="editor-acesso ${a.id === no.id ? "atual" : ""}"><span>${esc(a.id)}${a.nome ? " · " + esc(a.nome) : ""} · chega a ${a.orientacaoChegada ?? "?"}°</span>${a.id === no.id ? "<span>este</span>" : `<button class="btn btn-mini" data-acao="selecionarNo" data-id="${esc(a.id)}">Ver</button>`}</div>`).join("")}
+            </div>
+            <p class="editor-texto suave">A missão vai para a estação ${esc(estacao.id)} e o AGV usa o acesso de caminho mais curto.</p>`
+            : `<p class="editor-texto suave">Um acesso só (este ponto). Para chegar dos dois lados da máquina ou por outra faixa, crie outro.</p>`}
+            <button class="btn btn-mini" data-acao="novoAcesso">+ Outro acesso</button>
+            ${(planta.estacoes || []).length > 1 ? `<details class="editor-mais"><summary>Ligar este ponto a outra estação</summary>
+                ${campoSelect("Este ponto é acesso de", "noEstacao", estacao.id, planta.estacoes.map(e => [e.id, e.nome ? `${e.id} · ${e.nome}` : e.id]))}
+            </details>` : ""}`;
+    }
+
     // Modelo 3D próprio (GLB, 0.17) de um objeto
     function blocoModelo3d(o) {
         const ref = o.modelo3d ? (p().modelos3d || []).find(m => m.id === o.modelo3d) : null;
@@ -667,34 +705,17 @@
             const ligados = planta.segmentos.filter(s => s.a === no.id || s.b === no.id).length;
             const rfids = estado.ganchos.ultimosRfids ? estado.ganchos.ultimosRfids() : [];
             const maquinas = planta.layout.filter(o => Planta.TIPOS_LAYOUT[o.tipo]?.solido);
+            // estação de um acesso só, com o mesmo id do ponto: um identificador só
+            const unico = Boolean(estacao) && acessos.length <= 1 && estacao.id === no.id;
             painel.innerHTML = `
                 <div class="editor-linha">
-                    ${campo("Identificador", "noId", no.id, `maxlength="${Planta.LIMITES.tamanhoId}"`)}
+                    ${campo("Identificador", unico ? "estacaoENo" : "noId", no.id, `maxlength="${Planta.LIMITES.tamanhoId}"`)}
                     ${campoSelect("Tipo", "noTipo", no.tipo, [["ESTACAO", "Estação"], ["REFERENCIA", "Referência"], ["ESPERA", "Espera"], ["BERCO", "Berço"]])}
                 </div>
-                ${no.tipo === "ESTACAO" && estacao ? `
-                    <div class="editor-bloco destaque">
-                        <span class="editor-subtitulo">Estação (destino das missões)</span>
-                        <div class="editor-linha">
-                            ${campo("ID da estação", "estacaoId", estacao.id, `maxlength="${Planta.LIMITES.tamanhoId}"`)}
-                            ${campo("Nome", "estacaoNome", estacao.nome, 'placeholder="Ex.: Prensa 1"')}
-                        </div>
-                        ${maquinas.length ? campoSelect("Máquina atendida", "estacaoMaquina", estacao.maquina || "", [["", "—"]].concat(maquinas.map(m => [m.id, m.nome || m.id]))) : ""}
-                        ${campoSelect("O que a estação troca", "estacaoCarga", estacao.carga || "", [["", "Qualquer (não definido)"]].concat(Object.entries(Planta.CARGAS).map(([k, v]) => [k, `${v.nome} · Atta ${v.modulo}`])))}
-                        <small class="suave">${estacao.carga ? `Só o Atta ${Planta.CARGAS[estacao.carga].modulo} recebe missões para cá, e a planta confere se ele chega e sai (o comboio não anda de ré nem gira no ponto).` : "Defina para o despacho só mandar o módulo certo (kit: G, carrinho: E, esteira: R, comboio: T)."}</small>
-                        ${typeof Modelos !== "undefined" && Modelos.lista().length ? `
-                            <div class="editor-campo"><span>Atendida por</span>
-                                <div class="editor-modelos">${Modelos.lista().map(m => `<label class="config-chave"><input type="checkbox" data-campo="estacaoModelo" data-modelo="${esc(m.id)}" ${(estacao.modelos || []).includes(m.id) ? "checked" : ""}><span>${esc(m.nome)}</span></label>`).join("")}</div>
-                                <small class="suave">Nenhum marcado: qualquer modelo. Marcados: o despacho só manda AGVs desses modelos para esta estação.</small>
-                            </div>` : ""}
-                        <div class="editor-acessos">
-                            ${acessos.map(a => `<div class="editor-acesso ${a.id === no.id ? "atual" : ""}"><span>${esc(a.id)}${a.nome ? " · " + esc(a.nome) : ""} · chega a ${a.orientacaoChegada ?? "?"}°</span>${a.id === no.id ? "<span>este</span>" : `<button class="btn btn-mini" data-acao="selecionarNo" data-id="${esc(a.id)}">Ver</button>`}</div>`).join("")}
-                        </div>
-                        <button class="btn btn-mini" data-acao="novoAcesso">+ Outro acesso</button>
-                        <p class="editor-texto suave">Mais de um acesso (dos dois lados da máquina, ou um em cada faixa): a missão vai para a estação e o AGV escolhe o acesso de caminho mais curto.</p>
-                        ${(planta.estacoes || []).length > 1 ? campoSelect("Este ponto é acesso de", "noEstacao", estacao.id, planta.estacoes.map(e => [e.id, e.nome ? `${e.id} · ${e.nome}` : e.id])) : ""}
-                    </div>` : ""}
-                ${campo(no.tipo === "ESTACAO" ? "Nome do acesso" : "Nome", "noNome", no.nome, `placeholder="${no.tipo === "ESTACAO" ? "Ex.: Norte (opcional)" : "Ex.: Cruzamento 3"}"`)}
+                ${no.tipo === "ESTACAO" && estacao ? blocoEstacao(planta, no, estacao, acessos, maquinas, unico) : ""}
+                ${no.tipo !== "ESTACAO" ? campo("Nome", "noNome", no.nome, 'placeholder="Ex.: Cruzamento 3"') : ""}
+                ${no.tipo === "ESTACAO" ? `<span class="editor-subtitulo editor-secao-titulo">Este ponto${acessos.length > 1 ? ` (acesso ${esc(no.id)})` : ""}</span>` : ""}
+                ${no.tipo === "ESTACAO" && (acessos.length > 1 || no.nome) ? campo("Nome do acesso", "noNome", no.nome, 'placeholder="Ex.: lado norte (opcional)"') : ""}
                 <div class="editor-linha">
                     ${campoNumero("X", "noX", no.x, 0.01, "m")}
                     ${campoNumero("Y", "noY", no.y, 0.01, "m")}
@@ -949,9 +970,26 @@
                     }
                     break;
                 case "estacaoId": if (!renomearEstacao(no.estacao, valor)) { estado.desfazer.pop(); renderizarPropriedades(); return; } break;
+                case "estacaoENo": {
+                    const antigo = no.id;
+                    if (!renomearEstacao(no.estacao, valor) || !renomearNo(antigo, valor.trim())) { estado.desfazer.pop(); renderizarPropriedades(); return; }
+                    break;
+                }
                 case "estacaoNome": { const e = Planta.estacaoPorId(planta, no.estacao); if (e) e.nome = valor.trim(); break; }
                 case "estacaoMaquina": { const e = Planta.estacaoPorId(planta, no.estacao); if (e) { if (valor) e.maquina = valor; else delete e.maquina; } break; }
-                case "estacaoCarga": { const e = Planta.estacaoPorId(planta, no.estacao); if (e) { if (Planta.CARGAS[valor]) e.carga = valor; else delete e.carga; } break; }
+                case "estacaoCarga": {
+                    const e = Planta.estacaoPorId(planta, no.estacao);
+                    if (e) {
+                        if (Planta.CARGAS[valor]) e.carga = valor; else delete e.carga;
+                        // modelos marcados de outro módulo não servem mais: saem
+                        const mod = Planta.CARGAS[e.carga]?.modulo;
+                        if (mod && e.modelos && typeof Modelos !== "undefined") {
+                            const ok = e.modelos.filter(id => (Modelos.lista().find(m => m.id === id)?.modulo || mod) === mod);
+                            if (ok.length) e.modelos = ok; else delete e.modelos;
+                        }
+                    }
+                    break;
+                }
                 case "estacaoModelo": {
                     const e = Planta.estacaoPorId(planta, no.estacao);
                     if (e) {

@@ -1950,3 +1950,13 @@ option.opcao-nao-serve { color: var(--muted); }
 @media print { .mira-botao, .mira-painel, .mira-notou { display: none !important; } }
 /* 0.18: os avisos sobem um pouco para não cobrir o botão da Mira */
 .toasts { bottom: 70px; }
+
+/* 0.18.1: painel da estação em seções (sem caixa dentro de caixa) */
+.editor-secao-titulo { display: block; margin-top: 8px; padding-top: 14px; border-top: 1px solid var(--border); }
+.editor-resumo { margin: 0; font-size: 13px; padding: 9px 12px; border-radius: var(--raio-medio, 10px); background: var(--accent-soft); }
+.editor-resumo b { color: var(--text); }
+.editor-mais { font-size: 13px; }
+.editor-mais summary { cursor: pointer; color: var(--muted); padding: 4px 0; }
+.editor-mais[open] summary { margin-bottom: 8px; }
+/* espaço no fim de cada tela para o botão da Mira não cobrir o último campo */
+.tela.ativa::after { content: ""; display: block; height: 64px; }
