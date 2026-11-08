@@ -986,11 +986,18 @@ async function enviarMissaoParaAGV() {
         fundo.innerHTML = `
             <div class="modal" role="dialog" aria-modal="true" aria-labelledby="enviarMissaoTitulo">
                 <div class="modal-cabecalho"><div><h2 id="enviarMissaoTitulo">Enviar ${escaparHtml(id)} para…</h2><p>Se o AGV estiver ocupado, a missão vai para a fila dele.</p></div></div>
-                <div class="modal-corpo"><fieldset class="opcoes-radio">${lista.map((agv, i) => {
-                    const cat = categoriaEstadoAGV(agv);
-                    return `<label class="opcao-radio"><input type="radio" name="agvDestino" value="${escaparHtml(agv.id)}" ${i === 0 ? "checked" : ""}>
-                        <span><strong>AGV ${escaparHtml(agv.id)} · ${escaparHtml(agv.nome)}</strong><small>${cat.texto}${agv.online ? " · " + escaparHtml(descreverPosicaoAGV(agv)) : ""}</small></span></label>`;
-                }).join("")}</fieldset></div>
+                <div class="modal-corpo"><fieldset class="opcoes-radio">${(() => {
+                    // 0.16.1: quem não pode fazer a missão fica apagado, com o motivo
+                    const missaoAtual = obterMissaoPorId(id) || missaoEmEdicao;
+                    const motivos = lista.map(agv => porQueMissaoNaoServe(agv, missaoAtual));
+                    const primeiro = motivos.findIndex(m => !m);
+                    return lista.map((agv, i) => {
+                        const cat = categoriaEstadoAGV(agv);
+                        const nao = motivos[i];
+                        return `<label class="opcao-radio ${nao ? "nao-serve" : ""}"><input type="radio" name="agvDestino" value="${escaparHtml(agv.id)}" ${i === primeiro ? "checked" : ""} ${nao ? "disabled" : ""}>
+                            <span><strong>AGV ${escaparHtml(agv.id)} · ${escaparHtml(agv.nome)}${typeof Modelos !== "undefined" && agv.modelo ? ` <em class="suave">${escaparHtml(Modelos.nome(agv.modelo))}</em>` : ""}</strong><small>${nao ? `Não serve: ${escaparHtml(nao)}` : cat.texto + (agv.online ? " · " + escaparHtml(descreverPosicaoAGV(agv)) : "")}</small></span></label>`;
+                    }).join("");
+                })()}</fieldset></div>
                 <div class="modal-acoes"><button type="button" class="btn" data-r="0">Voltar</button><button type="button" class="btn btn-primario" data-r="1">Enviar</button></div>
             </div>`;
         const fechar = valor => { fundo.remove(); resolver(valor); };
@@ -2628,6 +2635,40 @@ function renderizarVl53Manual(agv) {
    FILA E MISSÃO ATUAL (Visão Geral)
    ============================================================ */
 
+// 0.16.1: esta missão serve para este AGV? (modelo da estação, carga da estação,
+// rota que o modelo consegue fazer). null = serve; senão, o motivo curto.
+const cacheMissaoServe = new Map();
+function porQueMissaoNaoServe(agv, missao) {
+    if (!agv || !missao) return null;
+    const planta = plantaPublicada();
+    const chave = [agv.id, agv.modelo, agv.pontoAtual, planta.revisao, planta.nos.length, missao.id, JSON.stringify(missao.etapas)].join("|");
+    if (cacheMissaoServe.has(chave)) return cacheMissaoServe.get(chave);
+    let motivo = null;
+    const ag = { id: agv.id, modelo: agv.modelo || null, modeloNome: typeof Modelos !== "undefined" ? Modelos.nome(agv.modelo) : agv.modelo };
+    if (typeof Despachante !== "undefined") motivo = Despachante.recusaModelo(planta, missao, ag);
+    const perfil = typeof Modelos !== "undefined" && Modelos.perfil ? Modelos.perfil(agv) : null;
+    if (!motivo && perfil?.vazio?.modulo) {
+        // a estação troca uma carga que este módulo não faz
+        for (const e of missao.etapas || []) {
+            if (e.tipo !== "IR_PARA") continue;
+            const c = Planta.candidatosDestino(planta, e.destino);
+            const carga = c?.estacao?.carga;
+            if (carga && !Planta.estacaoAceita(planta, c.estacao.id, perfil.vazio.modulo)) {
+                motivo = `${c.estacao.nome || c.estacao.id} é de ${Planta.CARGAS[carga].nome.toLowerCase()} (Atta ${Planta.CARGAS[carga].modulo})`;
+                break;
+            }
+        }
+    }
+    // a rota: comboio sem giro, raio, guia (só dá para conferir com a posição conhecida)
+    if (!motivo && perfil && agv.pontoAtual && Planta.noPorId(planta, agv.pontoAtual)) {
+        const r = Planta.compilarMissao(planta, missao, { ponto: agv.pontoAtual, orientacao: Number(agv.orientacao) || 0 }, opcoesRotaAgv(agv));
+        if (!r.sucesso && /caminho|não gira|Atta [GERT]|sem fita|precisa de/.test(r.erro)) motivo = r.erro.replace(/^Etapa \d+[^:]*: /, "");
+    }
+    if (cacheMissaoServe.size > 500) cacheMissaoServe.clear();
+    cacheMissaoServe.set(chave, motivo);
+    return motivo;
+}
+
 function renderizarControleFilaAGV() {
     atualizarBotaoCancelarMissao();
     const select = document.getElementById("missaoSelecionadaAGV");
@@ -2639,13 +2680,18 @@ function renderizarControleFilaAGV() {
     if (!agv) return;
 
     const missoesDisponiveis = Array.isArray(missoes) ? missoes : [];
-    const assinatura = missoesDisponiveis.map(m => `${m.id}:${m.nome}`).join("|");
+    // 0.16.1: as que este AGV não pode fazer ficam apagadas, com o motivo
+    const motivos = missoesDisponiveis.map(m => porQueMissaoNaoServe(agv, m));
+    const assinatura = agv.id + "|" + missoesDisponiveis.map((m, i) => `${m.id}:${m.nome}:${motivos[i] || ""}`).join("|");
     if (select.dataset.assinatura !== assinatura) {
-        select.innerHTML = `<option value="">${missoesDisponiveis.length ? "Escolha uma missão" : "Nenhuma missão cadastrada"}</option>`;
-        missoesDisponiveis.forEach(missao => {
+        const servem = motivos.filter(m => !m).length;
+        select.innerHTML = `<option value="">${!missoesDisponiveis.length ? "Nenhuma missão cadastrada" : servem ? `Escolha uma missão (${servem} servem para este AGV)` : "Nenhuma missão serve para este AGV"}</option>`;
+        const ordem = missoesDisponiveis.map((m, i) => [m, motivos[i]]).sort((a, b) => (a[1] ? 1 : 0) - (b[1] ? 1 : 0));
+        ordem.forEach(([missao, motivo]) => {
             const option = document.createElement("option");
             option.value = missao.id;
-            option.textContent = `${missao.id} · ${missao.nome || "Sem nome"}`;
+            option.textContent = `${missao.id} · ${missao.nome || "Sem nome"}${motivo ? ` — não serve: ${motivo}` : ""}`;
+            if (motivo) { option.disabled = true; option.title = motivo; option.className = "opcao-nao-serve"; }
             select.appendChild(option);
         });
         select.dataset.assinatura = assinatura;

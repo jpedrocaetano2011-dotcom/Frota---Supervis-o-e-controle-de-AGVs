@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>E4M · Supervisão de frota</title>
 <!-- 0.16: a vista 3D baixa a Three.js (MIT) só quando alguém abre o 3D -->
-<script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js" } }</script>
+<script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/" } }</script>
 <link rel="icon" type="image/png" href="data:image/png;base64,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">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -757,6 +757,8 @@
             </aside>
         </div>
         <input type="file" id="editorArquivoImagem" accept="image/*" hidden>
+        <input type="file" id="editorArquivoDxf" accept=".dxf,.DXF,.dwg,.DWG" hidden>
+        <input type="file" id="editorArquivoGlb" accept=".glb,.GLB" hidden>
         <input type="file" id="editorArquivoJson" accept="application/json,.json" hidden>
     </section>
 
@@ -767,7 +769,7 @@
         <div class="barra-acoes">
             <div class="virtual-abas" role="tablist" aria-label="AGVs virtuais">
                 <div id="virtualLista" class="virtual-lista"></div>
-                <button type="button" class="virtual-novo" id="virtualNovo">+ Novo AGV virtual</button>
+                <span class="virtual-novo-linha"><select id="virtualNovoModelo" aria-label="Modelo do novo AGV virtual" title="Modelo do novo Atta virtual"></select><button type="button" class="virtual-novo" id="virtualNovo">+ Novo AGV virtual</button></span>
                 <button type="button" class="virtual-novo" id="virtualFrotaExemplo" title="Cria os 6 Atta da metalúrgica de exemplo (G, E, R e T), cada um no seu lugar">+ Frota do exemplo</button>
             </div>
             <div class="grupo">
@@ -850,6 +852,13 @@
                             <dt>Rodas M1 · M2 · M3 · M4</dt><dd id="virtualRodas">--</dd>
                             <dt>Garra</dt><dd id="virtualGarra">--</dd>
                         </dl>
+                    </div>
+                </section>
+                <section class="card" aria-label="Modelo deste Atta virtual">
+                    <div class="card-header"><h2>Modelo deste Atta</h2></div>
+                    <div class="virtual-modelo">
+                        <select id="virtualModelo" aria-label="Modelo do Atta virtual"></select>
+                        <small id="virtualModeloInfo"></small>
                     </div>
                 </section>
                 <section class="card" aria-label="Colocar o AGV num ponto">
@@ -997,10 +1006,10 @@
 <script>
     // Sem nuvem configurada (config.js) os scripts carregam na hora, como antes.
     // Com nuvem, carregam depois do login e dos dados da empresa.
-    Nuvem.iniciar(["planta.js", "planta-exemplo.js", "mapa-svg.js", "planta-3d.js", "editor-planta.js", "operacao-planta.js",
+    Nuvem.iniciar(["planta.js", "planta-exemplo.js", "importar-dxf.js", "arquivos-3d.js", "mapa-svg.js", "planta-3d.js", "editor-planta.js", "operacao-planta.js",
                    "configuracoes.js", "agv-virtual.js", "script.js", "rotina.js", "usuarios.js",
                    "despachante.js", "despacho.js", "postos.js", "programacao.js",
-                   "modelos.js", "manutencao.js", "copias.js", "indicadores.js"]);
+                   "modelos.js", "manutencao.js", "copias.js", "indicadores.js", "mira.js"]);
 </script>
 </body>
 </html>

@@ -37,6 +37,40 @@ const Planta3D = (function () {
         return carregando;
     }
 
+    // GLB (0.17): o leitor do Three.js vem só quando a planta tem um modelo importado
+    let leitorGlb = null;
+    function carregarLeitorGlb() {
+        if (!leitorGlb) {
+            const base = window.ECITON_THREE_ADDONS || "three/addons/";
+            leitorGlb = Promise.all([import(base + "loaders/GLTFLoader.js"), import(base + "loaders/DRACOLoader.js")]).then(([g, d]) => {
+                const leitor = new g.GLTFLoader();
+                const draco = new d.DRACOLoader();
+                draco.setDecoderPath(window.ECITON_DRACO_URL || "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/");
+                leitor.setDRACOLoader(draco);
+                return leitor;
+            }).catch(erro => { leitorGlb = null; throw erro; });
+        }
+        return leitorGlb;
+    }
+    // Um GLB é lido uma vez; cada uso é uma cópia que compartilha a geometria
+    const modelosLidos = new Map();      // id -> Promise<Object3D>
+    function modeloGlb(id) {
+        if (!modelosLidos.has(id)) {
+            const p = (async () => {
+                if (typeof Arquivos3D === "undefined") throw new Error("sem Arquivos3D");
+                const [leitor, buffer] = await Promise.all([carregarLeitorGlb(), Arquivos3D.obter(id)]);
+                const gltf = await new Promise((ok, erro) => leitor.parse(buffer.slice(0), "", ok, erro));
+                const cena = gltf.scene || gltf.scenes[0];
+                cena.traverse(o => { if (o.isMesh) { o.userData.glb = true; o.castShadow = true; o.receiveShadow = true; } });
+                cena.updateMatrixWorld(true);
+                return cena;
+            })();
+            p.catch(() => modelosLidos.delete(id));
+            modelosLidos.set(id, p);
+        }
+        return modelosLidos.get(id);
+    }
+
     /* ---------------- cores ---------------- */
 
     function css(nome, padrao) {
@@ -475,13 +509,13 @@ const Planta3D = (function () {
         cena.add(sol);
         cena.add(sol.target);
 
-        const grupos = { piso: new THREE.Group(), fitas: new THREE.Group(), objetos: new THREE.Group(), nos: new THREE.Group(), agvs: new THREE.Group() };
+        const grupos = { piso: new THREE.Group(), desenho: new THREE.Group(), galpao: new THREE.Group(), fitas: new THREE.Group(), objetos: new THREE.Group(), nos: new THREE.Group(), agvs: new THREE.Group() };
         Object.values(grupos).forEach(gr => cena.add(gr));
 
         const estado = {
             planta: null, revisao: null, chave: "", largura: 20, altura: 12,
             alvo: new THREE.Vector3(10, 0, -6), azimute: -Math.PI / 4 * 1.0 + Math.PI, elevacao: 0.62, distancia: 30,
-            seguir: null, girar: false, ativo: true, ultimo: performance.now(), agvs: new Map(), dados: [], vista: "iso",
+            seguir: null, girar: false, ativo: true, ultimo: performance.now(), agvs: new Map(), dados: [], vista: "iso", geracao: 0, glb: { pedidos: 0, prontos: 0, erros: [] },
             clicar: typeof opcoes.aoClicar === "function" ? opcoes.aoClicar : null, escuro: escuro()
         };
 
@@ -491,7 +525,7 @@ const Planta3D = (function () {
         function limpar(grupo) {
             while (grupo.children.length) {
                 const c = grupo.children.pop();
-                c.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+                c.traverse(o => { if (o.geometry && !o.userData.glb) o.geometry.dispose(); });
             }
         }
 
@@ -504,7 +538,9 @@ const Planta3D = (function () {
         }
 
         function construirPlanta(p) {
-            ["piso", "fitas", "objetos", "nos"].forEach(k => limpar(grupos[k]));
+            ["piso", "desenho", "galpao", "fitas", "objetos", "nos"].forEach(k => limpar(grupos[k]));
+            const geracao = ++estado.geracao;
+            estado.glb = { pedidos: 0, prontos: 0, erros: [] };
             const W = p.dimensoes.largura, H = p.dimensoes.altura;
             estado.largura = W; estado.altura = H;
             aplicarTema();
@@ -566,9 +602,12 @@ const Planta3D = (function () {
                 } else {
                     const f = FABRICA[o.tipo] || FABRICA.MAQUINA;
                     f(mat, g, o, h);
+                    if (o.modelo3d) trocarPorGlb(g, o, geracao);
                 }
                 grupos.objetos.add(g);
             });
+            construirDesenho(p);
+            if (p.galpao3d) colocarGalpao(p.galpao3d, geracao);
 
             // fitas no chão
             (p.segmentos || []).forEach(s => {
@@ -626,6 +665,85 @@ const Planta3D = (function () {
             Object.assign(sol.shadow.camera, { left: -raio, right: raio, top: raio, bottom: -raio, near: 1, far: raio * 4 });
             sol.shadow.camera.updateProjectionMatrix();
             if (!estado.planta) enquadrar();
+        }
+
+        // Desenho do CAD (0.17): as linhas no chão; camadas de parede viram paredes de 2,5 m
+        function construirDesenho(p) {
+            const d = p.desenho;
+            if (!d || !Array.isArray(d.linhas)) return;
+            const a = (d.rotacao || 0) * Math.PI / 180, e = d.escala || 1, c = Math.cos(a), s = Math.sin(a);
+            const px = (x, y) => d.x + e * (x * c - y * s), py = (x, y) => d.y + e * (x * s + y * c);
+            const linhas = [], paredes = [];
+            const ALT = 2.5, MAX_PAREDES = 30000;
+            let nParedes = 0;
+            d.linhas.forEach(l => {
+                const cam = d.camadas[l.c];
+                if (!cam || cam.uso === "oculta" || cam.visivel === false) return;
+                for (let i = 2; i < l.p.length; i += 2) {
+                    const x0 = px(l.p[i - 2], l.p[i - 1]), y0 = py(l.p[i - 2], l.p[i - 1]), x1 = px(l.p[i], l.p[i + 1]), y1 = py(l.p[i], l.p[i + 1]);
+                    if (cam.uso === "paredes" && nParedes < MAX_PAREDES) {
+                        nParedes++;
+                        paredes.push(x0, 0, -y0, x1, 0, -y1, x1, ALT, -y1, x0, 0, -y0, x1, ALT, -y1, x0, ALT, -y0);
+                    } else linhas.push(x0, 0.003, -y0, x1, 0.003, -y1);
+                }
+            });
+            if (linhas.length) {
+                const g = new THREE.BufferGeometry();
+                g.setAttribute("position", new THREE.Float32BufferAttribute(linhas, 3));
+                grupos.desenho.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: estado.escuro ? 0x8A96A3 : 0x55606B, transparent: true, opacity: Math.max(0.25, Math.min(1, d.opacidade ?? 0.6)) })));
+            }
+            if (paredes.length) {
+                const g = new THREE.BufferGeometry();
+                g.setAttribute("position", new THREE.Float32BufferAttribute(paredes, 3));
+                g.computeVertexNormals();
+                const m = new THREE.Mesh(g, mat(estado.escuro ? 0x56606B : COR.parede, { side: THREE.DoubleSide, roughness: 0.85 }));
+                m.castShadow = true; m.receiveShadow = true;
+                grupos.desenho.add(m);
+            }
+            estado.paredesDesenho = nParedes;
+        }
+
+        // Objeto com GLB próprio: o modelo padrão fica até o arquivo chegar
+        function trocarPorGlb(g, o, geracao) {
+            estado.glb.pedidos++;
+            modeloGlb(o.modelo3d).then(modelo => {
+                if (geracao !== estado.geracao) return;
+                const copia = modelo.clone(true);
+                const caixaM = new THREE.Box3().setFromObject(copia);
+                const tam = caixaM.getSize(new THREE.Vector3()), centro = caixaM.getCenter(new THREE.Vector3());
+                const esc = o.ajuste3d === "real" ? 1 : Math.min(o.largura / Math.max(1e-6, tam.x), o.profundidade / Math.max(1e-6, tam.z));
+                const pivo = new THREE.Group();
+                copia.position.set(-centro.x, -caixaM.min.y, -centro.z);
+                pivo.add(copia);
+                pivo.scale.setScalar(esc);
+                pivo.userData.glbObjeto = true;
+                limpar(g);
+                g.add(pivo);
+                estado.glb.prontos++;
+            }).catch(erro => {
+                if (geracao !== estado.geracao) return;
+                estado.glb.erros.push(`${o.nome || o.id}: ${erro.message}`);
+                console.warn("Modelo 3D de", o.nome || o.id, "não abriu:", erro.message);
+            });
+        }
+        // Galpão: a origem do GLB vai em (x, y) da planta, girado e em escala
+        function colocarGalpao(gp, geracao) {
+            estado.glb.pedidos++;
+            modeloGlb(gp.modelo).then(modelo => {
+                if (geracao !== estado.geracao) return;
+                const copia = modelo.clone(true);
+                const pivo = new THREE.Group();
+                pivo.position.copy(mundo(gp.x, gp.y));
+                pivo.rotation.y = (gp.rotacao || 0) * Math.PI / 180;
+                pivo.scale.setScalar(gp.escala || 1);
+                pivo.add(copia);
+                grupos.galpao.add(pivo);
+                estado.glb.prontos++;
+            }).catch(erro => {
+                if (geracao !== estado.geracao) return;
+                estado.glb.erros.push(`galpão: ${erro.message}`);
+                console.warn("Modelo 3D do galpão não abriu:", erro.message);
+            });
         }
 
         // A planta inteira cabe na tela (pela largura ou pela altura do mapa)
@@ -940,7 +1058,11 @@ const Planta3D = (function () {
             (p.layout || []).forEach(o => { soma += o.x * 3.1 + o.y * 7.3 + o.largura * 11 + o.profundidade * 13 + (o.rotacao || 0) + (o.altura || 0) * 17 + o.tipo.length; });
             (p.nos || []).forEach(n => { soma += n.x * 5.7 + n.y * 2.9 + n.tipo.length; });
             (p.segmentos || []).forEach(s => { soma += (s.raio || 0) * 19 + s.tipo.length + (s.guia || "").length * 23; });
-            return `${p.revisao}|${p.dimensoes.largura}x${p.dimensoes.altura}|${(p.layout || []).length}|${(p.segmentos || []).length}|${(p.nos || []).length}|${soma.toFixed(3)}|${escuro()}`;
+            (p.layout || []).forEach(o => { if (o.modelo3d) soma += parseInt(o.modelo3d.slice(0, 6), 16) / 1e5 + (o.ajuste3d === "real" ? 29 : 31); });
+            const d = p.desenho, gp = p.galpao3d;
+            const extra = (d ? `${d.linhas.length},${d.x},${d.y},${d.rotacao},${d.escala},${d.opacidade},${d.camadas.map(c => c.uso[0] + (c.visivel === false ? 0 : 1)).join("")}` : "-")
+                + "|" + (gp ? `${gp.modelo},${gp.x},${gp.y},${gp.rotacao},${gp.escala}` : "-");
+            return `${extra}|${p.revisao}|${p.dimensoes.largura}x${p.dimensoes.altura}|${(p.layout || []).length}|${(p.segmentos || []).length}|${(p.nos || []).length}|${soma.toFixed(3)}|${escuro()}`;
         }
 
         function atualizar(mapa) {
@@ -968,7 +1090,9 @@ const Planta3D = (function () {
             girar: v => { estado.girar = v === undefined ? !estado.girar : Boolean(v); return estado.girar; },
             depurar: () => ({ dado: estado.seguir && estado.agvs.get(estado.seguir)?.dados ? [estado.agvs.get(estado.seguir).dados.x, estado.agvs.get(estado.seguir).dados.y] : null, alvo: estado.alvo.toArray().map(v => +v.toFixed(2)), cam: camera.position.toArray().map(v => +v.toFixed(2)), dist: estado.distancia, el: estado.elevacao,
                 t1: estado.seguir && estado.agvs.get(estado.seguir) ? [estado.agvs.get(estado.seguir).x, estado.agvs.get(estado.seguir).y] : null, aspect: camera.aspect, w: canvas.width, h: canvas.height }),
-            estado: () => ({ agvs: estado.agvs.size, objetos: grupos.objetos.children.length, fitas: grupos.fitas.children.length, seguir: estado.seguir, girar: estado.girar, vista: estado.vista }),
+            estado: () => ({ agvs: estado.agvs.size, objetos: grupos.objetos.children.length, fitas: grupos.fitas.children.length, seguir: estado.seguir, girar: estado.girar, vista: estado.vista,
+                desenho: grupos.desenho.children.length, paredesDesenho: estado.paredesDesenho || 0, galpao: grupos.galpao.children.length,
+                glb: Object.assign({}, estado.glb, { comModelo: grupos.objetos.children.filter(g => g.children.some(c => c.userData.glbObjeto)).length }) }),
             canvas
         };
     }

@@ -451,13 +451,39 @@ const AgvVirtual = (function () {
         return Object.values(agvs).filter(a => a.virtual).map(a => a.id).sort();
     }
 
-    function criarNovo() {
+    // Como o modelo muda o Atta virtual (0.16.1): forma no 3D, o que a estação
+    // aceita e a rota (o rebocador carregado não gira no ponto nem anda de ré)
+    function textoModelo(id) {
+        const m = typeof Modelos !== "undefined" ? Modelos.porId(id) : null;
+        if (!m) return "Sem modelo: a planta e os postos que escolhem modelo não mandam missão para ele.";
+        const p = Modelos.perfil(m)?.carregado || {};
+        const modulo = Modelos.MODULOS[m.modulo];
+        const comCarga = p.gira === false ? `com carga não gira no ponto nem anda de lado${p.raioMinimo ? `, curva de no mínimo ${String(p.raioMinimo).replace(".", ",")} m` : ""}${p.comboio ? `, comboio de ${String(p.comboio).replace(".", ",")} m` : ""}` : "gira no ponto e anda de lado, vazio ou carregado";
+        return `${modulo ? modulo[0] + ": " + modulo[1] : ""}. ${comCarga.charAt(0).toUpperCase() + comCarga.slice(1)}. As missões e os postos tratam este virtual como um ${m.nome} de verdade.`;
+    }
+    function opcoesModelos(atual) {
+        const lista = typeof Modelos !== "undefined" ? Modelos.disponiveis() : [];
+        return lista.map(m => `<option value="${escaparHtml(m.id)}" ${m.id === atual ? "selected" : ""}>${escaparHtml(m.nome)} · ${escaparHtml((Modelos.MODULOS[m.modulo] || [m.modulo])[0])}</option>`).join("")
+            || `<option value="">Sem modelos no catálogo</option>`;
+    }
+    function trocarModelo(id, modelo) {
+        if (!agvs[id]) return;
+        agvs[id].modelo = modelo || null;
+        salvarAgvsFrota();
+        renderizarFrota();
+        if (typeof agendarAtualizacaoTela === "function") agendarAtualizacaoTela();
+        ui.aviso(`AGV ${id} agora é um ${Modelos.nome(modelo) || "AGV sem modelo"}.`, "sucesso");
+        renderizarTela();
+    }
+
+    function criarNovo(modelo) {
         let n = 1;
         while (agvs["V" + n]) n++;
         const id = "V" + n;
         agvs[id] = criarAGV(id, `Virtual ${n}`);
-        // o virtual já nasce do primeiro modelo do catálogo (dá para trocar em editar)
-        if (typeof Modelos !== "undefined" && Modelos.disponiveis()[0]) agvs[id].modelo = Modelos.disponiveis()[0].id;
+        // 0.16.1: nasce do modelo escolhido ao lado do botão (o primeiro do catálogo, se nenhum)
+        const escolhido = modelo || document.getElementById("virtualNovoModelo")?.value;
+        if (typeof Modelos !== "undefined" && (Modelos.porId(escolhido) || Modelos.disponiveis()[0])) agvs[id].modelo = (Modelos.porId(escolhido) || Modelos.disponiveis()[0]).id;
         agvs[id].virtual = true;
         // começa numa estação da planta, se houver
         const planta = plantaPublicada();
@@ -772,6 +798,20 @@ const AgvVirtual = (function () {
         }
         ["virtualRemover", "virtualAbrirPainel"].forEach(i => { const b = document.getElementById(i); if (b) b.disabled = !selecionado; });
 
+        // modelo (0.16.1)
+        const selNovo = document.getElementById("virtualNovoModelo");
+        if (selNovo && document.activeElement !== selNovo) {
+            const assin = typeof Modelos !== "undefined" ? Modelos.disponiveis().map(m => m.id).join(",") : "";
+            if (selNovo.dataset.assinatura !== assin) { const v = selNovo.value; selNovo.innerHTML = opcoesModelos(v); if (v) selNovo.value = v; selNovo.dataset.assinatura = assin; }
+        }
+        const selModelo = document.getElementById("virtualModelo");
+        if (selModelo && document.activeElement !== selModelo) {
+            selModelo.disabled = !selecionado;
+            selModelo.innerHTML = selecionado ? opcoesModelos(agvs[selecionado]?.modelo) : "<option>Escolha um AGV virtual</option>";
+            const info = document.getElementById("virtualModeloInfo");
+            if (info) info.textContent = selecionado ? textoModelo(agvs[selecionado]?.modelo) : "";
+        }
+
         // pontos para posicionar
         const select = document.getElementById("virtualPonto");
         if (select) {
@@ -802,6 +842,7 @@ const AgvVirtual = (function () {
     function ligarBotoes() {
         const $ = id => document.getElementById(id);
         $("virtualNovo")?.addEventListener("click", () => criarNovo().catch(e => ui.aviso("Não foi possível iniciar o AGV virtual: " + e.message, "erro")));
+        $("virtualModelo")?.addEventListener("change", e => { if (selecionado) trocarModelo(selecionado, e.target.value); });
         $("virtualFrotaExemplo")?.addEventListener("click", () => criarFrotaExemplo().catch(e => ui.aviso("Não foi possível criar a frota: " + e.message, "erro")));
         $("virtualLista")?.addEventListener("click", e => {
             const b = e.target.closest("[data-virtual]");
@@ -929,7 +970,7 @@ const AgvVirtual = (function () {
     }
 
     return {
-        ligar, desligar, receberComando, pulsar, alternar, posicionar, abrir, criarNovo, criarFrotaExemplo, adicionarObstaculo,
+        ligar, desligar, receberComando, pulsar, alternar, posicionar, abrir, criarNovo, criarFrotaExemplo, trocarModelo, adicionarObstaculo,
         retomar, ligarBotoes, instancias, BITS, esquecerTrafego,
         _passo: passo
     };

@@ -168,10 +168,14 @@
         return {
             versao: VERSAO,
             revisao: 0,
+            modelos016: true,
             nome,
             dimensoes: { largura: 20, altura: 12 },
             grade: 0.5,
             fundo: null,
+            desenho: null,      // 0.17: DXF importado (importar-dxf.js)
+            modelos3d: [],      // 0.17: GLB importados [{ id, nome, tamanho }] (arquivos-3d.js)
+            galpao3d: null,     // 0.17: { modelo, x, y, rotacao, escala } o galpão em 3D
             layout: [],
             estacoes: [],
             nos: [],
@@ -361,6 +365,39 @@
        para b. Sempre o arco menor (até 180°). */
 
     const graus = r => r * 180 / Math.PI;
+
+    // DXF importado (0.17): confere a estrutura e os números; inválido = sem desenho
+    function normalizarDesenho(d) {
+        if (!d || typeof d !== "object" || !Array.isArray(d.linhas) || !Array.isArray(d.camadas)) return null;
+        const n = (v, padrao) => Number.isFinite(Number(v)) ? Number(v) : padrao;
+        const camadas = d.camadas.slice(0, 500).map(c => ({
+            nome: String(c.nome || "0").slice(0, 80), linhas: Math.max(0, n(c.linhas, 0) | 0), visivel: c.visivel !== false,
+            uso: ["fundo", "paredes", "oculta"].includes(c.uso) ? c.uso : "fundo"
+        }));
+        const linhas = d.linhas.filter(l => l && Array.isArray(l.p) && l.p.length >= 4 && l.p.length % 2 === 0 && Number.isInteger(l.c) && l.c >= 0 && l.c < camadas.length)
+            .map(l => ({ c: l.c, p: l.p.map(v => n(v, 0)) }));
+        if (!linhas.length) return null;
+        return {
+            nome: String(d.nome || "desenho.dxf").slice(0, 80), unidade: String(d.unidade || ""), fator: n(d.fator, 1),
+            camadas, linhas, x: n(d.x, 0), y: n(d.y, 0), rotacao: n(d.rotacao, 0), escala: Math.max(1e-4, n(d.escala, 1)),
+            opacidade: Math.max(0.05, Math.min(1, n(d.opacidade, 0.55))), largura: n(d.largura, 0), altura: n(d.altura, 0)
+        };
+    }
+
+    // Linhas das camadas "paredes" do desenho, já na posição da planta
+    function paredesDoDesenho(planta) {
+        const d = planta.desenho;
+        const lista = [];
+        if (!d) return lista;
+        const a = (d.rotacao || 0) * Math.PI / 180, e = d.escala || 1, c = Math.cos(a), s = Math.sin(a);
+        const pp = (x, y) => ({ x: d.x + e * (x * c - y * s), y: d.y + e * (x * s + y * c) });
+        d.linhas.forEach(l => {
+            const cam = d.camadas[l.c];
+            if (!cam || cam.uso !== "paredes") return;
+            for (let i = 2; i < l.p.length; i += 2) lista.push([pp(l.p[i - 2], l.p[i - 1]), pp(l.p[i], l.p[i + 1])]);
+        });
+        return lista;
+    }
 
     function geometriaCurva(planta, s) {
         const a = noPorId(planta, s.a), b = noPorId(planta, s.b);
@@ -652,6 +689,24 @@
             if (s.ramal) s.ramal = true; else delete s.ramal;
         });
         if (!GUIAS[p.guiaPadrao]) delete p.guiaPadrao;
+        // 0.16.1: até a 0.15 o protótipo se chamava "atta-g-o"; agora ele é o "atta-e-o"
+        // e "atta-g-o" é a família de garras. Planta antiga: a estação que era do
+        // protótipo continua do protótipo.
+        p.desenho = normalizarDesenho(p.desenho);
+        // modelos 3D (GLB): só a referência; o arquivo fica no Storage / no navegador
+        p.modelos3d = (Array.isArray(p.modelos3d) ? p.modelos3d : []).filter(m => m && /^[0-9a-f]{20}$/.test(m.id))
+            .map(m => ({ id: m.id, nome: String(m.nome || "modelo.glb").slice(0, 80), tamanho: Math.max(0, Number(m.tamanho) || 0) }));
+        const temModelo = id => p.modelos3d.some(m => m.id === id);
+        p.layout.forEach(o => {
+            if (o.modelo3d && temModelo(o.modelo3d)) o.ajuste3d = o.ajuste3d === "real" ? "real" : "caber";
+            else { delete o.modelo3d; delete o.ajuste3d; }
+        });
+        const g = p.galpao3d;
+        p.galpao3d = g && temModelo(g.modelo) ? { modelo: g.modelo, x: Number(g.x) || 0, y: Number(g.y) || 0, rotacao: Number(g.rotacao) || 0, escala: Math.max(0.0001, Number(g.escala) || 1) } : null;
+        if (!(entrada && entrada.modelos016)) {
+            (p.estacoes || []).forEach(e => { if (Array.isArray(e.modelos)) e.modelos = [...new Set(e.modelos.map(m => m === "atta-g-o" ? "atta-e-o" : m))]; });
+            p.modelos016 = true;
+        }
         return p;
     }
 
@@ -959,6 +1014,16 @@
                     avisos.push({ alvo: s1.id, msg: `Segmentos ${s1.id} e ${s2.id} se cruzam sem um ponto no cruzamento.` });
                 }
             }
+        }
+
+        // Paredes do desenho importado (0.17): a fita não atravessa
+        const paredes = paredesDoDesenho(planta);
+        if (paredes.length) {
+            linhas.forEach(l => {
+                const atravessa = paredes.find(([a, b]) => !(Math.max(a.x, b.x) < l.x0 || Math.min(a.x, b.x) > l.x1 || Math.max(a.y, b.y) < l.y0 || Math.min(a.y, b.y) > l.y1) &&
+                    l.pts.some((p, i) => i > 0 && segmentosSeCruzam(l.pts[i - 1], p, a, b)));
+                if (atravessa) erros.push({ alvo: l.s.id, msg: `Segmento ${l.s.id} atravessa uma parede do desenho (${planta.desenho.nome}). Se não é parede, marque a camada como "só fundo".` });
+            });
         }
 
         // Faixa de pedestre e área livre: o Atta nunca para em cima (0.16).
@@ -1961,7 +2026,9 @@
         geometriaCurva, rumoExatoSaida, rumoExatoChegada, pontoNoSegmento, pontosSegmento, segmentoCruzaRetangulo,
         faixasNoSegmento, bordaNoPonto, descreverSegmento, temFita, guiaSegmento,
         normalizarPerfil, recusaSegmento, estacaoAceita, podeGirar, avisosDoModelo,
-        dividirSegmento, criarCurvaConcordancia, criarRamal
+        dividirSegmento, criarCurvaConcordancia, criarRamal,
+        // 0.17
+        normalizarDesenho, paredesDoDesenho
     };
 
     if (typeof module !== "undefined" && module.exports) {

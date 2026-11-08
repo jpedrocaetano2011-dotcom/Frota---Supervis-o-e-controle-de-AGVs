@@ -801,7 +801,7 @@
         if (acao === "ajustar") {
             const p = programa(postoId, missao);
             if (!p) return;
-            const r = await salvar(postoId, missao, cfgParaSalvar(Object.assign({}, p, { dura_min: Number(b.dataset.dura) }), true));
+            const r = await ajustarConsumo(postoId, missao, Number(b.dataset.dura));
             ui.aviso(r.ok ? `Agora o material dura ${num(b.dataset.dura)} min.` : r.erro, r.ok ? "sucesso" : "erro");
             desenhar(); return;
         }
@@ -848,8 +848,18 @@
         setInterval(() => { if (!naNuvem() || agora() - ultimaLeitura > 60000) carregar(); }, 30000);
     }
 
+    // Mudar quanto o material dura (a sugestão de ajuste e a Mira Pro usam)
+    async function ajustarConsumo(posto, missao, dura) {
+        const p = programa(posto, missao);
+        if (!p) return { ok: false, erro: "Este botão não tem programação." };
+        if (p.modo !== "consumo") return { ok: false, erro: "Esta programação não é pelo consumo." };
+        if (!(dura > 0)) return { ok: false, erro: "Tempo inválido." };
+        if (!podeProgramar()) return { ok: false, erro: "Seu perfil não permite mudar a programação." };
+        return salvar(posto, missao, cfgParaSalvar(Object.assign({}, p, { dura_min: Number(dura) }), true));
+    }
+
     raiz.Programacao = Object.assign({}, Nucleo, {
-        iniciar, carregar, abrir, desenhar, verificar, salvar, pausar, pular, situacaoDe, programa, textoAgora, comoPede,
+        iniciar, carregar, abrir, desenhar, verificar, salvar, pausar, pular, ajustarConsumo, situacaoDe, programa, textoAgora, comoPede,
         htmlTablet, htmlPessoas, podePausar, podeProgramar, aoPedidoManual, capacidade, ouvir: f => ouvintes.add(f),
         lista: () => programas.slice(), eventos: () => eventos.slice(), pessoas: () => pessoas.slice()
     });

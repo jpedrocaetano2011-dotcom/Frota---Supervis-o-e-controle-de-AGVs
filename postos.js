@@ -424,7 +424,7 @@ const TelaPosto = (function () {
                     <div class="posto-pedido-status">${esc(s.titulo)}</div>
                     <div class="posto-pedido-detalhe">${esc(s.detalhe)}</div>
                     <div class="posto-pedido-acoes">${acoes.join("")}</div>
-                </div>`;
+                </div>${typeof Programacao !== "undefined" ? Programacao.htmlTablet(posto, b, i) : ""}`;
             }
             const junto = botaoJunto(posto, b);
             return `<div class="posto-botao-bloco">

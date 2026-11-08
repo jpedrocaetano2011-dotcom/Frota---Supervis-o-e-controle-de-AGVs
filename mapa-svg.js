@@ -467,6 +467,38 @@
         });
     }
 
+    // O desenho em coordenadas dele mesmo, com uma matriz: girar, escalar,
+    // mover e virar o y do SVG. As linhas viram um "path" por camada, guardado
+    // (o mapa redesenha toda hora; o desenho só muda quando alguém mexe nele).
+    const cacheDXF = new WeakMap();
+    function caminhosDXF(d) {
+        const chave = d.camadas.map(c => c.visivel + c.uso).join();
+        let item = cacheDXF.get(d.linhas);
+        if (item && item.chave === chave) return item.caminhos;
+        const caminhos = d.camadas.map(() => []);
+        d.linhas.forEach(l => {
+            const cam = d.camadas[l.c];
+            if (!cam || !cam.visivel || cam.uso === "oculta") return;
+            let txt = "M" + l.p[0] + " " + l.p[1];
+            for (let i = 2; i < l.p.length; i += 2) txt += "L" + l.p[i] + " " + l.p[i + 1];
+            caminhos[l.c].push(txt);
+        });
+        item = { chave, caminhos: caminhos.map(x => x.join("")) };
+        cacheDXF.set(d.linhas, item);
+        return item.caminhos;
+    }
+    function desenharDXF(mapa, p, grupo, t, H) {
+        const d = p.desenho;
+        const a = (d.rotacao || 0) * Math.PI / 180, e = d.escala || 1;
+        const m = [e * Math.cos(a), -e * Math.sin(a), -e * Math.sin(a), -e * Math.cos(a), d.x, H - d.y].map(v => Math.round(v * 1e6) / 1e6);
+        const g = el("g", { transform: `matrix(${m.join(" ")})`, opacity: d.opacidade ?? 0.55, "pointer-events": "none", "data-desenho": d.nome }, grupo);
+        caminhosDXF(d).forEach((caminho, i) => {
+            if (!caminho) return;
+            const parede = d.camadas[i].uso === "paredes";
+            el("path", { d: caminho, fill: "none", stroke: parede ? t.parede : t.muted, "stroke-width": parede ? 2 : 1, "vector-effect": "non-scaling-stroke", "stroke-linejoin": "round", "data-camada": d.camadas[i].nome }, g);
+        });
+    }
+
     function desenhar(mapa) {
         const p = mapa.planta;
         const c = mapa.camadas;
@@ -495,6 +527,9 @@
                 opacity: f.opacidade ?? 0.5, preserveAspectRatio: "none", "pointer-events": "none"
             }, c.fundo);
         }
+
+        // ---------- desenho do CAD (DXF, 0.17) ----------
+        if (p.desenho && mapa.opcoes.desenho !== false) desenharDXF(mapa, p, c.fundo, t, H);
 
         // ---------- grade ----------
         if (mapa.opcoes.grade) {

@@ -24,7 +24,9 @@
         LATERAL:    { tecla: "l", dica: "Troca lateral: clique num ponto de uma faixa e depois no ponto em frente, na faixa paralela. O AGV anda de lado entre eles, sem fita." },
         TAG:        { tecla: "t", dica: "Clique sobre uma linha para colocar uma tag RFID intermediária." },
         OBJETO:     { tecla: "o", dica: "Arraste para desenhar o objeto escolhido (ou clique para o tamanho padrão)." },
-        ESCALA:     { tecla: "k", dica: "Clique em dois pontos de distância conhecida (na imagem de fundo) para corrigir a escala." }
+        ESCALA:     { tecla: "k", dica: "Clique em dois pontos de distância conhecida (na imagem de fundo) para corrigir a escala." },
+        // 0.17: só pelo painel do desenho (sem tecla)
+        ALINHAR:    { tecla: "", dica: "Alinhar o desenho: clique num canto do desenho e depois onde ele fica na planta; faça o mesmo com um segundo canto." }
     };
 
     const estado = {
@@ -137,13 +139,16 @@
     function instantaneo() {
         // A imagem de fundo (texto grande) e compartilhada, nao copiada.
         const imagem = estado.rascunho.fundo?.imagem;
-        const copia = JSON.parse(JSON.stringify(estado.rascunho, (k, v) => (k === "imagem" ? undefined : v)));
-        return { planta: copia, imagem };
+        // 0.17: as linhas do DXF também (são as mesmas em todas as versões do desfazer)
+        const linhasDesenho = estado.rascunho.desenho?.linhas;
+        const copia = JSON.parse(JSON.stringify(estado.rascunho, (k, v) => (k === "imagem" || (k === "linhas" && Array.isArray(v)) ? undefined : v)));
+        return { planta: copia, imagem, linhasDesenho };
     }
 
     function restaurar(foto) {
         const planta = Planta.clonar(foto.planta);
         if (planta.fundo && foto.imagem) planta.fundo.imagem = foto.imagem;
+        if (planta.desenho && foto.linhasDesenho) planta.desenho.linhas = foto.linhasDesenho;
         estado.rascunho = Planta.normalizar(planta);
     }
 
@@ -478,6 +483,103 @@
         return "Referência visual.";
     }
 
+    // Modelo 3D próprio (GLB, 0.17) de um objeto
+    function blocoModelo3d(o) {
+        const ref = o.modelo3d ? (p().modelos3d || []).find(m => m.id === o.modelo3d) : null;
+        return `<div class="editor-bloco">
+            <span class="editor-subtitulo">Modelo 3D</span>
+            ${ref ? `<p class="editor-texto"><strong>${esc(ref.nome)}</strong> · ${ref.tamanho >= 104858 ? (ref.tamanho / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(ref.tamanho / 1024)) + " kB"}</p>
+                ${campoSelect("Tamanho no 3D", "objAjuste3d", o.ajuste3d || "caber", [["caber", "Cabe no retângulo do objeto"], ["real", "Tamanho real do arquivo (metros)"]])}
+                <div class="editor-acoes"><button class="btn btn-mini" data-acao="escolherGlbObjeto">Trocar</button><button class="btn btn-mini" data-acao="removerGlbObjeto">Voltar ao modelo padrão</button></div>`
+                : `<p class="editor-texto suave">No 3D aparece o modelo padrão da biblioteca. Para mostrar a máquina de verdade, use o GLB do fabricante ou do SketchUp/Blender (até ${Arquivos3D.LIMITE / 1048576} MB).</p>
+                <button class="btn btn-mini" data-acao="escolherGlbObjeto">Usar um modelo 3D (GLB)</button>`}
+        </div>`;
+    }
+    // O galpão em 3D (GLB, 0.17) no painel da planta
+    function blocoGalpao3d(planta) {
+        const g = planta.galpao3d;
+        const ref = g ? (planta.modelos3d || []).find(m => m.id === g.modelo) : null;
+        return `<div class="editor-bloco">
+            <span class="editor-subtitulo">Galpão em 3D (GLB)</span>
+            ${ref ? `<p class="editor-texto"><strong>${esc(ref.nome)}</strong> · ${ref.tamanho >= 104858 ? (ref.tamanho / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(ref.tamanho / 1024)) + " kB"}</p>
+                <div class="editor-linha">${campoNumero("X", "galpaoX", g.x, 0.05, "m")}${campoNumero("Y", "galpaoY", g.y, 0.05, "m")}</div>
+                <div class="editor-linha">${campoNumero("Rotação", "galpaoRotacao", g.rotacao, 0.5, "°")}${campoNumero("Escala", "galpaoEscala", g.escala, 0.001, "×", 'min="0.0001"')}</div>
+                <div class="editor-acoes"><button class="btn btn-mini" data-acao="escolherGlbGalpao">Trocar</button><button class="btn btn-mini btn-perigo" data-acao="removerGlbGalpao">Remover</button></div>`
+                : `<p class="editor-texto suave">O prédio (paredes, pilares, estrutura) exportado do Revit, SketchUp ou Blender, em metros. Exporte sem o telhado para ver o lado de dentro. Aparece só na vista 3D; a origem do arquivo vai no X/Y abaixo.</p>
+                <button class="btn btn-mini" data-acao="escolherGlbGalpao">Importar GLB do galpão</button>`}
+        </div>`;
+    }
+    // Tira da lista os modelos que nenhum objeto (nem o galpão) usa mais
+    function limparModelos3d(planta) {
+        const usados = new Set(planta.layout.map(o => o.modelo3d).filter(Boolean).concat(planta.galpao3d ? [planta.galpao3d.modelo] : []));
+        planta.modelos3d = (planta.modelos3d || []).filter(m => usados.has(m.id));
+    }
+    async function importarGlb(arquivo) {
+        const destino = estado.glbDestino;
+        if (!destino) return;
+        try {
+            ui.aviso(`Enviando ${arquivo.name}…`, "info");
+            const ref = await Arquivos3D.salvar(arquivo);
+            registrarDesfazer();
+            const planta = p();
+            planta.modelos3d = planta.modelos3d || [];
+            if (!planta.modelos3d.some(m => m.id === ref.id)) planta.modelos3d.push(ref);
+            if (destino.tipo === "objeto") {
+                const o = planta.layout.find(x => x.id === destino.id);
+                if (!o) return;
+                o.modelo3d = ref.id; o.ajuste3d = o.ajuste3d || "caber";
+            } else {
+                planta.galpao3d = Object.assign({ x: 0, y: 0, rotacao: 0, escala: 1 }, planta.galpao3d || {}, { modelo: ref.id });
+            }
+            limparModelos3d(planta);
+            alterado();
+            ui.aviso(`${ref.nome} pronto. Veja na vista 3D (botão 3D no mapa).`, "sucesso");
+        } catch (e) {
+            ui.aviso(e.message, "erro");
+        }
+    }
+
+    // Desenho do CAD (DXF, 0.17) no painel da planta
+    function blocoDesenho(planta) {
+        const d = planta.desenho;
+        if (!d) return `<div class="editor-bloco">
+                <span class="editor-subtitulo">Desenho do CAD (DXF)</span>
+                <p class="editor-texto suave">O layout do AutoCAD por baixo da planta, em escala. Camadas de parede viram sólidas (a fita não atravessa) e paredes no 3D. DWG: no AutoCAD, Salvar como › DXF.</p>
+                <button class="btn btn-mini" data-acao="escolherDxf">Importar DXF</button>
+            </div>`;
+        const alinhando = estado.ferramenta === "ALINHAR";
+        const passo = estado.alinhar?.pontos?.length || 0;
+        const textosPasso = ["Clique num canto do desenho (ele pega o canto mais perto).", "Agora clique onde esse canto fica na planta.", "Clique num segundo canto do desenho, longe do primeiro.", "Clique onde o segundo canto fica na planta."];
+        return `<div class="editor-bloco">
+                <span class="editor-subtitulo">Desenho do CAD (DXF)</span>
+                <p class="editor-texto"><strong>${esc(d.nome)}</strong> · ${Planta.arred(d.largura * d.escala, 1)} × ${Planta.arred(d.altura * d.escala, 1)} m · ${esc(d.unidade || "")}</p>
+                <label class="editor-campo"><span>Opacidade</span><input type="range" min="0.05" max="1" step="0.05" data-campo="desenhoOpacidade" value="${d.opacidade}"></label>
+                <div class="editor-linha">
+                    ${campoNumero("X", "desenhoX", d.x, 0.05, "m")}
+                    ${campoNumero("Y", "desenhoY", d.y, 0.05, "m")}
+                </div>
+                <div class="editor-linha">
+                    ${campoNumero("Rotação", "desenhoRotacao", Planta.arred(d.rotacao, 2), 0.5, "°")}
+                    ${campoNumero("Escala", "desenhoEscala", d.escala, 0.001, "×", 'min="0.0001"')}
+                </div>
+                <div class="editor-camadas">
+                    ${d.camadas.map((c, i) => c.linhas ? `<div class="editor-camada">
+                        <label class="config-chave"><input type="checkbox" data-campo="camadaVisivel" data-indice="${i}" ${c.visivel ? "checked" : ""}><span>${esc(c.nome)}</span></label>
+                        <select data-campo="camadaUso" data-indice="${i}" aria-label="Uso da camada ${esc(c.nome)}">
+                            ${[["fundo", "Só fundo"], ["paredes", "Paredes"], ["oculta", "Ocultar"]].map(([v, t]) => `<option value="${v}" ${c.uso === v ? "selected" : ""}>${t}</option>`).join("")}
+                        </select><small class="suave">${c.linhas}</small></div>` : "").join("")}
+                </div>
+                ${alinhando ? `<div class="editor-aviso">Alinhar (${passo + 1}/4): ${textosPasso[Math.min(3, passo)]}</div>
+                    <label class="config-chave"><input type="checkbox" data-campo="alinharEscala" ${estado.alinhar?.escala ? "checked" : ""}><span>Ajustar a escala também (o desenho não está em metros)</span></label>` : ""}
+                <div class="editor-acoes">
+                    <button class="btn btn-mini" data-acao="${alinhando ? "cancelarAlinhar" : "alinharDesenho"}">${alinhando ? "Cancelar alinhamento" : "Alinhar por 2 pontos"}</button>
+                    <button class="btn btn-mini" data-acao="areaDoDesenho">Área = desenho</button>
+                    <button class="btn btn-mini btn-perigo" data-acao="removerDesenho">Remover</button>
+                </div>
+                ${(d.avisos || []).length ? `<p class="editor-texto suave">${(d.avisos || []).map(esc).join(" ")}</p>` : ""}
+            </div>`;
+    }
+
     function campo(rotulo, nomeCampo, valor, extra = "") {
         return `<label class="editor-campo"><span>${rotulo}</span><input data-campo="${nomeCampo}" value="${esc(valor)}" ${extra}></label>`;
     }
@@ -540,6 +642,8 @@
                         <p class="editor-texto suave">Importe a planta baixa (foto, PDF exportado como imagem, CAD) para desenhar por cima.</p>
                         <button class="btn btn-mini" data-acao="escolherImagem">Importar imagem</button>`}
                 </div>
+                ${blocoDesenho(planta)}
+                ${blocoGalpao3d(planta)}
                 <div class="editor-bloco">
                     <span class="editor-subtitulo">Resumo</span>
                     <p class="editor-texto">${(planta.estacoes || []).length} estações (${planta.nos.filter(n => n.tipo === "ESTACAO").length} acessos) · ${planta.nos.length} pontos · ${planta.segmentos.filter(x => Planta.tipoSegmento(x) === "LINHA").length} linhas · ${planta.segmentos.filter(x => Planta.tipoSegmento(x) === "LATERAL").length} trocas laterais · ${planta.layout.length} objetos</p>
@@ -775,6 +879,7 @@
                 ${o.tipo === "ZONA_LENTA" ? campoNumero("Velocidade máx. na zona", "objVelocidade", o.velocidadeMaxima || "", 0.005, "m/s", `min="0" max="${Planta.LIMITES.velocidadeMaxima}"`) : ""}
                 ${(Planta.TIPOS_LAYOUT[o.tipo]?.altura || 0) > 0 ? campoNumero("Altura (vista 3D)", "objAltura", o.altura || "", 0.1, "m", `min="0" placeholder="${Planta.TIPOS_LAYOUT[o.tipo].altura}"`) : ""}
                 <p class="editor-texto suave">${esc(textoRegraObjeto(o))}</p>
+                ${(Planta.TIPOS_LAYOUT[o.tipo]?.altura || 0) > 0 || o.modelo3d ? blocoModelo3d(o) : ""}
                 <div class="editor-acoes">
                     <button class="btn btn-mini" data-acao="duplicarObjeto">Duplicar</button>
                     <button class="btn btn-mini btn-perigo" data-acao="excluir">Excluir</button>
@@ -799,6 +904,7 @@
         const chavesRamal = { ramalDe: "de", ramalAte: "ate", ramalAfastamento: "afastamento", ramalRaio: "raio", ramalLado: "lado" };
         if (chavesRamal[nome]) { estado.ramal = Object.assign({}, estado.ramal, { [chavesRamal[nome]]: nome === "ramalLado" ? valor : num }); return; }
         if (nome === "cantoRaio") { estado.raioCanto = num; return; }
+        if (nome === "alinharEscala") { estado.alinhar = Object.assign({ pontos: [] }, estado.alinhar, { escala: alvo.checked }); return; }
         registrarDesfazer();
 
         switch (nome) {
@@ -807,6 +913,17 @@
             case "plantaAltura": if (num >= 1) planta.dimensoes.altura = num; break;
             case "plantaGrade": if (num >= 0.05) planta.grade = num; break;
             case "fundoOpacidade": planta.fundo.opacidade = num; break;
+            case "desenhoOpacidade": planta.desenho.opacidade = num; break;
+            case "galpaoX": planta.galpao3d.x = num || 0; break;
+            case "galpaoY": planta.galpao3d.y = num || 0; break;
+            case "galpaoRotacao": planta.galpao3d.rotacao = ((num || 0) % 360 + 360) % 360; break;
+            case "galpaoEscala": if (num > 0) planta.galpao3d.escala = num; break;
+            case "desenhoX": planta.desenho.x = num || 0; break;
+            case "desenhoY": planta.desenho.y = num || 0; break;
+            case "desenhoRotacao": planta.desenho.rotacao = ((num || 0) % 360 + 360) % 360; break;
+            case "desenhoEscala": if (num > 0) planta.desenho.escala = num; break;
+            case "camadaVisivel": planta.desenho.camadas[Number(alvo.dataset.indice)].visivel = alvo.checked; break;
+            case "camadaUso": planta.desenho.camadas[Number(alvo.dataset.indice)].uso = valor; break;
             case "fundoX": planta.fundo.x = num; break;
             case "fundoY": planta.fundo.y = num; break;
             case "fundoLargura":
@@ -889,6 +1006,7 @@
                 case "objRotacao": o.rotacao = ((num % 360) + 360) % 360; break;
                 case "objVelocidade": o.velocidadeMaxima = Math.max(0, Math.min(Planta.LIMITES.velocidadeMaxima, num || 0)); break;
                 case "objAltura": if (num > 0) o.altura = Planta.arred(num, 2); else delete o.altura; break;
+                case "objAjuste3d": o.ajuste3d = valor === "real" ? "real" : "caber"; break;
             }
         }
         alterado();
@@ -998,6 +1116,39 @@
                 return;
             }
             case "escolherImagem": document.getElementById("editorArquivoImagem")?.click(); return;
+            case "escolherDxf": document.getElementById("editorArquivoDxf")?.click(); return;
+            case "escolherGlbObjeto": estado.glbDestino = { tipo: "objeto", id: estado.selecao?.id }; document.getElementById("editorArquivoGlb")?.click(); return;
+            case "escolherGlbGalpao": estado.glbDestino = { tipo: "galpao" }; document.getElementById("editorArquivoGlb")?.click(); return;
+            case "removerGlbObjeto": {
+                const o = p().layout.find(x => x.id === estado.selecao?.id);
+                if (!o) return;
+                registrarDesfazer(); delete o.modelo3d; delete o.ajuste3d; limparModelos3d(p()); alterado();
+                return;
+            }
+            case "removerGlbGalpao": registrarDesfazer(); p().galpao3d = null; limparModelos3d(p()); alterado(); return;
+            case "alinharDesenho": estado.alinhar = { pontos: [], escala: false }; estado.selecao = null; selecionarFerramenta("ALINHAR"); return;
+            case "cancelarAlinhar": estado.alinhar = null; selecionarFerramenta("SELECIONAR"); return;
+            case "areaDoDesenho": {
+                const d = p().desenho;
+                if (!d) return;
+                registrarDesfazer();
+                const cantos = [[0, 0], [d.largura, 0], [0, d.altura], [d.largura, d.altura]].map(([x, y]) => Dxf.paraPlanta(d, x, y));
+                const minX = Math.min(...cantos.map(c => c.x)), minY = Math.min(...cantos.map(c => c.y));
+                if (minX < 0 || minY < 0) { d.x -= Math.min(0, minX); d.y -= Math.min(0, minY); }
+                p().dimensoes.largura = Planta.arred(Math.max(...cantos.map(c => c.x)) - Math.min(0, minX), 2);
+                p().dimensoes.altura = Planta.arred(Math.max(...cantos.map(c => c.y)) - Math.min(0, minY), 2);
+                estado.mapa.ajustar();
+                alterado();
+                return;
+            }
+            case "removerDesenho":
+                ui.confirmar({ titulo: "Remover o desenho do CAD?", texto: "Os pontos, linhas e objetos continuam onde estão.", confirmar: "Remover", perigo: true }).then(ok => {
+                    if (!ok) return;
+                    registrarDesfazer();
+                    p().desenho = null;
+                    alterado();
+                });
+                return;
             case "ferramentaEscala": selecionarFerramenta("ESCALA"); return;
             case "cancelarEscala": selecionarFerramenta("SELECIONAR"); return;
             case "aplicarEscala": {
@@ -1249,6 +1400,33 @@
         alterado();
     }
 
+    // DXF (0.17): lê, simplifica e põe por baixo da planta, no canto (0, 0)
+    async function importarDxf(arquivo) {
+        if (arquivo.size > 60 * 1024 * 1024) { ui.aviso("DXF maior que 60 MB: apague o que não interessa (textos, cotas, detalhes) e exporte de novo.", "erro"); return; }
+        if (/\.dwg$/i.test(arquivo.name)) { ui.aviso("DWG não dá para ler no navegador. No AutoCAD: Salvar como › DXF (ou converta com o ODA File Converter, que é grátis).", "erro"); return; }
+        try {
+            const texto = await arquivo.text();
+            const lido = Dxf.ler(texto);
+            const d = Dxf.paraDesenho(lido, arquivo.name);
+            registrarDesfazer();
+            const planta = p();
+            planta.desenho = Planta.normalizarDesenho(d);
+            planta.desenho.avisos = d.avisos;
+            // planta vazia: do tamanho do desenho
+            if (!planta.nos.length && !planta.layout.length) {
+                planta.dimensoes.largura = Math.max(1, Planta.arred(d.largura, 2));
+                planta.dimensoes.altura = Math.max(1, Planta.arred(d.altura, 2));
+            }
+            estado.mapa.ajustar();
+            alterado();
+            const paredes = d.camadas.filter(c => c.uso === "paredes" && c.linhas).map(c => c.nome);
+            ui.aviso(`Desenho importado: ${d.linhas.length} linhas em ${d.camadas.filter(c => c.linhas).length} camadas, ${Planta.arred(d.largura, 1)} × ${Planta.arred(d.altura, 1)} m (${d.unidade}).` +
+                (paredes.length ? ` Camadas como parede: ${paredes.join(", ")}.` : " Marque as camadas de parede no painel da planta.") + (d.avisos.length ? " " + d.avisos.join(" ") : ""), "sucesso");
+        } catch (e) {
+            ui.aviso("Não foi possível ler o DXF: " + e.message, "erro");
+        }
+    }
+
     function importarImagem(arquivo) {
         const leitor = new FileReader();
         leitor.onload = () => {
@@ -1439,6 +1617,36 @@
             return;
         }
 
+        if (ferramenta === "ALINHAR") {
+            const d = p().desenho;
+            if (!d) return;
+            const a = estado.alinhar || (estado.alinhar = { pontos: [], escala: false });
+            const pegar = a.pontos.length % 2 === 0;
+            if (pegar) {
+                // um canto do desenho (coordenada dele), o mais perto do clique
+                const v = Dxf.verticeMaisPerto(d, mundo.x, mundo.y, 20 / estado.mapa.pixelsPorMetro());
+                if (!v) { ui.aviso("Clique em cima de uma linha do desenho (perto de um canto).", "aviso"); return; }
+                a.pontos.push(v);
+            } else {
+                a.pontos.push(pontoAjustado(evento));
+            }
+            if (a.pontos.length === 4) {
+                const [a1, b1, a2, b2] = a.pontos;
+                try {
+                    registrarDesfazer();
+                    Object.assign(p().desenho, Dxf.alinharDoisPontos(p().desenho, a1, b1, a2, b2, a.escala));
+                    ui.aviso(`Desenho alinhado (girou ${Planta.arred(p().desenho.rotacao, 1)}°${a.escala ? `, escala ${p().desenho.escala}` : ""}).`, "sucesso");
+                    alterado();
+                } catch (e) { ui.aviso(e.message, "aviso"); }
+                estado.alinhar = null;
+                selecionarFerramenta("SELECIONAR");
+                return;
+            }
+            desenharMapa();
+            renderizarPropriedades();
+            return;
+        }
+
         if (ferramenta === "ESCALA") {
             const pt = { x: Planta.arred(mundo.x), y: Planta.arred(mundo.y) };
             if (estado.escala.length >= 2) estado.escala = [];
@@ -1548,6 +1756,14 @@
         if (estado.retangulo) {
             const r = estado.retangulo;
             el("rect", { x: Math.min(r.x0, r.x1), y: Y(Math.max(r.y0, r.y1)), width: Math.abs(r.x1 - r.x0), height: Math.abs(r.y1 - r.y0), fill: tema ? tema.accentSoft : "rgba(30,99,199,.12)", "fill-opacity": 0.6, stroke: cor, "stroke-width": 1, "stroke-dasharray": "4 3", "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, grupo);
+        }
+        if (estado.ferramenta === "ALINHAR" && estado.alinhar?.pontos?.length && p().desenho) {
+            const d = p().desenho;
+            estado.alinhar.pontos.forEach((q, i) => {
+                const w = i % 2 === 0 ? Dxf.paraPlanta(d, q.x, q.y) : q;
+                el("circle", { cx: w.x, cy: Y(w.y), r: px(6), fill: i % 2 === 0 ? corEscala : "none", stroke: corEscala, "stroke-width": 2, "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, grupo);
+                if (i % 2 === 1) { const o = Dxf.paraPlanta(d, estado.alinhar.pontos[i - 1].x, estado.alinhar.pontos[i - 1].y); el("line", { x1: o.x, y1: Y(o.y), x2: w.x, y2: Y(w.y), stroke: corEscala, "stroke-width": 1.5, "stroke-dasharray": "5 4", "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, grupo); }
+            });
         }
         if (estado.ferramenta === "ESCALA" && estado.escala.length) {
             const [a, b] = estado.escala;
@@ -1662,6 +1878,16 @@
                 if (arquivo) importarImagem(arquivo);
                 e.target.value = "";
             });
+            document.getElementById("editorArquivoGlb")?.addEventListener("change", e => {
+                const arquivo = e.target.files[0];
+                if (arquivo) importarGlb(arquivo);
+                e.target.value = "";
+            });
+            document.getElementById("editorArquivoDxf")?.addEventListener("change", e => {
+                const arquivo = e.target.files[0];
+                if (arquivo) importarDxf(arquivo);
+                e.target.value = "";
+            });
             const painel = document.getElementById("editorPropriedades");
             painel?.addEventListener("change", aoMudarCampo);
             painel?.addEventListener("click", aoClicarPainel);
@@ -1702,7 +1928,7 @@
         importarTexto,
         publicar,
         // seleciona um ponto, segmento ou objeto (como o clique no mapa)
-        selecionar: (tipo, id) => { estado.selecao = { tipo, id }; desenharMapa(); renderizarPropriedades(); },
+        selecionar: (tipo, id) => { estado.selecao = tipo ? { tipo, id } : null; desenharMapa(); renderizarPropriedades(); },
         _estado: estado
     };
 })(typeof window !== "undefined" ? window : globalThis);
