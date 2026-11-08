@@ -503,7 +503,15 @@
             <span class="editor-subtitulo editor-secao-titulo">Estação</span>
             ${unico ? "" : campo("ID da estação (o destino das missões)", "estacaoId", estacao.id, `maxlength="${Planta.LIMITES.tamanhoId}"`)}
             ${campo("Nome", "estacaoNome", estacao.nome, 'placeholder="Ex.: Prensa 1"')}
-            ${maquinas.length ? campoSelect("Máquina atendida", "estacaoMaquina", estacao.maquina || "", [["", "—"]].concat(maquinas.map(m => [m.id, m.nome || m.id]))) : ""}
+            ${maquinas.length ? (() => {
+                const dist = o => Math.max(0, Math.hypot(o.x - no.x, o.y - no.y) - Math.min(o.largura, o.profundidade) / 2);
+                const ordem = maquinas.slice().sort((a, b) => dist(a) - dist(b));
+                const nomeDe = o => o.nome || Planta.TIPOS_LAYOUT[o.tipo]?.nome || o.id;
+                const perto = ordem[0] && dist(ordem[0]) <= 4 ? ordem[0] : null;
+                return campoSelect("Máquina atendida", "estacaoMaquina", estacao.maquina || "", [["", "— nenhuma —"]].concat(ordem.map(o => [o.id, `${nomeDe(o)} · a ${String(Math.round(dist(o) * 10) / 10).replace(".", ",")} m`])))
+                    + (!estacao.maquina && perto ? `<div class="editor-sugestao">Mais perto: <b>${esc(nomeDe(perto))}</b> <button class="btn btn-mini" data-acao="usarMaquina" data-id="${esc(perto.id)}">Usar</button></div>` : "")
+                    + `<small class="suave">Só para identificar: liga a estação à máquina do desenho (e dá o nome à estação, se ela não tiver). Não muda o despacho.</small>`;
+            })() : ""}
             <span class="editor-subtitulo editor-secao-titulo">Quem atende</span>
             ${campoSelect("Tipo de carga", "estacaoCarga", carga, [["", "Qualquer carga · qualquer Atta"]].concat(Object.entries(Planta.CARGAS).map(([k, v]) => [k, `${v.nome} · Atta ${v.modulo}`])))}
             ${escolha}
@@ -515,7 +523,9 @@
             </div>
             <p class="editor-texto suave">A missão vai para a estação ${esc(estacao.id)} e o AGV usa o acesso de caminho mais curto.</p>`
             : `<p class="editor-texto suave">Um acesso só (este ponto). Para chegar dos dois lados da máquina ou por outra faixa, crie outro.</p>`}
-            <button class="btn btn-mini" data-acao="novoAcesso">+ Outro acesso</button>
+            ${estado.novoAcessoDe === estacao.id
+                ? `<div class="editor-esperando"><b>Agora clique no mapa</b> onde fica o outro acesso (do outro lado da máquina ou em outra faixa). Ele já nasce ligado à estação ${esc(estacao.id)}. <button class="btn btn-mini" data-acao="cancelarAcesso">Cancelar</button></div>`
+                : `<button class="btn btn-mini" data-acao="novoAcesso">+ Outro acesso</button>`}
             ${(planta.estacoes || []).length > 1 ? `<details class="editor-mais"><summary>Ligar este ponto a outra estação</summary>
                 ${campoSelect("Este ponto é acesso de", "noEstacao", estacao.id, planta.estacoes.map(e => [e.id, e.nome ? `${e.id} · ${e.nome}` : e.id]))}
             </details>` : ""}`;
@@ -721,7 +731,16 @@
                     ${campoNumero("Y", "noY", no.y, 0.01, "m")}
                 </div>
                 ${campo("Tag RFID no centro", "noRfid", no.rfid, 'placeholder="ex.: 0A0000001C" maxlength="14" spellcheck="false" title="10 caracteres hexadecimais, como o AGV lê"')}
-                ${rfids.length ? `<div class="editor-rfids">${rfids.map(r => `<button class="btn btn-mini" data-acao="usarRfid" data-rfid="${esc(r.codigo)}" title="Último lido pelo AGV ${esc(r.agv)}">${esc(r.codigo)} <em>AGV ${esc(r.agv)}</em></button>`).join("")}</div>` : ""}
+                ${rfids.length ? (() => {
+                    const porTag = new Map();
+                    rfids.forEach(r => { const c = Planta.normalizarRfid(r.codigo); porTag.set(c, (porTag.get(c) || []).concat(r.agv)); });
+                    return `<div class="editor-rfids">
+                        <small class="suave">Tags que os AGVs estão lendo agora. Pare um AGV em cima deste ponto e clique na tag dele para gravar aqui (sem digitar).</small>
+                        ${[...porTag].map(([c, quem]) => c === no.rfid
+                            ? `<span class="editor-rfid-atual">${esc(c)} · lida por ${esc(quem.join(", "))} · já é a tag deste ponto</span>`
+                            : `<button class="btn btn-mini" data-acao="usarRfid" data-rfid="${esc(c)}">Usar ${esc(c)} <em>lida agora por ${esc(quem.join(", "))}</em></button>`).join("")}
+                    </div>`;
+                })() : ""}
                 ${no.tipo === "BERCO" ? `
                     <div class="editor-bloco destaque">
                         <span class="editor-subtitulo">Casa de</span>
@@ -976,7 +995,17 @@
                     break;
                 }
                 case "estacaoNome": { const e = Planta.estacaoPorId(planta, no.estacao); if (e) e.nome = valor.trim(); break; }
-                case "estacaoMaquina": { const e = Planta.estacaoPorId(planta, no.estacao); if (e) { if (valor) e.maquina = valor; else delete e.maquina; } break; }
+                case "estacaoMaquina": {
+                    const e = Planta.estacaoPorId(planta, no.estacao);
+                    if (e) {
+                        if (valor) {
+                            e.maquina = valor;
+                            const o = planta.layout.find(x => x.id === valor);
+                            if (o && !e.nome) e.nome = o.nome || Planta.TIPOS_LAYOUT[o.tipo]?.nome || o.id;
+                        } else delete e.maquina;
+                    }
+                    break;
+                }
                 case "estacaoCarga": {
                     const e = Planta.estacaoPorId(planta, no.estacao);
                     if (e) {
@@ -1066,6 +1095,18 @@
                 const no = Planta.noPorId(planta, sel.id);
                 estado.novoAcessoDe = no.estacao;
                 selecionarFerramenta("ESTACAO");
+                renderizarPropriedades();
+                ui.aviso(`Clique no mapa onde fica o outro acesso da estação ${no.estacao}.`, "info");
+                return;
+            }
+            case "cancelarAcesso": estado.novoAcessoDe = null; selecionarFerramenta("SELECIONAR"); renderizarPropriedades(); return;
+            case "usarMaquina": {
+                const no = Planta.noPorId(planta, sel.id), e = no && Planta.estacaoPorId(planta, no.estacao), o = planta.layout.find(x => x.id === botao.dataset.id);
+                if (!e || !o) return;
+                registrarDesfazer();
+                e.maquina = o.id;
+                if (!e.nome) e.nome = o.nome || Planta.TIPOS_LAYOUT[o.tipo]?.nome || o.id;
+                alterado();
                 return;
             }
             case "alinhar": {
