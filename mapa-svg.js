@@ -44,6 +44,7 @@
             fita: v("--mapa-fita"), maquina: v("--mapa-maquina"), maquinaBorda: v("--mapa-maquina-borda"),
             maquinaTexto: v("--mapa-maquina-texto"), hachura: v("--mapa-hachura"), tag: v("--mapa-tag"),
             agv: v("--mapa-agv"), roda: v("--mapa-roda"), carga: v("--mapa-carga"),
+            fitaMagnetica: v("--mapa-fita-magnetica") || v("--mapa-fita"), faixa: v("--mapa-faixa") || "#F2F4F7",
             card: v("--card"), borda: v("--border"), texto: v("--text"), muted: v("--muted"),
             accent: v("--accent"), accentSoft: v("--accent-soft"), green: v("--green"), greenSoft: v("--green-soft"),
             amber: v("--amber"), amberSoft: v("--amber-soft"), amberZona: v("--amber-zone"),
@@ -150,7 +151,10 @@
             else mapa.desenhar();
         };
 
-        mapa.desenhar = () => desenhar(mapa);
+        mapa.desenhar = () => {
+            desenhar(mapa);
+            if (mapa.vista3d) mapa.vista3d.atualizar(mapa);
+        };
 
         // Rastro: guarda as últimas posições por onde o AGV passou
         mapa.registrarRastro = (agvId, x, y) => {
@@ -163,6 +167,7 @@
         };
 
         if (mapa.opcoes.interativo) instalarNavegacao(mapa);
+        if (mapa.opcoes.tresD !== false && typeof Planta3D !== "undefined") instalarTresD(mapa);
 
         if (typeof ResizeObserver !== "undefined") {
             const observador = new ResizeObserver(() => {
@@ -173,6 +178,66 @@
         }
         mapasCriados.add(mapa);
         return mapa;
+    }
+
+    // 2D / 3D (0.16): o mesmo mapa em perspectiva. A escolha fica guardada por
+    // mapa ("visao", "despacho"...); no computador a Visão geral abre em 3D.
+    function instalarTresD(mapa) {
+        const c = mapa.container;
+        if (getComputedStyle(c).position === "static") c.style.position = "relative";
+        const chave = "mapa3d:" + (mapa.opcoes.nome || "mapa");
+        let salvo = null;
+        try { salvo = localStorage.getItem(chave); } catch (e) { /* ignora */ }
+        const toque = window.matchMedia?.("(pointer: coarse)")?.matches;
+        const padrao = Boolean(mapa.opcoes.tresDPadrao) && !navigator.webdriver && !toque && Planta3D.suportado();
+        const barra = document.createElement("div");
+        barra.className = "mapa-modo";
+        barra.innerHTML = `<button type="button" data-modo="2d" class="ativo" title="Planta 2D">2D</button><button type="button" data-modo="3d" title="Planta 3D (gêmeo digital)">3D</button>
+            <span class="sep" hidden></span><button type="button" data-modo="iso" hidden title="Voltar à vista isométrica">Iso</button><button type="button" data-modo="girar" hidden title="Girar sozinho (apresentação)">Girar</button>`;
+        c.appendChild(barra);
+        let host = null;
+        const marcar = tres => {
+            barra.querySelector('[data-modo="2d"]').classList.toggle("ativo", !tres);
+            barra.querySelector('[data-modo="3d"]').classList.toggle("ativo", tres);
+            barra.querySelectorAll('[data-modo="iso"], [data-modo="girar"], .sep').forEach(b => { b.hidden = !tres; });
+        };
+        async function ligar(guardar) {
+            if (host) return;
+            marcar(true);
+            host = document.createElement("div");
+            host.className = "mapa3d-host";
+            c.insertBefore(host, barra);
+            if (guardar) try { localStorage.setItem(chave, "3d"); } catch (e) { /* ignora */ }
+            try {
+                const v = await Planta3D.criar(host, { aoClicar: mapa.opcoes.aoClicar3D, capturar: Boolean(window.ECITON_3D_CAPTURA) });
+                if (!host) { v.destruir(); return; }
+                mapa.vista3d = v;
+                if (mapa.planta) v.atualizar(mapa);
+            } catch (erro) {
+                if (!host) return;
+                host.innerHTML = `<div class="mapa3d-aviso"><div><b>Não deu para abrir o 3D.</b><br>${String(erro?.message || erro).replace(/[<>&]/g, "")}<br><br>A vista 3D baixa a biblioteca gráfica da internet na primeira vez. Volte ao 2D, ou tente de novo com internet.</div></div>`;
+            }
+        }
+        function desligar(guardar) {
+            marcar(false);
+            if (mapa.vista3d) { mapa.vista3d.destruir(); mapa.vista3d = null; }
+            if (host) { host.remove(); host = null; }
+            if (guardar) try { localStorage.setItem(chave, "2d"); } catch (e) { /* ignora */ }
+            if (!mapa.usuarioMexeu) mapa.ajustar(); else mapa.desenhar();
+        }
+        barra.addEventListener("click", ev => {
+            const b = ev.target.closest("[data-modo]");
+            if (!b) return;
+            const m = b.dataset.modo;
+            if (m === "3d") ligar(true);
+            else if (m === "2d") desligar(true);
+            else if (m === "iso" && mapa.vista3d) mapa.vista3d.vista("iso");
+            else if (m === "girar" && mapa.vista3d) b.classList.toggle("ativo", mapa.vista3d.girar());
+        });
+        mapa.ligar3D = () => ligar(true);
+        mapa.desligar3D = () => desligar(true);
+        mapa.em3D = () => Boolean(host);
+        if (salvo === "3d" || (salvo === null && padrao)) setTimeout(() => ligar(false), 0);
     }
 
     // Roda do mouse = zoom; arrastar o fundo (ou botão do meio) = mover a vista
@@ -261,6 +326,110 @@
         const p = el("pattern", { id: mapa.id + "proib", width: 0.2, height: 0.2, patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" }, mapa.defs);
         el("rect", { width: 0.2, height: 0.2, fill: t.redSoft }, p);
         el("line", { x1: 0, y1: 0, x2: 0, y2: 0.2, stroke: t.red, "stroke-opacity": 0.5, "stroke-width": 0.04 }, p);
+        // 0.16: área livre (amarelo listrado) e cruzamento com empilhadeira (preto e amarelo)
+        const l = el("pattern", { id: mapa.id + "livre", width: 0.3, height: 0.3, patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" }, mapa.defs);
+        el("line", { x1: 0, y1: 0, x2: 0, y2: 0.3, stroke: t.amber, "stroke-opacity": 0.55, "stroke-width": 0.06 }, l);
+        const e = el("pattern", { id: mapa.id + "empi", width: 0.5, height: 0.5, patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" }, mapa.defs);
+        el("rect", { width: 0.25, height: 0.5, fill: t.amber, opacity: 0.75 }, e);
+        el("rect", { x: 0.25, width: 0.25, height: 0.5, fill: t.parede, opacity: 0.55 }, e);
+    }
+
+    // Símbolo 2D de cada objeto da biblioteca (0.16). Desenha dentro de "g"
+    // (já transladado e girado); devolve a cor do rótulo.
+    function simboloLayout(mapa, g, o, t, px, base, destaque) {
+        const w = o.largura, h = o.profundidade, x0 = -w / 2, y0 = -h / 2;
+        const r = (extra) => el("rect", Object.assign({}, base, extra, destaque), g);
+        const linha = (x1, y1, x2, y2, extra = {}) => el("line", Object.assign({ x1, y1, x2, y2, stroke: t.maquinaBorda, "stroke-width": 1, "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, extra), g);
+        const maquina = () => {
+            r({ fill: `url(#${mapa.id}hach)`, stroke: t.maquinaBorda, "stroke-width": 1.5, rx: px(4) });
+            el("rect", Object.assign({}, base, { fill: t.maquina, opacity: 0.65, stroke: "none", rx: px(4), "pointer-events": "none" }), g);
+        };
+        switch (o.tipo) {
+            case "CORREDOR":
+                r({ fill: t.corredor, stroke: mapa.opcoes.editor ? t.borda : "none", "stroke-dasharray": mapa.opcoes.editor ? "6 4" : null });
+                return t.muted;
+            case "ZONA_LENTA":
+                r({ fill: t.amberZona, stroke: t.amber, "stroke-width": 1.5, "stroke-dasharray": "6 4" });
+                return t.amber;
+            case "ZONA_PROIBIDA":
+                r({ fill: `url(#${mapa.id}proib)`, stroke: t.red, "stroke-width": 1.5, "stroke-dasharray": "6 4" });
+                return t.red;
+            case "AREA_LIVRE":
+                r({ fill: `url(#${mapa.id}livre)`, stroke: t.amber, "stroke-width": 1.5 });
+                return t.amber;
+            case "CRUZAMENTO_EMPILHADEIRA":
+                r({ fill: t.amberZona, stroke: t.amber, "stroke-width": 1.5 });
+                el("rect", { x: x0, y: y0, width: w, height: h, fill: "none", stroke: `url(#${mapa.id}empi)`, "stroke-width": Math.min(0.3, Math.min(w, h) * 0.15), "pointer-events": "none" }, g);
+                return t.amber;
+            case "FAIXA_PEDESTRE": {
+                // listras na direção em que o Atta anda (largura), uma atrás da outra na direção de quem atravessa
+                r({ fill: t.corredor || t.papel, stroke: mapa.opcoes.editor ? t.borda : "none", "stroke-dasharray": "4 4" });
+                const n = Math.max(2, Math.round(h / 0.5));
+                for (let i = 0; i < n; i++) {
+                    el("rect", { x: x0 + w * 0.06, y: y0 + h * (i + 0.15) / n, width: w * 0.88, height: h * 0.55 / n, fill: t.faixa, stroke: t.maquinaBorda, "stroke-width": 0.6, "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, g);
+                }
+                return t.muted;
+            }
+            case "PAREDE": case "PILAR":
+                r({ fill: t.parede, stroke: t.parede });
+                return t.papel;
+            case "GRADE":
+                r({ fill: t.papel, stroke: t.parede, "stroke-width": 2, "stroke-dasharray": "3 3" });
+                return t.parede;
+            case "PORTA": case "PORTAO": {
+                r({ fill: t.papel, stroke: t.parede, "stroke-width": 1.2, "stroke-dasharray": o.tipo === "PORTAO" ? "8 4" : null });
+                if (o.tipo === "PORTA") el("path", { d: `M${x0},${y0} A${w},${w} 0 0 1 ${x0 + w},${y0 + w}`, fill: "none", stroke: t.muted, "stroke-width": 1, "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, g);
+                return t.muted;
+            }
+            case "PRATELEIRA": case "PORTA_PALETE": case "FLOW_RACK": {
+                r({ fill: t.maquina, stroke: t.maquinaBorda, "stroke-width": 1.5 });
+                const vaos = Math.max(1, Math.round(w / (o.tipo === "PORTA_PALETE" ? 1.35 : 1)));
+                for (let i = 1; i < vaos; i++) linha(x0 + w * i / vaos, y0, x0 + w * i / vaos, y0 + h);
+                if (o.tipo === "FLOW_RACK") for (let i = 1; i < 4; i++) linha(x0, y0 + h * i / 4, x0 + w, y0 + h * i / 4, { "stroke-dasharray": "2 3" });
+                return t.maquinaTexto;
+            }
+            case "PALETE": case "CAIXAS":
+                r({ fill: t.carga || t.maquina, stroke: t.maquinaBorda, "stroke-width": 1.2, rx: px(2) });
+                linha(x0, y0, x0 + w, y0 + h); linha(x0 + w, y0, x0, y0 + h);
+                return t.maquinaTexto;
+            case "ESTEIRA": {
+                r({ fill: t.maquina, stroke: t.maquinaBorda, "stroke-width": 1.5, rx: px(2) });
+                const rolos = Math.max(3, Math.round(w / 0.15));
+                for (let i = 1; i < rolos; i++) linha(x0 + w * i / rolos, y0 + h * 0.12, x0 + w * i / rolos, y0 + h * 0.88, { opacity: 0.6 });
+                return t.maquinaTexto;
+            }
+            case "CELULA_ROBO":
+                maquina();
+                el("circle", { r: Math.min(w, h) * 0.38, fill: "none", stroke: t.maquinaBorda, "stroke-width": 1, "stroke-dasharray": "4 3", "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, g);
+                el("circle", { r: Math.min(w, h) * 0.08, fill: t.maquinaBorda, "pointer-events": "none" }, g);
+                return t.maquinaTexto;
+            case "POSTO":
+                r({ fill: t.greenSoft, stroke: t.green, "stroke-width": 1.5, rx: px(4) });
+                return t.green;
+            case "CARREGADOR":
+                r({ fill: t.css("--purple-soft") || t.card, stroke: t.purple || t.accent, "stroke-width": 1.5, rx: px(2) });
+                return t.purple || t.accent;
+            case "DOCA":
+                r({ fill: t.corredor || t.papel, stroke: t.parede, "stroke-width": 1.5, "stroke-dasharray": "6 3" });
+                return t.muted;
+            case "ESCRITORIO":
+                r({ fill: t.card, stroke: t.parede, "stroke-width": 2 });
+                return t.muted;
+            case "PESSOA":
+                el("circle", { r: Math.min(w, h) * 0.5, fill: t.amberSoft, stroke: t.amber, "stroke-width": 1.5, "vector-effect": "non-scaling-stroke" }, g);
+                return t.amber;
+            case "EMPILHADEIRA":
+                r({ fill: t.amberSoft, stroke: t.amber, "stroke-width": 1.5, rx: px(3) });
+                linha(x0 + w, y0 + h * 0.25, x0 + w + w * 0.45, y0 + h * 0.25, { stroke: t.amber, "stroke-width": 2 });
+                linha(x0 + w, y0 + h * 0.75, x0 + w + w * 0.45, y0 + h * 0.75, { stroke: t.amber, "stroke-width": 2 });
+                return t.amber;
+            case "MAQUINA": case "CNC": case "TORNO": case "PRENSA": case "INJETORA": case "SOLDA": case "INSPECAO":
+                maquina();
+                return t.maquinaTexto;
+            default:
+                r({ fill: t.maquina, stroke: t.maquinaBorda, "stroke-width": 1.5, rx: px(3) });
+                return t.maquinaTexto;
+        }
     }
 
     function nomeCurtoNo(planta, no, curto) {
@@ -345,44 +514,16 @@
         el("rect", { x: 0, y: 0, width: W, height: H, fill: "none", stroke: t.parede, "stroke-width": editor ? 2 : 4, "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, c.grade);
 
         // ---------- layout ----------
-        const ordemLayout = { CORREDOR: 0, ZONA_LENTA: 1, ZONA_PROIBIDA: 1 };
+        const ordemLayout = { CORREDOR: 0, ZONA_LENTA: 1, ZONA_PROIBIDA: 1, AREA_LIVRE: 1, FAIXA_PEDESTRE: 1, CRUZAMENTO_EMPILHADEIRA: 1, DOCA: 1 };
         [...p.layout].sort((a, b) => (ordemLayout[a.tipo] ?? 2) - (ordemLayout[b.tipo] ?? 2)).forEach(o => {
             const g = el("g", { transform: `translate(${o.x},${Y(o.y)}) rotate(${-(o.rotacao || 0)})`, "data-tipo": "layout", "data-id": o.id }, c.layout);
             const selecionado = mapa.selecao?.tipo === "layout" && mapa.selecao.id === o.id;
             const base = { x: -o.largura / 2, y: -o.profundidade / 2, width: o.largura, height: o.profundidade, "vector-effect": "non-scaling-stroke" };
             const destaque = selecionado ? { stroke: t.accent, "stroke-width": 2.5 } : {};
-            let corTexto = t.maquinaTexto;
-            switch (o.tipo) {
-                case "CORREDOR":
-                    el("rect", Object.assign({}, base, { fill: t.corredor, stroke: editor ? t.borda : "none", "stroke-dasharray": editor ? "6 4" : null }, destaque), g);
-                    corTexto = t.muted;
-                    break;
-                case "ZONA_LENTA":
-                    el("rect", Object.assign({}, base, { fill: t.amberZona, stroke: t.amber, "stroke-width": 1.5, "stroke-dasharray": "6 4" }, destaque), g);
-                    corTexto = t.amber;
-                    break;
-                case "ZONA_PROIBIDA":
-                    el("rect", Object.assign({}, base, { fill: `url(#${mapa.id}proib)`, stroke: t.red, "stroke-width": 1.5, "stroke-dasharray": "6 4" }, destaque), g);
-                    corTexto = t.red;
-                    break;
-                case "PAREDE":
-                case "PILAR":
-                    el("rect", Object.assign({}, base, { fill: t.parede, stroke: t.parede }, destaque), g);
-                    corTexto = t.papel;
-                    break;
-                case "MAQUINA":
-                    el("rect", Object.assign({}, base, { fill: `url(#${mapa.id}hach)`, stroke: t.maquinaBorda, "stroke-width": 1.5, rx: px(4) }, destaque), g);
-                    el("rect", Object.assign({}, base, { fill: t.maquina, opacity: 0.65, stroke: "none", rx: px(4) }), g);
-                    break;
-                case "POSTO":
-                    el("rect", Object.assign({}, base, { fill: t.greenSoft, stroke: t.green, "stroke-width": 1.5, rx: px(4) }, destaque), g);
-                    corTexto = t.green;
-                    break;
-                default:
-                    el("rect", Object.assign({}, base, { fill: t.maquina, stroke: t.maquinaBorda, "stroke-width": 1.5, rx: px(3) }, destaque), g);
-            }
+            const corTexto = simboloLayout(mapa, g, o, t, px, base, destaque);
             if (mapa.opcoes.rotulos && Math.min(o.largura, o.profundidade) * ppm > 16) {
-                let rotulo = o.nome || "";
+                const tipoInfo = Planta.TIPOS_LAYOUT[o.tipo];
+                let rotulo = o.nome || (["CNC", "TORNO", "PRENSA", "INJETORA", "CELULA_ROBO", "SOLDA", "ESTEIRA", "FAIXA_PEDESTRE", "CRUZAMENTO_EMPILHADEIRA", "AREA_LIVRE"].includes(o.tipo) ? (tipoInfo?.nome || "") : "");
                 if (o.tipo === "ZONA_LENTA") rotulo = `${(o.nome || "ZONA LENTA").toUpperCase()}${o.velocidadeMaxima ? " · " + String(o.velocidadeMaxima).replace(".", ",") + " m/s" : ""}`;
                 if (rotulo) {
                     const tam = Math.min(px(13), o.profundidade * 0.42, o.largura / Math.max(4, rotulo.length) * 1.7);
@@ -399,9 +540,13 @@
             const todos = [];
             trechos.forEach(tr => {
                 const a = pontoNo(tr.origem), b = pontoNo(tr.destino);
-                if (a && b) todos.push([a, b]);
+                if (!a || !b) return;
+                // curva (0.16): pontos intermediários do arco
+                const sg = tr.tipo === "CURVA" ? (Planta.segmentoPorId(p, tr.segmento) || p.segmentos.find(x => x.tipo === "CURVA" && ((x.a === a.id && x.b === b.id) || (x.a === b.id && x.b === a.id)))) : null;
+                const meio = sg ? Planta.pontosSegmento(p, sg, 0.25).slice(1, -1) : [];
+                todos.push([a, b, sg && sg.a !== a.id ? meio.reverse() : meio]);
             });
-            const caminho = lista => lista.map(([a, b], i) => `${i === 0 ? `M${a.x},${Y(a.y)}` : ""}L${b.x},${Y(b.y)}`).join("");
+            const caminho = lista => lista.map(([a, b, meio], i) => `${i === 0 ? `M${a.x},${Y(a.y)}` : ""}${(meio || []).map(q => `L${q.x},${Y(q.y)}`).join("")}L${b.x},${Y(b.y)}`).join("");
             el("path", {
                 d: caminho(todos), fill: "none", stroke: t.accent, "stroke-opacity": 0.18, "stroke-width": 16,
                 "stroke-linejoin": "round", "stroke-linecap": "round", "vector-effect": "non-scaling-stroke", "pointer-events": "none"
@@ -411,7 +556,7 @@
             if (atual !== null) {
                 restante = todos.slice(atual);
                 const pos = mapa.rota.posicao;
-                if (restante.length && pos) restante = [[{ x: pos.x, y: pos.y }, restante[0][1]], ...restante.slice(1)];
+                if (restante.length && pos) restante = [[{ x: pos.x, y: pos.y }, restante[0][1], []], ...restante.slice(1)];
             }
             if (restante.length) {
                 el("path", {
@@ -423,12 +568,50 @@
 
         // ---------- segmentos ----------
         const tipoSeg = s => (Planta.tipoSegmento ? Planta.tipoSegmento(s) : "LINHA");
+        // Curva (0.16): arco de circunferência, com as setas e as tags ao longo dele
+        function desenharCurva(s, a, b, selecionado, comErro, corGuia, guia) {
+            const geo = Planta.geometriaCurva(p, s);
+            if (!geo) return;
+            const g = el("g", { "data-tipo": "segmento", "data-id": s.id }, c.segmentos);
+            // no SVG o y é para baixo: o anti-horário do mapa vira horário na tela (sweep 1)
+            const d = `M${a.x},${Y(a.y)}A${geo.R},${geo.R} 0 0 ${geo.esq ? 0 : 1} ${b.x},${Y(b.y)}`;
+            el("path", { d, fill: "none", stroke: "transparent", "stroke-width": 16, "vector-effect": "non-scaling-stroke" }, g);
+            const cor = comErro ? t.red : selecionado ? t.accent : corGuia;
+            el("path", { d, fill: "none", stroke: cor, "stroke-width": guia === "VIRTUAL" ? 2.5 : (selecionado ? 5 : 4), "stroke-linecap": "round",
+                "stroke-dasharray": guia === "VIRTUAL" ? "8 6" : null, "vector-effect": "non-scaling-stroke" }, g);
+            const L = geo.comprimento;
+            if (s.sentido !== "DUPLO" && L * ppm > 30) {
+                const m = Planta.pontoNoSegmento(p, s, s.a, L / 2);
+                const angulo = m.rumo * Math.PI / 180 + (s.sentido === "B_PARA_A" ? Math.PI : 0);
+                const tam = px(7);
+                const pts = [0, 2.5, -2.5].map(k => [m.x + Math.cos(angulo + k) * tam, m.y + Math.sin(angulo + k) * tam]).map(([x, y]) => `${x},${Y(y)}`).join(" ");
+                el("polygon", { points: pts, fill: cor, "pointer-events": "none" }, g);
+            }
+            if (mapa.opcoes.mostrarTags) {
+                (s.tags || []).forEach((tag, i) => {
+                    const q = Planta.pontoNoSegmento(p, s, s.a, tag.distancia);
+                    const r = px(5.5);
+                    el("rect", { x: q.x - r, y: Y(q.y) - r, width: r * 2, height: r * 2, transform: `rotate(45 ${q.x} ${Y(q.y)})`,
+                        fill: tag.rfid ? t.tag : t.papel, stroke: tag.rfid ? t.papel : t.tag, "stroke-width": 1.5, "vector-effect": "non-scaling-stroke",
+                        "data-tipo": "tag", "data-id": s.id, "data-indice": i }, c.tags);
+                });
+            }
+            if (mapa.opcoes.rotulos && selecionado) {
+                const m = Planta.pontoNoSegmento(p, s, s.a, L / 2);
+                pilula(c.textos, m.x, Y(m.y) - px(16), `${s.id} · curva R ${Planta.arred(geo.R, 2)} m · ${Planta.arred(L, 2)} m`, px, {
+                    fundo: t.accentSoft, borda: t.accent, cor: t.accent, tamanho: 10.5, altura: 18
+                });
+            }
+        }
         p.segmentos.forEach(s => {
             const a = pontoNo(s.a), b = pontoNo(s.b);
             if (!a || !b) return;
             const selecionado = mapa.selecao?.tipo === "segmento" && mapa.selecao.id === s.id;
             const comErro = mapa.destaques.has(s.id);
             const lateral = tipoSeg(s) === "LATERAL";
+            const guia = Planta.guiaSegmento ? Planta.guiaSegmento(p, s) : "OPTICA";
+            const corGuia = guia === "MAGNETICA" ? t.fitaMagnetica : guia === "VIRTUAL" ? (t.purple || t.accent) : t.fita;
+            if (tipoSeg(s) === "CURVA") { desenharCurva(s, a, b, selecionado, comErro, corGuia, guia); return; }
             // segmentos gêmeos (ida e volta nos mesmos pontos): afasta um do outro
             let desloc = 0;
             const gemeo = Planta.segmentoGemeo ? Planta.segmentoGemeo(p, s) : null;
@@ -439,11 +622,11 @@
 
             const g = el("g", { "data-tipo": "segmento", "data-id": s.id }, c.segmentos);
             el("line", { x1, y1: Y(y1), x2, y2: Y(y2), stroke: "transparent", "stroke-width": 16, "vector-effect": "non-scaling-stroke" }, g);
-            const cor = comErro ? t.red : selecionado ? t.accent : t.fita;
+            const cor = comErro ? t.red : selecionado ? t.accent : corGuia;
             el("line", {
                 x1, y1: Y(y1), x2, y2: Y(y2), stroke: cor,
-                "stroke-width": lateral ? 2.5 : (selecionado ? 5 : 4), "stroke-linecap": "round", "vector-effect": "non-scaling-stroke",
-                "stroke-dasharray": lateral ? "2 6" : null, opacity: lateral ? 0.85 : 1
+                "stroke-width": lateral ? 2.5 : guia === "VIRTUAL" ? 2.5 : (selecionado ? 5 : 4), "stroke-linecap": "round", "vector-effect": "non-scaling-stroke",
+                "stroke-dasharray": lateral ? "2 6" : guia === "VIRTUAL" ? "8 6" : null, opacity: lateral ? 0.85 : 1
             }, g);
             const ang = Math.atan2(y2 - y1, x2 - x1);
             const triangulo = (mx, my, angulo, tamanho) => {

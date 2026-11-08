@@ -18,6 +18,11 @@
       termina vai para o mesmo AGV, em seguida (kit e vazio do posto).
    5. (0.14) AGV em manutenção não recebe. Estação com "Atendida por"
       (lista de modelos na planta) só recebe AGVs desses modelos.
+   6. (0.16) A rota é calculada pelo perfil do modelo (vazio/carregado:
+      giro, lado, raio, guia) e a estação só recebe o módulo da carga dela.
+      Cada botão do posto diz quem atende: modelos (obrigatório), Atta
+      preferidos (vão primeiro; sem nenhum livre, depois de
+      esperaPreferidoS vai outro dos modelos) e "só estes" (espera).
 */
 (function (raiz, fabrica) {
     if (typeof module === "object" && module.exports) module.exports = fabrica(require("./planta.js"));
@@ -94,19 +99,25 @@
     }
 
     // Compila a missão saindo de um ponto: { ok, pacote, aproximacao (s), metros, tempo, inicio, fim, erro }
-    function prever(planta, missao, ponto, orientacao) {
+    // agv (0.16): { perfil: { vazio, carregado }, carregado } para a rota respeitar o modelo
+    function prever(planta, missao, ponto, orientacao, agv = null) {
         const no = ponto ? Planta.noPorId(planta, ponto) : null;
         const ori = Number.isFinite(Number(orientacao)) && orientacao !== null ? Number(orientacao) : (no?.orientacaoChegada ?? 0);
-        const r = Planta.compilarMissao(planta, missao, ponto ? { ponto, orientacao: ori } : null);
+        const r = Planta.compilarMissao(planta, missao, ponto ? { ponto, orientacao: ori } : null,
+            agv && agv.perfil ? { perfil: agv.perfil, carregado: Boolean(agv.carregado) } : {});
         if (!r.sucesso) return { ok: false, erro: r.erro };
         const primeira = r.pacote.etapas.find(e => e.tipo === "MOVIMENTO");
+        // 0.16: a ida até o início pode ter virado várias etapas (rota longa)
+        const ida = primeira ? r.pacote.etapas.filter(e => e.tipo === "MOVIMENTO" && e.passo !== undefined && e.passo === primeira.passo) : [];
+        const somar = f => (ida.length > 1 ? ida : [primeira]).reduce((t, e) => t + (e ? f(e) : 0), 0);
+        const ultimaIda = ida.length > 1 ? ida[ida.length - 1] : primeira;
         return {
             ok: true,
             pacote: r.pacote,
-            aproximacao: tempoEtapa(primeira),
-            metros: metrosEtapa(primeira),
+            aproximacao: somar(tempoEtapa),
+            metros: somar(metrosEtapa),
             vazia: !primeira || !(primeira.trechos || []).length,   // a missão começa onde o AGV está
-            inicio: primeira ? primeira.destino : ponto,
+            inicio: ultimaIda ? ultimaIda.destino : ponto,
             fim: pontoFinal(r.pacote) || ponto,
             tempo: tempoPacote(r.pacote)
         };
@@ -145,6 +156,28 @@
         if (!agv.modelo) return `sem modelo cadastrado, e ${nomeEst(restritas[0])} só aceita modelos escolhidos`;
         const nao = restritas.find(e => !e.modelos.includes(agv.modelo));
         return nao ? `${agv.modeloNome || agv.modelo} não atende ${nomeEst(nao)}` : null;
+    }
+
+    // Regra do botão do posto (0.16): { modelos, preferidos, soEstes, esperaPreferidoS } ou null
+    function regraDoBotao(postos, pedido) {
+        if (!pedido.posto || !Array.isArray(postos)) return null;
+        const posto = postos.find(p => String(p.id) === String(pedido.posto));
+        const b = (posto?.botoes || []).find(x => String(x.missao) === String(pedido.missao));
+        if (!b) return null;
+        const lista = v => Array.isArray(v) ? v.map(String).filter(Boolean) : [];
+        return {
+            modelos: lista(b.modelos), preferidos: lista(b.preferidos), soEstes: Boolean(b.soEstes) && lista(b.preferidos).length > 0,
+            esperaPreferidoS: Math.max(0, Number(b.esperaPreferidoS ?? 120) || 0), rotulo: b.rotulo || ""
+        };
+    }
+    // Por que o botão não aceita este AGV (null = aceita). Preferência não recusa.
+    function recusaBotao(regra, agv) {
+        if (!regra) return null;
+        if (regra.modelos.length && !regra.modelos.includes(agv.modelo)) {
+            return agv.modelo ? `${agv.modeloNome || agv.modelo} não foi escolhido para este botão` : "sem modelo, e o botão só aceita modelos escolhidos";
+        }
+        if (regra.soEstes && !regra.preferidos.includes(agv.id)) return "não é um dos Atta escolhidos para este botão";
+        return null;
     }
 
     const tempoTexto = s => s < 90 ? `~${Math.max(1, Math.round(s))} s` : `~${Math.round(s / 60)} min`;
@@ -205,7 +238,9 @@
             if (b.agvFixo && b.agvFixo !== agvId) return null;
             const mb = missoes.get(String(b.missao));
             if (!mb) return null;
-            const p = prever(planta, mb, fimDeA, null);
+            const agvB = (entrada.agvs || []).find(x => x.id === agvId) || {};
+            if (recusaBotao(regraDoBotao(entrada.postos, b), agvB)) return null;
+            const p = prever(planta, mb, fimDeA, null, Object.assign({}, agvB, { carregado: false }));
             if (!p.ok) return null;
             const ligado = b.vinculo != null && String(b.vinculo) === String(aId);
             if (!ligado && !p.vazia) return null;
@@ -261,7 +296,9 @@
                 if (!agv) { espera[pedido.id] = `o AGV ${pedido.agvFixo} não está cadastrado`; continue; }
                 const barra = agv.manutencao ? "em manutenção" : !agv.online ? "offline" : agv.semFila ? "com firmware sem fila (atualize)" : agv.filaCheia ? "com a fila cheia" : null;
                 if (barra) { espera[pedido.id] = `aguardando o AGV ${agv.id} ${barra}`; continue; }
-                const naoServe = recusaModelo(planta, missao, agv);
+                // AGV fixo: o modelo do botão vale (é físico); a preferência e o "só estes" não
+                const regraFixo = regraDoBotao(entrada.postos, pedido);
+                const naoServe = recusaModelo(planta, missao, agv) || recusaBotao(regraFixo && { modelos: regraFixo.modelos, preferidos: [], soEstes: false }, agv);
                 if (naoServe) { espera[pedido.id] = `o AGV ${agv.id} não pode fazer esta missão: ${naoServe}`; continue; }
                 const livreAgora = !agv.ocupado && !reservados.has(agv.id) && !usados.has(agv.id);
                 const ponto = livreAgora ? (agv.posicaoConhecida ? agv.pontoAtual : null) : agv.fimPrevisto;
@@ -269,7 +306,7 @@
                     espera[pedido.id] = livreAgora ? `aguardando o AGV ${agv.id}: posição desconhecida` : `aguardando saber onde a missão atual do AGV ${agv.id} termina`;
                     continue;
                 }
-                const p = prever(planta, missao, ponto, livreAgora ? agv.orientacao : null);
+                const p = prever(planta, missao, ponto, livreAgora ? agv.orientacao : null, livreAgora ? agv : Object.assign({}, agv, { carregado: false }));
                 if (!p.ok) { espera[pedido.id] = `AGV ${agv.id}: ${p.erro}`; continue; }
                 const aviso = agv.impedimento && agv.impedimento !== "posição desconhecida" ? ` · vai esperar: ${agv.impedimento}` : "";
                 pedido._feito = true;
@@ -279,17 +316,19 @@
                 continue;
             }
 
-            let melhor = null;
+            let melhor = null, melhorPreferido = null;
             const recusas = [];
+            const regra = regraDoBotao(entrada.postos, pedido);
+            const prefere = regra && regra.preferidos.length ? new Set(regra.preferidos) : null;
             for (const agv of agvs) {
                 if (pedido.agvFixo && agv.id !== pedido.agvFixo) continue;
                 if (usados.has(agv.id)) { recusas.push(`${agv.id} acabou de receber outro pedido`); continue; }
                 if (agv.impedimento) { recusas.push(`${agv.id} ${agv.impedimento}`); continue; }
-                const naoServe = recusaModelo(planta, missao, agv);
+                const naoServe = recusaModelo(planta, missao, agv) || recusaBotao(regra, agv);
                 if (naoServe) { recusas.push(`${agv.id}: ${naoServe}`); continue; }
                 let custo, eta, motivo, p;
                 if (agv.livre) {
-                    p = prever(planta, missao, agv.pontoAtual, agv.orientacao);
+                    p = prever(planta, missao, agv.pontoAtual, agv.orientacao, agv);
                     if (!p.ok) { recusas.push(`${agv.id}: ${p.erro}`); continue; }
                     custo = p.aproximacao + (agv.noBerco ? cfg.penalBercoS : 0) + (Number(agv.usoHoje) || 0) * cfg.penalUsoS;
                     eta = p.tempo;
@@ -297,7 +336,7 @@
                     motivo = p.vazia ? `livre ${onde}, já no ponto de partida` : `livre ${onde}, ${metrosTexto(p.metros)} até ${p.inicio} (${tempoTexto(p.aproximacao)})`;
                 } else if (cfg.encadear && agv.ocupado && agv.filaVazia && agv.fimPrevisto && !reservados.has(agv.id)) {
                     // ocupado, mas termina exatamente onde este pedido começa
-                    p = prever(planta, missao, agv.fimPrevisto, null);
+                    p = prever(planta, missao, agv.fimPrevisto, null, Object.assign({}, agv, { carregado: false }));
                     if (!p.ok || !p.vazia) { recusas.push(`${agv.id} ocupado`); continue; }
                     const atual = emExecucao.get(agv.id);
                     const falta = atual ? restante(atual) : cfg.restantePadraoS;
@@ -310,6 +349,25 @@
                 }
                 if (pedido.agvFixo) motivo = `AGV fixo · ${motivo}`;
                 if (!melhor || custo < melhor.custo) melhor = { agv, custo, eta, motivo, p };
+                if (prefere && prefere.has(agv.id) && (!melhorPreferido || custo < melhorPreferido.custo)) melhorPreferido = { agv, custo, eta, motivo: `preferido · ${motivo}`, p };
+            }
+
+            // Preferidos primeiro; sem nenhum disponível, espera um pouco e depois vai outro
+            if (prefere && !regra.soEstes) {
+                if (melhorPreferido) melhor = melhorPreferido;
+                else if (melhor) {
+                    const esperou = (agora - (pedido.criadoEm || agora)) / 1000;
+                    if (esperou < regra.esperaPreferidoS) {
+                        espera[pedido.id] = `aguardando os preferidos (${regra.preferidos.join(", ")}) · manda outro em ${tempoTexto(regra.esperaPreferidoS - esperou).replace("~", "")}`;
+                        continue;
+                    }
+                    melhor = Object.assign({}, melhor, { motivo: `preferidos ocupados · ${melhor.motivo}` });
+                }
+            }
+
+            if (!melhor && regra && regra.soEstes) {
+                espera[pedido.id] = `aguardando um dos Atta escolhidos (${regra.preferidos.join(", ")})${recusas.length ? ": " + resumirRecusas(recusas.filter(r => regra.preferidos.some(id => r.startsWith(id)))) : ""}`;
+                continue;
             }
 
             if (!melhor) {
@@ -336,6 +394,7 @@
 
     return {
         CONFIG_PADRAO, NOMES_PRIORIDADE, configuracao, prioridadeEfetiva, ordenar,
-        tempoEtapa, tempoPacote, prever, impedimento, decidir, tempoTexto, metrosTexto, recusaModelo, estacoesRestritas
+        tempoEtapa, tempoPacote, prever, impedimento, decidir, tempoTexto, metrosTexto, recusaModelo, estacoesRestritas,
+        regraDoBotao, recusaBotao
     };
 });

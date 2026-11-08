@@ -16,15 +16,16 @@ const Modelos = (function () {
     "use strict";
 
     const MODULOS = {
-        G: ["Garra", "pega o carrinho por baixo e leva"],
-        T: ["Rebocador", "puxa carrinhos engatados"],
-        R: ["Roletes", "recebe e entrega por roletes"],
-        E: ["Elevação", "levanta a carga por baixo"]
+        E: ["Elevação", "entra embaixo do carrinho, levanta e leva"],
+        G: ["Garra", "pega e solta caixas e kits (garra feita para a carga)"],
+        R: ["Roletes", "recebe e entrega na esteira, pelos rolos"],
+        T: ["Rebocador", "puxa carrinhos engatados em comboio"]
     };
     const GUIAMENTOS = { O: "Óptico (fita no chão)", M: "Magnético (fita magnética)", L: "LiDAR (sem fita)" };
     const GRUPOS = [
         ["dimensoes", "Dimensões e espaço"], ["movimento", "Movimento"], ["tracao", "Tração"],
-        ["carga", "Carga e indexação"], ["guiamento", "Guiamento e sensores"], ["energia", "Energia e piso"]
+        ["carga", "Carga e indexação"], ["manobra", "Com carga (manobra)"], ["guiamento", "Guiamento e sensores"], ["energia", "Energia e piso"],
+        ["geral", "Situação"]
     ];
     // Campos da ficha: só o que interessa à operação (tráfego, despacho, layout)
     const CAMPOS = [
@@ -53,6 +54,13 @@ const Modelos = (function () {
         ["carga", "garra_lados", "Lados de acesso", ""],
         ["carga", "torque_elevacao_nm", "Torque da elevação", "N·m"],
         ["carga", "fuso", "Fuso", ""],
+        // 0.16: o que muda quando ele está com carga (a planta e o despacho usam)
+        ["manobra", "comprimento_carregado_mm", "Comprimento com carga", "mm"],
+        ["manobra", "largura_carregado_mm", "Largura com carga", "mm"],
+        ["manobra", "gira_carregado", "Gira no lugar com carga", "sim/não"],
+        ["manobra", "lateral_carregado", "Anda de lado com carga", "sim/não"],
+        ["manobra", "raio_min_carregado_m", "Raio mínimo de curva com carga", "m"],
+        ["manobra", "comboio_m", "Comprimento do comboio (atrás do Atta)", "m"],
         ["guiamento", "guiamento", "Como se guia", ""],
         ["guiamento", "precisao_parada_mm", "Precisão de parada", "± mm"],
         ["guiamento", "sensores", "Sensores", ""],
@@ -61,30 +69,53 @@ const Modelos = (function () {
         ["energia", "autonomia_h", "Autonomia", "h"],
         ["energia", "recarga", "Recarga", ""],
         ["energia", "piso", "Piso", ""],
-        ["energia", "desnivel_max_mm", "Desnível máximo", "mm"]
+        ["energia", "desnivel_max_mm", "Desnível máximo", "mm"],
+        ["geral", "situacao", "Situação", ""]
     ].map(([grupo, chave, rotulo, unidade]) => ({ grupo, chave, rotulo, unidade }));
 
     // Fotos que vêm com o site (o fornecedor pode trocar)
-    const FOTOS = { "atta-g-o": "img/modelos/atta-g-o.webp" };
+    const FOTOS = { "atta-e-o": "img/modelos/atta-e-o.webp" };
+    // 0.16: o protótipo ergue o carrinho por baixo, então é um Atta E (era "Atta G-O";
+    // "atta-g-o" agora é a família de garras). Na nuvem o banco renomeia; aqui, o script.js.
 
-    // O protótipo: o mesmo do 01_esquema.sql
+    // O protótipo e os modelos de referência dos outros módulos (o mesmo do 01_esquema.sql)
     const PADRAO = [{
-        id: "atta-g-o", nome: "Atta G-O", modulo: "G", guiamento: "O", ativo: true,
-        descricao: "Garra que ergue o carrinho por baixo, guiado por fita óptica no chão. Protótipo funcional (TCC).",
+        id: "atta-e-o", nome: "Atta E-O", modulo: "E", guiamento: "O", ativo: true,
+        descricao: "Entra embaixo do carrinho e ergue por um fuso, guiado por fita óptica no chão. Protótipo funcional (TCC).",
         ficha: {
             comprimento_mm: "a medir", largura_mm: "a medir", altura_mm: "a medir", giro_diametro_mm: "a medir",
             corredor_min_mm: "a medir", massa_kg: 5, vel_max_ms: 0.10, vel_lateral_ms: 0.03, aceleracao_ms2: 0.20,
             parada_mm: "a medir", rampa_max_pct: 0, motor: "4 × NEMA 17 (passo)", torque_nm: 0.52, raio_roda_m: 0.036,
-            rodas: "4 mecanum", carga_kg: 10, indexacao: "Garra por baixo do carrinho (fuso TR8x8)",
+            rodas: "4 mecanum", carga_kg: 10, indexacao: "Elevação por baixo do carrinho (fuso TR8x8)",
             garra_curso_mm: "a medir", garra_altura_min_mm: "a medir", garra_altura_max_mm: "a medir",
             garra_tempo_s: "a medir", garra_orientacao: "Frente do AGV", garra_lados: "Entra por baixo, pela frente",
-            torque_elevacao_nm: 0.52, fuso: "TR8x8 (avanço 8 mm)", guiamento: "Fita óptica no chão (QTR-8A) e tags RFID nos pontos",
+            torque_elevacao_nm: 0.52, fuso: "TR8x8 (avanço 8 mm)",
+            comprimento_carregado_mm: "tamanho do carrinho", gira_carregado: "sim", lateral_carregado: "sim",
+            guiamento: "Fita óptica no chão (QTR-8A) e tags RFID nos pontos",
             precisao_parada_mm: "a medir", sensores: "QTR-8A (linha), 2 × VL53L0X (frente), leitor RFID",
             cobertura: "Frente, até ~1,2 m", energia: "a definir", autonomia_h: "a medir", recarga: "a definir",
-            piso: "Liso e plano, fita contrastante", desnivel_max_mm: "a medir"
+            piso: "Liso e plano, fita contrastante", desnivel_max_mm: "a medir", situacao: "Pronto para piloto"
         },
         parametros: { RAIO_RODA: 0.036, VELOCIDADE_MAXIMA: 0.10, ACELERACAO_LINEAR: 0.20 },
         foto: "", docUrl: ""
+    }, {
+        id: "atta-g-o", nome: "Atta G-O", modulo: "G", guiamento: "O", ativo: true,
+        descricao: "Família de garras feitas para cada carga (caixa, KLT, kit). Pega e solta sozinho na estação.",
+        ficha: { indexacao: "Garra sob medida para a carga", gira_carregado: "sim", lateral_carregado: "sim", rodas: "4 mecanum",
+            guiamento: "Fita óptica no chão e tags RFID nos pontos", situacao: "Sob encomenda" },
+        parametros: {}, foto: "", docUrl: ""
+    }, {
+        id: "atta-r-o", nome: "Atta R-O", modulo: "R", guiamento: "O", ativo: true,
+        descricao: "Rolos no topo: encosta na esteira e transfere a carga pelos rolos.",
+        ficha: { indexacao: "Rolos motorizados, troca com a esteira", gira_carregado: "sim", lateral_carregado: "sim", rodas: "4 mecanum",
+            precisao_parada_mm: 10, guiamento: "Fita óptica no chão e tags RFID nos pontos", situacao: "Sob encomenda" },
+        parametros: {}, foto: "", docUrl: ""
+    }, {
+        id: "atta-t-o", nome: "Atta T-O", modulo: "T", guiamento: "O", ativo: true,
+        descricao: "Rebocador: engata carrinhos em comboio e faz o milk-run pelos ramais.",
+        ficha: { indexacao: "Engate traseiro para comboio", gira_carregado: "não", lateral_carregado: "não", raio_min_carregado_m: 1.5,
+            comboio_m: 6, rodas: "4 mecanum", guiamento: "Fita óptica no chão e tags RFID nos pontos", situacao: "Em desenvolvimento" },
+        parametros: {}, foto: "", docUrl: ""
     }];
 
     let lista = [];
@@ -111,8 +142,17 @@ const Modelos = (function () {
     function lerLocal() {
         try {
             const d = JSON.parse(localStorage.getItem("modelosFrota") || "null");
-            if (Array.isArray(d) && d.length) return d.map(normalizar);
+            if (Array.isArray(d) && d.length) {
+                // 0.16: o protótipo gravado como "atta-g-o" (garra) vira o Atta E-O; os de referência entram
+                const lidos = d.map(normalizar).map(m => m.id === "atta-g-o" && /ergue o carrinho/.test(m.descricao)
+                    ? Object.assign(normalizar(PADRAO[0]), { ficha: Object.assign({}, m.ficha, PADRAO[0].ficha, { indexacao: PADRAO[0].ficha.indexacao }), docUrl: m.docUrl, foto: m.foto })
+                    : m);
+                PADRAO.forEach(p => { if (!lidos.some(m => m.id === p.id)) lidos.push(normalizar(p)); });
+                try { localStorage.setItem("modelos016", "1"); } catch (e) { /* ignora */ }
+                return lidos;
+            }
         } catch (e) { /* ignora */ }
+        try { localStorage.setItem("modelos016", "1"); } catch (e) { /* ignora */ }
         return PADRAO.map(normalizar);
     }
     function gravarLocal() {
@@ -164,6 +204,29 @@ const Modelos = (function () {
     const nome = id => porId(id)?.nome || id || "";
     const foto = m => (m ? m.foto || FOTOS[m.id] || "" : "");
     const nomeModulo = cod => MODULOS[cod]?.[0] || cod || "";
+
+    // Perfil de rota do modelo (0.16), vazio e carregado, para a planta e o despacho.
+    // Sem ficha preenchida: o padrão do módulo (T carregado: sem giro, sem lado, raio 1,5 m, comboio 6 m).
+    function perfil(agvOuModelo) {
+        const m = agvOuModelo && agvOuModelo.modulo && agvOuModelo.ficha ? agvOuModelo : doAgv(agvOuModelo);
+        if (!m) return null;
+        const f = m.ficha || {};
+        const num = (v, padrao) => { const n = Number(String(v ?? "").replace(",", ".")); return Number.isFinite(n) && String(v ?? "").trim() !== "" ? n : padrao; };
+        const simNao = (v, padrao) => { const t = String(v ?? "").trim().toLowerCase(); return t.startsWith("s") ? true : t.startsWith("n") ? false : padrao; };
+        const reboque = m.modulo === "T";
+        const comprimento = num(f.comprimento_mm, null);
+        const frente = comprimento ? comprimento / 2000 : 0.2;
+        const base = { modulo: m.modulo, guia: m.guiamento, frente, nome: m.nome, gira: true, lateral: true, raioMinimo: 0, comboio: 0 };
+        const comCarga = Object.assign({}, base, {
+            gira: simNao(f.gira_carregado, !reboque),
+            lateral: simNao(f.lateral_carregado, !reboque),
+            raioMinimo: num(f.raio_min_carregado_m, reboque ? 1.5 : 0),
+            comboio: num(f.comboio_m, reboque ? 6 : 0)
+        });
+        const cc = num(f.comprimento_carregado_mm, null);
+        if (cc) comCarga.frente = Math.max(frente, cc / 2000);
+        return { vazio: base, carregado: comCarga };
+    }
 
     function valorFicha(m, chave) {
         const v = m?.ficha?.[chave];
@@ -232,7 +295,7 @@ const Modelos = (function () {
 
     async function salvar(m, docUrl) {
         const novo = normalizar(m);
-        if (!/^[a-z0-9][a-z0-9-]{1,31}$/.test(novo.id)) throw new Error("O código usa 2 a 32 letras minúsculas, números e - (ex.: atta-g-o).");
+        if (!/^[a-z0-9][a-z0-9-]{1,31}$/.test(novo.id)) throw new Error("O código usa 2 a 32 letras minúsculas, números e - (ex.: atta-e-o).");
         if (novo.nome.trim().length < 2) throw new Error("Dê um nome ao modelo.");
         if (naNuvem()) {
             if (!fornecedor()) throw new Error("Só o fornecedor altera o catálogo.");
@@ -502,7 +565,7 @@ const Modelos = (function () {
     setTimeout(carregar, 0);   // depois de "Modelos" existir (o aviso redesenha a frota)
 
     return {
-        MODULOS, GUIAMENTOS, CAMPOS, GRUPOS, PADRAO,
+        MODULOS, GUIAMENTOS, CAMPOS, GRUPOS, PADRAO, perfil,
         carregar, lista: () => lista.slice(), disponiveis, porId, doAgv, modulo, nome, foto, resumo, valorFicha,
         nomeModulo, opcoesHtml, cartaoCadastroHtml, documentacao, abrirDocumentacao, salvar, liberar, abrir, desenhar, silhuetaSvg,
         podeEditar, podeVerDoc

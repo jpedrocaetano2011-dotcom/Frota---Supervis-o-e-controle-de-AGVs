@@ -274,7 +274,7 @@ function renderizarRotina(abrindo = false) {
     const container = document.getElementById("mapaRotina");
     if (container) {
         if (!mapaRotina) {
-            mapaRotina = MapaSVG.criar(container, { rota: false, rastro: false, outros: false, mostrarTags: false });
+            mapaRotina = MapaSVG.criar(container, { rota: false, rastro: false, outros: false, mostrarTags: false, nome: "rotina" });
             mapaRotina.sobreposicao = desenharDonosBercos;
         }
         const planta = plantaPublicada();

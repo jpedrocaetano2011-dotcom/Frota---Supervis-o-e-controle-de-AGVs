@@ -427,7 +427,10 @@ const Despacho = (function () {
             usoHoje,
             modelo: agv.modelo || null,
             modeloNome: typeof Modelos !== "undefined" ? Modelos.nome(agv.modelo) : (agv.modelo || ""),
-            manutencao: typeof Manutencao !== "undefined" && Manutencao.ativa(agv)
+            manutencao: typeof Manutencao !== "undefined" && Manutencao.ativa(agv),
+            // 0.16: o que o modelo consegue fazer (vazio/carregado) e se está com carga agora
+            perfil: typeof Modelos !== "undefined" && Modelos.perfil ? Modelos.perfil(agv) : null,
+            carregado: typeof garraCarregada === "function" ? Boolean(garraCarregada(agv)) : false
         };
     }
 
@@ -465,7 +468,7 @@ const Despacho = (function () {
             pedidos: lista.filter(p => ESTADOS_ATIVOS.includes(p.estado)).map(p => Object.assign({}, p)),
             agvs: Object.values(agvs).map(agvParaDespacho),
             planta, missoes: Array.isArray(missoes) ? missoes : [], agora: agora(),
-            config: configuracao()
+            config: configuracao(), postos: postosAtuais()
         });
         espera = r.espera;
         situacaoAgvs = r.agvs;
@@ -791,7 +794,7 @@ const Despacho = (function () {
         const container = document.getElementById("mapaDespacho");
         if (!container || typeof MapaSVG === "undefined") return;
         if (!mapa) {
-            mapa = MapaSVG.criar(container, { rota: true, rastro: false, outros: true, mostrarTags: false });
+            mapa = MapaSVG.criar(container, { rota: true, rastro: false, outros: true, mostrarTags: false, nome: "despacho" });
             mapa.sobreposicao = desenharPostos;
         }
         const planta = plantaPublicada();

@@ -30,6 +30,55 @@ const Postos = (function () {
         usuariosPosto = (data || []).map(u => ({ id: u.usuario_id, nome: u.nome, email: u.email }));
     }
 
+    // Módulos que a missão pede, pelas estações dela (0.16): kit = G, carrinho = E...
+    function modulosDaMissao(idMissao) {
+        const m = (missoes || []).find(x => x.id === idMissao);
+        const planta = typeof plantaPublicada === "function" ? plantaPublicada() : null;
+        if (!m || !planta) return [];
+        const mods = new Set();
+        (m.etapas || []).filter(e => e.tipo === "IR_PARA").forEach(e => {
+            const c = Planta.candidatosDestino(planta, e.destino);
+            const carga = c?.estacao?.carga;
+            if (carga && Planta.CARGAS[carga]) mods.add(Planta.CARGAS[carga].modulo);
+        });
+        return [...mods];
+    }
+    // Modelos que servem para a missão (todos, se as estações não dizem a carga)
+    function modelosCompativeis(idMissao) {
+        const lista = typeof Modelos !== "undefined" ? Modelos.disponiveis() : [];
+        const mods = modulosDaMissao(idMissao);
+        return lista.filter(m => !mods.length || (mods.length === 1 && mods[0] === m.modulo));
+    }
+
+    // Quem atende o botão (0.16): modelos (obrigatório), preferidos e "só estes"
+    function htmlQuemAtende(b, i, pode) {
+        if (typeof Modelos === "undefined" || !Modelos.disponiveis().length) return "";
+        const mods = modulosDaMissao(b.missao);
+        const servem = new Set(modelosCompativeis(b.missao).map(m => m.id));
+        const marcados = new Set(b.modelos || []);
+        const frota = typeof agvs !== "undefined" ? Object.values(agvs).filter(a => !marcados.size || marcados.has(a.modelo)) : [];
+        const preferidos = new Set(b.preferidos || []);
+        const espera = Number(b.esperaPreferidoS ?? 120);
+        return `<div class="posto-atende" data-atende="${i}">
+            <div class="posto-atende-linha"><span class="posto-atende-rotulo">Quem atende</span>
+                ${Modelos.disponiveis().map(m => {
+                    const ok = servem.has(m.id);
+                    return `<label class="rotina-check ${ok ? "" : "nao-serve"}" title="${ok ? "" : `A missão vai a estações do Atta ${mods.join(", ")}`}"><input type="checkbox" data-campo="modelo" data-modelo="${esc(m.id)}" ${marcados.has(m.id) ? "checked" : ""} ${ok ? "" : "disabled"} ${pode}><span>${esc(m.nome)}</span></label>`;
+                }).join("")}
+            </div>
+            ${b.missao && !marcados.size ? `<p class="posto-atende-aviso">Escolha os modelos que atendem este botão${mods.length ? ` (a missão vai a estações do Atta ${mods.join(", ")})` : ""}.</p>` : ""}
+            ${frota.length ? `<div class="posto-atende-linha"><span class="posto-atende-rotulo">Preferidos</span>
+                ${frota.map(a => `<label class="rotina-check"><input type="checkbox" data-campo="preferido" data-agv="${esc(a.id)}" ${preferidos.has(a.id) ? "checked" : ""} ${pode}><span>${esc(a.id)}</span></label>`).join("")}
+            </div>
+            <div class="posto-atende-linha ${preferidos.size ? "" : "apagado"}">
+                <label class="rotina-check"><input type="checkbox" data-campo="soEstes" ${b.soEstes ? "checked" : ""} ${pode}><span>Só estes (espera se estiverem ocupados)</span></label>
+                <label class="posto-atende-espera">sem eles, manda outro depois de
+                    <select data-campo="esperaPreferidoS" ${pode}>${[[60, "1 min"], [120, "2 min"], [300, "5 min"], [600, "10 min"]].map(([v, t]) => `<option value="${v}" ${v === espera ? "selected" : ""}>${t}</option>`).join("")}</select>
+                </label>
+            </div>` : ""}
+        </div>`;
+    }
+
     function htmlCartao(p, criando) {
         const pontos = pontosDaPlanta();
         const pode = podeEditar() ? "" : "disabled";
@@ -40,6 +89,7 @@ const Postos = (function () {
                 <input type="text" data-campo="rotulo" value="${esc(b.rotulo || "")}" placeholder="Rótulo (ex.: Pedir kit)" aria-label="Rótulo do botão ${i + 1}" ${pode}>
                 <select data-campo="missao" aria-label="Missão do botão ${i + 1}" ${pode}>${opcoesMissao(b.missao)}</select>
                 <button type="button" class="btn-remover-fila" data-postos="tirarBotao" aria-label="Tirar o botão ${i + 1}" ${pode}>×</button>
+                ${htmlQuemAtende(b, i, pode)}
             </div>`).join("");
         const usuarios = window.Nuvem && Nuvem.emNuvem()
             ? `<div class="campo"><span>Tablets (usuários com papel Posto)</span>
@@ -76,10 +126,24 @@ const Postos = (function () {
             ponto: v("ponto").value,
             permiteUrgente: v("permiteUrgente").checked,
             pinPessoal: Boolean(v("pinPessoal")?.checked),
-            botoes: [...cartao.querySelectorAll("[data-botao]")].map(l => ({
-                rotulo: l.querySelector('[data-campo="rotulo"]').value.trim(),
-                missao: l.querySelector('[data-campo="missao"]').value
-            })),
+            botoes: [...cartao.querySelectorAll("[data-botao]")].map(l => {
+                const b = {
+                    rotulo: l.querySelector('[data-campo="rotulo"]').value.trim(),
+                    missao: l.querySelector('[data-campo="missao"]').value
+                };
+                const atende = l.querySelector("[data-atende]");
+                if (atende) {
+                    const modelos = [...atende.querySelectorAll('[data-campo="modelo"]')].filter(c => c.checked && !c.disabled).map(c => c.dataset.modelo);
+                    const preferidos = [...atende.querySelectorAll('[data-campo="preferido"]')].filter(c => c.checked).map(c => c.dataset.agv);
+                    if (modelos.length) b.modelos = modelos;
+                    if (preferidos.length) {
+                        b.preferidos = preferidos;
+                        if (atende.querySelector('[data-campo="soEstes"]')?.checked) b.soEstes = true;
+                        b.esperaPreferidoS = Number(atende.querySelector('[data-campo="esperaPreferidoS"]')?.value) || 120;
+                    }
+                }
+                return b;
+            }),
             usuarios: [...cartao.querySelectorAll("[data-usuario]")].filter(c => c.checked).map(c => c.dataset.usuario)
         };
     }
@@ -114,6 +178,9 @@ const Postos = (function () {
         p.botoes = p.botoes.filter(b => b.missao || b.rotulo);
         const semMissao = p.botoes.find(b => !b.missao);
         if (semMissao) { ui.aviso(`Escolha a missão do botão “${semMissao.rotulo}”.`, "aviso"); return; }
+        // 0.16: quem atende é escolha explícita (nunca "qualquer um")
+        const semQuem = typeof Modelos !== "undefined" && Modelos.disponiveis().length && p.botoes.find(b => !(b.modelos || []).length);
+        if (semQuem) { ui.aviso(`Escolha quem atende o botão “${semQuem.rotulo || Despacho.nomeMissao(semQuem.missao)}” (os modelos de Atta).`, "aviso"); return; }
         p.botoes.forEach(b => { if (!b.rotulo) b.rotulo = Despacho.nomeMissao(b.missao); });
         try {
             if (await Nuvem.salvarPosto(p, idAntigo)) {
@@ -125,6 +192,27 @@ const Postos = (function () {
             ui.aviso(`Não foi possível salvar o posto: ${Nuvem.traduzirErro(e)}`, "erro");
         }
     }
+
+    // Trocou a missão ou os modelos de um botão: redesenha o cartão (modelos que servem e a frota deles)
+    document.addEventListener("change", e => {
+        const linha = e.target.closest(".posto-cartao [data-botao]");
+        if (!linha || !["missao", "modelo"].includes(e.target.dataset.campo)) return;
+        const cartao = linha.closest(".posto-cartao");
+        const p = lerCartao(cartao);
+        const i = Number(linha.dataset.botao);
+        if (e.target.dataset.campo === "missao" && p.botoes[i]) {
+            // sugestão: os modelos que servem para a missão nova
+            p.botoes[i].modelos = modelosCompativeis(p.botoes[i].missao).map(m => m.id);
+            delete p.botoes[i].preferidos; delete p.botoes[i].soEstes;
+        }
+        const criando = !cartao.dataset.posto;
+        if (criando) novo = p;
+        const div = document.createElement("div");
+        div.innerHTML = htmlCartao(p, criando);
+        const novoCartao = div.firstElementChild;
+        if (!criando) novoCartao.dataset.posto = cartao.dataset.posto;
+        cartao.replaceWith(novoCartao);
+    });
 
     document.addEventListener("click", async e => {
         const b = e.target.closest("[data-postos]");
@@ -158,18 +246,18 @@ const Postos = (function () {
     document.getElementById("btnExemplosDespacho")?.addEventListener("click", async () => {
         if (typeof PlantaExemplo === "undefined" || !PlantaExemplo.postos) return;
         const idsMissoes = new Set((missoes || []).map(m => m.id));
-        // só os do Despacho: kit e vazio das prensas e os postos P1 e P2 (a Montagem usa a M001, que pode ser outra aqui)
-        const novasMissoes = PlantaExemplo.missoes().filter(m => ["M010", "M011", "M020", "M021"].includes(m.id) && !idsMissoes.has(m.id));
+        // as missões e os postos da metalúrgica de exemplo que ainda não existem aqui
+        const novasMissoes = PlantaExemplo.missoes().filter(m => !idsMissoes.has(m.id));
         const idsPostos = new Set(Despacho.postos().map(p => p.id));
-        const novosPostos = PlantaExemplo.postos().filter(p => ["P1", "P2"].includes(p.id) && !idsPostos.has(p.id));
+        const novosPostos = PlantaExemplo.postos().filter(p => !idsPostos.has(p.id));
         if (!novasMissoes.length && !novosPostos.length) { ui.aviso("As missões e os postos de exemplo já estão aqui (mesmos IDs).", "info"); return; }
         const planta = plantaPublicada();
-        const faltam = ["E01", "E02", "E03", "E04"].filter(id => !Planta.noPorId(planta, id) && !(planta.estacoes || []).some(e => e.id === id));
+        const faltam = ["KITS", "SUB1", "PR1", "SOLDA", "EXPED", "CNC1", "INSP", "MONT", "SUPER"].filter(id => !(planta.estacoes || []).some(e => e.id === id));
         const texto = [
             novasMissoes.length ? `Missões: ${novasMissoes.map(m => m.id).join(", ")}.` : "",
             novosPostos.length ? `Postos: ${novosPostos.map(p => `${p.id} ${p.nome}`).join(", ")}.` : "",
             "Nada do que já existe é trocado (IDs repetidos ficam de fora).",
-            faltam.length ? `Atenção: sua planta não tem ${faltam.join(", ")}; essas missões só funcionam na planta de exemplo, ou depois de você trocar os destinos.` : ""
+            faltam.length ? `Atenção: sua planta não tem ${faltam.slice(0, 4).join(", ")}${faltam.length > 4 ? "…" : ""}; essas missões só funcionam na metalúrgica de exemplo (Planta › Exemplo), ou depois de você trocar os destinos.` : ""
         ].filter(Boolean).join(" ");
         if (!await ui.confirmar({ titulo: "Adicionar exemplos do Despacho", texto, confirmar: "Adicionar" })) return;
         if (novasMissoes.length) {

@@ -247,7 +247,7 @@
 
     // Insere um no no meio de um segmento (divide em dois)
     function dividirSegmento(segmento, ponto, tipo, estacaoId) {
-        if (Planta.tipoSegmento(segmento) === "LATERAL") return null;
+        if (Planta.tipoSegmento(segmento) !== "LINHA") return null;   // troca lateral e curva não se dividem
         const proj = projetar(segmento, ponto);
         if (proj.distancia < 0.1 || proj.comprimento - proj.distancia < 0.1) return null;
         const no = criarNo(tipo, proj.x, proj.y, estacaoId);
@@ -255,6 +255,7 @@
         const novo = {
             id: Planta.proximoId(p().segmentos, "S"), tipo: "LINHA", a: no.id, b: segmento.b, sentido: segmento.sentido,
             velocidadeMaxima: segmento.velocidadeMaxima, barreira: segmento.barreira,
+            ...(segmento.guia ? { guia: segmento.guia } : {}), ...(segmento.modulos ? { modulos: segmento.modulos.slice() } : {}), ...(segmento.ramal ? { ramal: true } : {}),
             tags: tags.filter(t => t.distancia > proj.distancia).map(t => ({ rfid: t.rfid, distancia: Planta.arred(t.distancia - proj.distancia) }))
         };
         segmento.tags = tags.filter(t => t.distancia < proj.distancia);
@@ -368,6 +369,13 @@
        ATUALIZACAO DA TELA
        ======================================================== */
 
+    // Modelos da frota (0.16): a validação confere se cada um chega nas estações dele
+    function perfisDaFrota() {
+        if (typeof Modelos === "undefined" || !Modelos.perfil || typeof agvs === "undefined") return [];
+        const ids = [...new Set(Object.values(agvs).map(a => a.modelo).filter(Boolean))];
+        return ids.map(id => Modelos.porId(id)).filter(Boolean).map(m => ({ nome: m.nome, perfil: Modelos.perfil(m) }));
+    }
+
     function validarSelecao() {
         const sel = estado.selecao;
         if (!sel) return;
@@ -386,7 +394,7 @@
         atualizarStatus();
         clearTimeout(estado.timerValidar);
         estado.timerValidar = setTimeout(() => {
-            estado.validacao = Planta.validar(p());
+            estado.validacao = Planta.validar(p(), { perfis: perfisDaFrota() });
             renderizarValidacao();
             desenharMapa();
         }, 200);
@@ -451,6 +459,24 @@
        ======================================================== */
 
     const esc = valor => String(valor ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+    // Biblioteca agrupada (0.16) para o seletor de objeto
+    function opcoesBiblioteca(atual) {
+        return (Planta.GRUPOS_LAYOUT || [["", ""]]).map(([g, titulo]) => {
+            const itens = Object.entries(Planta.TIPOS_LAYOUT).filter(([, v]) => (v.grupo || "") === g);
+            if (!itens.length) return "";
+            return `<optgroup label="${esc(titulo)}">${itens.map(([k, v]) => `<option value="${k}" ${k === atual ? "selected" : ""}>${esc(v.nome)}</option>`).join("")}</optgroup>`;
+        }).join("");
+    }
+    function textoRegraObjeto(o) {
+        const tipo = Planta.TIPOS_LAYOUT[o.tipo] || {};
+        if (tipo.regra === "FAIXA") return `${o.tipo === "FAIXA_PEDESTRE" ? "Faixa de pedestre" : "Cruzamento com empilhadeira"}: o Atta para ${Planta.FAIXA.pausaS} s antes, atravessa devagar com o LED piscando e nunca para em cima (nenhum ponto pode ficar aqui).`;
+        if (tipo.regra === "LIVRE") return "Área livre obrigatória (frente de quadro elétrico, hidrante, saída de emergência): nenhum ponto de parada pode ficar aqui.";
+        if (o.tipo === "ZONA_PROIBIDA") return "Nenhuma linha pode passar por aqui.";
+        if (o.tipo === "ZONA_LENTA") return "Linhas que cruzam a zona ficam limitadas a esta velocidade.";
+        if (tipo.solido) return "Objeto sólido: as linhas não podem atravessá-lo e o AGV virtual o enxerga nos sensores de distância.";
+        return "Referência visual.";
+    }
 
     function campo(rotulo, nomeCampo, valor, extra = "") {
         return `<label class="editor-campo"><span>${rotulo}</span><input data-campo="${nomeCampo}" value="${esc(valor)}" ${extra}></label>`;
@@ -550,6 +576,8 @@
                             ${campo("Nome", "estacaoNome", estacao.nome, 'placeholder="Ex.: Prensa 1"')}
                         </div>
                         ${maquinas.length ? campoSelect("Máquina atendida", "estacaoMaquina", estacao.maquina || "", [["", "—"]].concat(maquinas.map(m => [m.id, m.nome || m.id]))) : ""}
+                        ${campoSelect("O que a estação troca", "estacaoCarga", estacao.carga || "", [["", "Qualquer (não definido)"]].concat(Object.entries(Planta.CARGAS).map(([k, v]) => [k, `${v.nome} · Atta ${v.modulo}`])))}
+                        <small class="suave">${estacao.carga ? `Só o Atta ${Planta.CARGAS[estacao.carga].modulo} recebe missões para cá, e a planta confere se ele chega e sai (o comboio não anda de ré nem gira no ponto).` : "Defina para o despacho só mandar o módulo certo (kit: G, carrinho: E, esteira: R, comboio: T)."}</small>
                         ${typeof Modelos !== "undefined" && Modelos.lista().length ? `
                             <div class="editor-campo"><span>Atendida por</span>
                                 <div class="editor-modelos">${Modelos.lista().map(m => `<label class="config-chave"><input type="checkbox" data-campo="estacaoModelo" data-modelo="${esc(m.id)}" ${(estacao.modelos || []).includes(m.id) ? "checked" : ""}><span>${esc(m.nome)}</span></label>`).join("")}</div>
@@ -587,7 +615,51 @@
                 ${campoNumero("Barreira neste ponto", "noBarreira", no.barreira || "", 10, "mm", 'min="0" placeholder="padrão do AGV"')}
                 <p class="editor-texto suave">Use quando o AGV para de frente para uma máquina (ex.: 300 mm). Mínimo ${Planta.LIMITES.barreiraMinima} mm.</p>
                 <p class="editor-texto suave">${ligados} segmento(s) ligado(s).</p>
+                ${planta.segmentos.filter(x => Planta.tipoSegmento(x) === "LINHA" && (x.a === no.id || x.b === no.id)).length === 2 ? `
+                    <div class="editor-bloco">
+                        <span class="editor-subtitulo">Curva para rebocador neste canto</span>
+                        <p class="editor-texto suave">O comboio carregado não gira no ponto. A curva corta o canto; os outros Atta podem usar o canto ou a curva (o Eciton escolhe o mais rápido).</p>
+                        <div class="editor-linha">
+                            ${campoNumero("Raio", "cantoRaio", estado.raioCanto ?? 1.5, 0.1, "m", `min="${Planta.RAIO_MINIMO_CURVA}"`)}
+                            <div class="editor-acoes compacto"><button class="btn btn-mini" data-acao="criarConcordancia">Criar curva</button></div>
+                        </div>
+                    </div>` : ""}
                 <div class="editor-acoes"><button class="btn btn-mini btn-perigo" data-acao="excluir">Excluir ponto</button></div>`;
+            return;
+        }
+
+        // Guia, módulos e ramal (0.16): o mesmo bloco para reta e curva
+        const blocoModulos = s => `
+                <div class="editor-bloco">
+                    <span class="editor-subtitulo">Quem passa aqui</span>
+                    ${campoSelect("Guia no chão", "segGuia", s.guia || "", [["", `Padrão da planta (${Planta.GUIAS[planta.guiaPadrao || "OPTICA"]})`]].concat(Object.entries(Planta.GUIAS)))}
+                    <div class="editor-campo"><span>Só estes módulos</span>
+                        <div class="editor-modelos">${["E", "G", "R", "T"].map(m => `<label class="config-chave"><input type="checkbox" data-campo="segModulo" data-modulo="${m}" ${(s.modulos || []).includes(m) ? "checked" : ""}><span>Atta ${m}</span></label>`).join("")}</div>
+                        <small class="suave">Nenhum marcado: todos. Sem fita (LiDAR): só Atta -L passa.</small>
+                    </div>
+                    <label class="config-chave"><input type="checkbox" data-campo="segRamal" ${s.ramal ? "checked" : ""}><span>Ramal: quem volta daqui para a linha principal cede a vez</span></label>
+                </div>`;
+
+        if (sel.tipo === "segmento" && Planta.tipoSegmento(Planta.segmentoPorId(planta, sel.id)) === "CURVA") {
+            const s = Planta.segmentoPorId(planta, sel.id);
+            const g = Planta.geometriaCurva(planta, s);
+            const d = Planta.descreverSegmento(planta, s, s.a);
+            titulo.textContent = `Curva ${s.id}`;
+            painel.innerHTML = `
+                <p class="editor-texto"><strong>${esc(s.a)} → ${esc(s.b)}</strong> · ${Planta.arred(d.comprimento, 2)} m · sai a ${d.saida}°, chega a ${d.chegada}°</p>
+                <p class="editor-texto suave">Fita em arco. O Atta segue a curva sem parar; na ponta onde a fita se divide ele segue a borda do lado certo (precisa de tag RFID no ponto).</p>
+                <div class="editor-linha">
+                    ${campoNumero("Raio", "segRaio", s.raio, 0.05, "m", `min="${Planta.RAIO_MINIMO_CURVA}"`)}
+                    ${campoSelect("Vira para", "segLado", s.lado, [["ESQ", `esquerda (de ${s.a})`], ["DIR", `direita (de ${s.a})`]])}
+                </div>
+                ${g && g.raioPedido < g.corda / 2 - 0.001 ? `<div class="editor-aviso">O raio precisa ser pelo menos ${Planta.arred(g.corda / 2, 2)} m (metade da distância entre os pontos).</div>` : ""}
+                ${campoSelect("Sentido", "segSentido", s.sentido, [["DUPLO", "Mão dupla"], ["A_PARA_B", `Só ${s.a} → ${s.b}`], ["B_PARA_A", `Só ${s.b} → ${s.a}`]])}
+                ${campoNumero("Velocidade máx.", "segVelocidade", s.velocidadeMaxima || "", 0.005, "m/s", `min="0" max="${Planta.LIMITES.velocidadeMaxima}" placeholder="padrão"`)}
+                ${blocoModulos(s)}
+                <div class="editor-acoes">
+                    <button class="btn btn-mini" data-acao="inverterSegmento">Inverter A/B</button>
+                    <button class="btn btn-mini btn-perigo" data-acao="excluir">Excluir curva</button>
+                </div>`;
             return;
         }
 
@@ -634,6 +706,22 @@
                     ${campoNumero("Barreira", "segBarreira", s.barreira || "", 10, "mm", 'min="0" placeholder="padrão"')}
                 </div>
                 ${vZona && vZona !== s.velocidadeMaxima ? `<p class="editor-texto suave">Limitado a ${vZona} m/s por zona lenta.</p>` : ""}
+                ${blocoModulos(s)}
+                <div class="editor-bloco">
+                    <span class="editor-subtitulo">Ramal (para o rebocador e para parar fora do corredor)</span>
+                    <p class="editor-texto suave">Sai da linha em curva, corre paralelo e volta. Quem para no ramal deixa a linha principal livre; para voltar, cede a vez.</p>
+                    <div class="editor-linha">
+                        ${campoNumero("Começa a", "ramalDe", estado.ramal?.de ?? Planta.arred(Math.min(2, L / 4), 2), 0.1, "m", 'min="0.15"')}
+                        ${campoNumero("Termina a", "ramalAte", estado.ramal?.ate ?? Planta.arred(Math.max(0.3, L - Math.min(2, L / 4)), 2), 0.1, "m", 'min="0.3"')}
+                    </div>
+                    <div class="editor-linha">
+                        ${campoNumero("Afastamento", "ramalAfastamento", estado.ramal?.afastamento ?? 1.5, 0.1, "m", 'min="0.3"')}
+                        ${campoNumero("Raio das curvas", "ramalRaio", estado.ramal?.raio ?? 1.5, 0.1, "m", `min="${Planta.RAIO_MINIMO_CURVA}"`)}
+                    </div>
+                    ${campoSelect("Lado", "ramalLado", estado.ramal?.lado ?? "ESQ", [["ESQ", `à esquerda de ${s.a}→${s.b}`], ["DIR", `à direita de ${s.a}→${s.b}`]])}
+                    <p class="editor-texto suave">Distâncias medidas a partir de ${esc(s.a)} (o segmento tem ${Planta.arred(L, 2)} m).</p>
+                    <div class="editor-acoes"><button class="btn btn-mini" data-acao="criarRamal">Criar ramal</button></div>
+                </div>
                 <div class="editor-bloco">
                     <span class="editor-subtitulo">Tags intermediárias (máx. ${Planta.LIMITES.checkpointsPorTrecho})</span>
                     <p class="editor-texto suave">Corrigem a odometria no meio do caminho. Distância medida a partir de ${esc(s.a)}.</p>
@@ -669,7 +757,7 @@
             titulo.textContent = Planta.TIPOS_LAYOUT[o.tipo]?.nome || "Objeto";
             painel.innerHTML = `
                 <div class="editor-linha">
-                    ${campoSelect("Tipo", "objTipo", o.tipo, Object.entries(Planta.TIPOS_LAYOUT).map(([k, v]) => [k, v.nome]))}
+                    <label class="editor-campo"><span>Tipo</span><select data-campo="objTipo">${opcoesBiblioteca(o.tipo)}</select></label>
                     ${campo("Nome", "objNome", o.nome || "", 'placeholder="Ex.: Prensa 3"')}
                 </div>
                 <div class="editor-linha">
@@ -685,7 +773,8 @@
                     <div class="editor-acoes compacto"><button class="btn btn-mini" data-acao="girarObjeto" data-valor="90">⟲ 90°</button><button class="btn btn-mini" data-acao="girarObjeto" data-valor="-90">⟳ 90°</button></div>
                 </div>
                 ${o.tipo === "ZONA_LENTA" ? campoNumero("Velocidade máx. na zona", "objVelocidade", o.velocidadeMaxima || "", 0.005, "m/s", `min="0" max="${Planta.LIMITES.velocidadeMaxima}"`) : ""}
-                <p class="editor-texto suave">${Planta.TIPOS_LAYOUT[o.tipo]?.solido ? "Objeto sólido: as linhas não podem atravessá-lo e o AGV virtual o enxerga nos sensores de distância." : o.tipo === "ZONA_PROIBIDA" ? "Nenhuma linha pode passar por aqui." : o.tipo === "ZONA_LENTA" ? "Linhas que cruzam a zona ficam limitadas a esta velocidade." : "Apenas referência visual."}</p>
+                ${(Planta.TIPOS_LAYOUT[o.tipo]?.altura || 0) > 0 ? campoNumero("Altura (vista 3D)", "objAltura", o.altura || "", 0.1, "m", `min="0" placeholder="${Planta.TIPOS_LAYOUT[o.tipo].altura}"`) : ""}
+                <p class="editor-texto suave">${esc(textoRegraObjeto(o))}</p>
                 <div class="editor-acoes">
                     <button class="btn btn-mini" data-acao="duplicarObjeto">Duplicar</button>
                     <button class="btn btn-mini btn-perigo" data-acao="excluir">Excluir</button>
@@ -706,6 +795,10 @@
         if (nome === "escalaReal") return;
         if (nome === "paralelaDistancia") { estado.distanciaParalela = num; return; }
         if (nome === "paralelaLado") { estado.ladoParalela = num; return; }
+        // ferramentas de ramal e de canto (0.16): só guardam o valor até clicar em criar
+        const chavesRamal = { ramalDe: "de", ramalAte: "ate", ramalAfastamento: "afastamento", ramalRaio: "raio", ramalLado: "lado" };
+        if (chavesRamal[nome]) { estado.ramal = Object.assign({}, estado.ramal, { [chavesRamal[nome]]: nome === "ramalLado" ? valor : num }); return; }
+        if (nome === "cantoRaio") { estado.raioCanto = num; return; }
         registrarDesfazer();
 
         switch (nome) {
@@ -741,6 +834,7 @@
                 case "estacaoId": if (!renomearEstacao(no.estacao, valor)) { estado.desfazer.pop(); renderizarPropriedades(); return; } break;
                 case "estacaoNome": { const e = Planta.estacaoPorId(planta, no.estacao); if (e) e.nome = valor.trim(); break; }
                 case "estacaoMaquina": { const e = Planta.estacaoPorId(planta, no.estacao); if (e) { if (valor) e.maquina = valor; else delete e.maquina; } break; }
+                case "estacaoCarga": { const e = Planta.estacaoPorId(planta, no.estacao); if (e) { if (Planta.CARGAS[valor]) e.carga = valor; else delete e.carga; } break; }
                 case "estacaoModelo": {
                     const e = Planta.estacaoPorId(planta, no.estacao);
                     if (e) {
@@ -766,6 +860,17 @@
             const i = Number(alvo.dataset.indice);
             switch (nome) {
                 case "segSentido": s.sentido = valor; break;
+                case "segGuia": if (Planta.GUIAS[valor]) s.guia = valor; else delete s.guia; break;
+                case "segModulo": {
+                    const m = alvo.dataset.modulo;
+                    const lista = new Set(s.modulos || []);
+                    if (alvo.checked) lista.add(m); else lista.delete(m);
+                    if (lista.size) s.modulos = ["E", "G", "R", "T"].filter(x => lista.has(x)); else delete s.modulos;
+                    break;
+                }
+                case "segRamal": if (alvo.checked) s.ramal = true; else delete s.ramal; break;
+                case "segRaio": if (num > 0) s.raio = Planta.arred(num); break;
+                case "segLado": s.lado = valor === "DIR" ? "DIR" : "ESQ"; break;
                 case "segVelocidade": s.velocidadeMaxima = Math.max(0, Math.min(Planta.LIMITES.velocidadeMaxima, num || 0)); break;
                 case "segBarreira": s.barreira = Math.max(0, Math.round(num) || 0); break;
                 case "tagRfid": s.tags[i].rfid = Planta.normalizarRfid(valor); break;
@@ -783,6 +888,7 @@
                 case "objProfundidade": if (num > 0) o.profundidade = num; break;
                 case "objRotacao": o.rotacao = ((num % 360) + 360) % 360; break;
                 case "objVelocidade": o.velocidadeMaxima = Math.max(0, Math.min(Planta.LIMITES.velocidadeMaxima, num || 0)); break;
+                case "objAltura": if (num > 0) o.altura = Planta.arred(num, 2); else delete o.altura; break;
             }
         }
         alterado();
@@ -844,6 +950,38 @@
                 return;
             }
             case "esquecerFaixa": estado.ultimaFaixa = null; renderizarPropriedades(); return;
+            case "criarRamal": {
+                const s = Planta.segmentoPorId(p(), estado.selecao?.id);
+                if (!s) return;
+                const L = Planta.comprimentoSegmento(p(), s);
+                const painelAtual = document.getElementById("editorPropriedades");
+                const ler = (campoNome, padrao) => { const x = Number(painelAtual?.querySelector(`[data-campo="${campoNome}"]`)?.value); return Number.isFinite(x) && x > 0 ? x : padrao; };
+                const opcoes = {
+                    de: ler("ramalDe", Math.min(2, L / 4)), ate: ler("ramalAte", L - Math.min(2, L / 4)),
+                    afastamento: ler("ramalAfastamento", 1.5), raio: ler("ramalRaio", 1.5),
+                    lado: painelAtual?.querySelector('[data-campo="ramalLado"]')?.value || "ESQ"
+                };
+                registrarDesfazer();
+                const r = Planta.criarRamal(p(), s.id, opcoes);
+                if (!r.sucesso) { estado.desfazer.pop(); ui.aviso(r.erro, "aviso"); return; }
+                estado.ramal = null;
+                estado.selecao = { tipo: "segmento", id: r.segmentos.find(x => x.tipo === "LINHA" && x.a === r.paralelo[0].id)?.id || r.segmentos[0].id };
+                ui.aviso(`Ramal criado: ${r.comprimentoUtil} m paralelos para parar fora da linha. Ponha tags RFID nas duas bifurcações (${r.entrada.id} e ${r.saida.id}).`, "sucesso");
+                alterado();
+                return;
+            }
+            case "criarConcordancia": {
+                const no = Planta.noPorId(p(), estado.selecao?.id);
+                if (!no) return;
+                const raio = Number(document.querySelector('#editorPropriedades [data-campo="cantoRaio"]')?.value) || estado.raioCanto || 1.5;
+                registrarDesfazer();
+                const r = Planta.criarCurvaConcordancia(p(), no.id, raio);
+                if (!r.sucesso) { estado.desfazer.pop(); ui.aviso(r.erro, "aviso"); return; }
+                estado.selecao = { tipo: "segmento", id: r.curva.id };
+                ui.aviso(`Curva de ${Planta.arred(raio, 2)} m criada. Ponha tags RFID em ${r.pontos.map(x => x.id).join(" e ")} (onde a fita se divide).`, "sucesso");
+                alterado();
+                return;
+            }
             case "criarGemeo": {
                 const seg = Planta.segmentoPorId(planta, sel.id);
                 registrarDesfazer();
@@ -959,6 +1097,7 @@
                 s.tags.forEach(t => { t.distancia = Planta.arred(L - t.distancia); });
                 if (s.sentido === "A_PARA_B") s.sentido = "B_PARA_A";
                 else if (s.sentido === "B_PARA_A") s.sentido = "A_PARA_B";
+                if (s.tipo === "CURVA") s.lado = s.lado === "DIR" ? "ESQ" : "DIR";   // mesma curva vista do outro lado
                 alterado();
                 return;
             }
@@ -1037,7 +1176,7 @@
 
     async function publicar() {
         if (typeof Nuvem !== "undefined" && !Nuvem.exigir("administrar", "publicar a planta")) return;
-        estado.validacao = Planta.validar(p());
+        estado.validacao = Planta.validar(p(), { perfis: perfisDaFrota() });
         renderizarValidacao();
         desenharMapa();
         if (!estado.validacao.valida) {
@@ -1464,7 +1603,7 @@
     function iniciar(ganchos = {}) {
         Object.assign(estado.ganchos, ganchos);
         carregar();
-        estado.validacao = Planta.validar(estado.rascunho);
+        estado.validacao = Planta.validar(estado.rascunho, { perfis: perfisDaFrota() });
     }
 
     // Monta o mapa quando a tela aparece pela primeira vez
@@ -1473,7 +1612,7 @@
         if (!container) return;
         if (!estado.iniciado) {
             estado.iniciado = true;
-            estado.mapa = MapaSVG.criar(container, { grade: true, editor: true, rastro: false });
+            estado.mapa = MapaSVG.criar(container, { grade: true, editor: true, rastro: false, nome: "editor" });
             estado.mapa.ferramentaAtiva = () => estado.ferramenta;
             estado.mapa.sobreposicao = sobreposicao;
             estado.mapa.definirPlanta(p());
@@ -1497,6 +1636,8 @@
             });
 
             document.querySelectorAll("[data-ferramenta]").forEach(b => b.addEventListener("click", () => selecionarFerramenta(b.dataset.ferramenta)));
+            const seletorObjeto = document.getElementById("editorTipoObjeto");
+            if (seletorObjeto) seletorObjeto.innerHTML = opcoesBiblioteca(estado.tipoObjeto);
             document.getElementById("editorTipoObjeto")?.addEventListener("change", e => {
                 estado.tipoObjeto = e.target.value;
                 selecionarFerramenta("OBJETO");
@@ -1560,6 +1701,8 @@
         rascunho: () => estado.rascunho,
         importarTexto,
         publicar,
+        // seleciona um ponto, segmento ou objeto (como o clique no mapa)
+        selecionar: (tipo, id) => { estado.selecao = { tipo, id }; desenharMapa(); renderizarPropriedades(); },
         _estado: estado
     };
 })(typeof window !== "undefined" ? window : globalThis);

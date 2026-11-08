@@ -569,7 +569,7 @@ const Indicadores = (function () {
         if (!container || typeof MapaSVG === "undefined") return null;
         const planta = plantaPublicada();
         if (!planta.nos.length) { container.innerHTML = `<div class="empty-state">Sem planta publicada.</div>`; return null; }
-        const m = MapaSVG.criar(container, { rota: false, rastro: false, outros: false, mostrarTags: false, rotulos: true });
+        const m = MapaSVG.criar(container, { rota: false, rastro: false, outros: false, mostrarTags: false, rotulos: true, tresD: false });
         const max = Math.max(1, ...r.paradas.porPonto.map(x => x.tempo));
         m.sobreposicao = (mapa, grupo, { Y, px }) => {
             r.paradas.porPonto.forEach(x => {

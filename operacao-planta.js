@@ -30,6 +30,11 @@ EditorPlanta.iniciar({
         salvarMissoesNoNavegador();
         if (PlantaExemplo.postos && window.Nuvem && !Nuvem.emNuvem() && !Nuvem.postos().length)
             PlantaExemplo.postos().forEach(p => Nuvem.salvarPosto(p, null));
+        // 0.16: os kits das submontagens e o milk-run já programados (sem nuvem)
+        try {
+            if (PlantaExemplo.programacoes && window.Nuvem && !Nuvem.emNuvem() && !JSON.parse(localStorage.getItem("programacoesFrota") || "[]").length)
+                localStorage.setItem("programacoesFrota", JSON.stringify(PlantaExemplo.programacoes()));
+        } catch (e) { /* ignora */ }
         if (typeof renderizarListaMissoes === "function") renderizarListaMissoes();
         ui.aviso("Missões de exemplo adicionadas. Publique a planta para usá-las.", "info");
     },
@@ -258,7 +263,7 @@ function prepararMissaoParaESP(agvId, missaoId) {
     const posicao = agv.posicaoConhecida && agv.pontoAtual
         ? { ponto: agv.pontoAtual, orientacao: Number(agv.orientacao) || 0 }
         : null;
-    const resultado = Planta.compilarMissao(planta, missao, posicao);
+    const resultado = Planta.compilarMissao(planta, missao, posicao, typeof opcoesRotaAgv === "function" ? opcoesRotaAgv(agv) : {});
     if (!resultado.sucesso) {
         return resultado;
     }
@@ -487,7 +492,7 @@ function renderizarMapaVisaoGeral() {
         return;
     }
     if (!mapaVisaoGeral) {
-        mapaVisaoGeral = MapaSVG.criar(container, Object.assign({}, camadasMapa));
+        mapaVisaoGeral = MapaSVG.criar(container, Object.assign({}, camadasMapa, { nome: "visao", tresDPadrao: true, aoClicar3D: alvo => { if (alvo.tipo === "agv" && agvs[alvo.id] && typeof selecionarAGV === "function") selecionarAGV(alvo.id); } }));
         mapaVisaoGeral.sobreposicao = desenharZonasTrafego;
         document.getElementById("mapaZoomMais")?.addEventListener("click", () => mapaVisaoGeral.zoom(1 / 1.3));
         document.getElementById("mapaZoomMenos")?.addEventListener("click", () => mapaVisaoGeral.zoom(1.3));
@@ -550,6 +555,9 @@ function desenharAGVsVisaoGeral(dt = 50) {
                 estado: categoria.chave,
                 carga: garraCarregada(agv),
                 modulo: typeof Modelos !== "undefined" ? Modelos.modulo(agv) : null,
+                modeloId: agv.modelo || null,                      // 3D: forma e medidas do modelo
+                led: agv.online ? agv.leds || null : null,         // 3D: a cor e o efeito do LED de verdade
+                descricao: categoria.texto || categoria.curto || "",
                 manutencao: categoria.chave === "manutencao",
                 cone: agv.online && (agv.id === agvSelecionado) ? agv.barreira : null
             });

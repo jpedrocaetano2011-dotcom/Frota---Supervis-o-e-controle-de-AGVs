@@ -209,13 +209,16 @@ const AgvVirtual = (function () {
             const a = Planta.noPorId(planta, s.a), b = Planta.noPorId(planta, s.b);
             // troca lateral não tem fita no chão
             if (!a || !b || Planta.tipoSegmento(s) === "LATERAL") return;
-            e.vi_mundo_linha(a.x, a.y, b.x, b.y);
-            const L = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+            // sem fita (só Atta -L): nada no chão para o QTR
+            if (Planta.guiaSegmento && Planta.guiaSegmento(planta, s) === "VIRTUAL") return;
+            // curva (0.16): a fita em arco vira pedacinhos de 2 cm
+            const pts = Planta.tipoSegmento(s) === "CURVA" ? Planta.pontosSegmento(planta, s, 0.02) : [a, b];
+            for (let i = 1; i < pts.length; i++) e.vi_mundo_linha(pts[i - 1].x, pts[i - 1].y, pts[i].x, pts[i].y);
             (s.tags || []).forEach(t => {
                 if (!t.rfid) return;
                 escreverTexto(inst, inst.ptrTopico, t.rfid, 160);
-                const f = t.distancia / L;
-                e.vi_mundo_tag(a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f);
+                const q = Planta.pontoNoSegmento(planta, s, s.a, t.distancia);
+                e.vi_mundo_tag(q.x, q.y);
             });
         });
         planta.nos.forEach(no => {
@@ -470,6 +473,31 @@ const AgvVirtual = (function () {
         return ligar(id).then(() => renderizarTela());
     }
 
+    // Frota da metalúrgica de exemplo (0.16): os 6 Atta, cada um no seu ponto,
+    // com a simulação 8× mais rápida (o firmware é o do protótipo, 0,1 m/s)
+    async function criarFrotaExemplo() {
+        if (typeof PlantaExemplo === "undefined" || !PlantaExemplo.frotaVirtual) return;
+        const planta = plantaPublicada();
+        const lista = PlantaExemplo.frotaVirtual().filter(f => Planta.noPorId(planta, f.ponto));
+        if (!lista.length) { ui.aviso("Publique a planta de exemplo (Planta › Exemplo) antes de criar a frota dela.", "aviso"); return; }
+        const novos = lista.filter(f => !agvs[f.id]);
+        if (!novos.length) { ui.aviso("A frota do exemplo já está aqui.", "info"); return; }
+        for (const f of novos) {
+            agvs[f.id] = criarAGV(f.id, f.nome);
+            agvs[f.id].virtual = true;
+            if (typeof Modelos === "undefined" || Modelos.porId(f.modelo)) agvs[f.id].modelo = f.modelo;
+            const no = Planta.noPorId(planta, f.ponto);
+            agvs[f.id].virtualPose = { x: no.x, y: no.y, orientacao: no.orientacaoChegada ?? 0, ponto: no.id };
+            try { localStorage.setItem(CHAVE_CONFIG + f.id, JSON.stringify(Object.assign(configuracaoMundo(f.id), { velocidade: 8 }))); } catch (e) { /* ignora */ }
+        }
+        salvarAgvsFrota();
+        renderizarFrota();
+        for (const f of novos) await ligar(f.id);
+        selecionado = novos[0].id;
+        renderizarTela();
+        ui.aviso(`Frota do exemplo criada: ${novos.map(f => f.id).join(", ")} (simulação 8× mais rápida). Coloque cada um em AUTOMÁTICO para receber pedidos.`, "sucesso");
+    }
+
     async function remover(id) {
         if (!(await ui.confirmar({ titulo: `Remover o AGV virtual ${id}?`, texto: "A memória e a configuração salvas dele neste navegador também serão apagadas.", confirmar: "Remover", perigo: true }))) return;
         desligar(id);
@@ -508,7 +536,7 @@ const AgvVirtual = (function () {
         if (!selecionado || !agvs[selecionado]) selecionado = ids[0] || null;
         const container = document.getElementById("virtualMapa");
         if (container && !mapa) {
-            mapa = MapaSVG.criar(container, { grade: false, rastro: true });
+            mapa = MapaSVG.criar(container, { grade: false, rastro: true, nome: "virtual" });
             mapa.sobreposicao = desenharSobreposicao;
             mapa.ferramentaAtiva = () => (modoClique ? "CLIQUE" : "SELECIONAR");
             mapa.svg.addEventListener("pointerdown", aoClicarMapa);
@@ -774,6 +802,7 @@ const AgvVirtual = (function () {
     function ligarBotoes() {
         const $ = id => document.getElementById(id);
         $("virtualNovo")?.addEventListener("click", () => criarNovo().catch(e => ui.aviso("Não foi possível iniciar o AGV virtual: " + e.message, "erro")));
+        $("virtualFrotaExemplo")?.addEventListener("click", () => criarFrotaExemplo().catch(e => ui.aviso("Não foi possível criar a frota: " + e.message, "erro")));
         $("virtualLista")?.addEventListener("click", e => {
             const b = e.target.closest("[data-virtual]");
             if (!b) return;
@@ -900,7 +929,7 @@ const AgvVirtual = (function () {
     }
 
     return {
-        ligar, desligar, receberComando, pulsar, alternar, posicionar, abrir, criarNovo, adicionarObstaculo,
+        ligar, desligar, receberComando, pulsar, alternar, posicionar, abrir, criarNovo, criarFrotaExemplo, adicionarObstaculo,
         retomar, ligarBotoes, instancias, BITS, esquecerTrafego,
         _passo: passo
     };

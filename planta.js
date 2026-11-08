@@ -20,13 +20,21 @@
      // (pontos de parada do tipo ESTACAO), cada acesso com a sua tag e a
      // sua orientacao de chegada. "IR PARA" uma estacao escolhe o acesso
      // pelo caminho mais curto.
-     estacoes: [ { id, nome, maquina, modelos? } ],   modelos = só esses modelos atendem (0.14)
+     estacoes: [ { id, nome, maquina, modelos?, carga?, lado?, altura? } ]
+     //   modelos = só esses modelos atendem (0.14)
+     //   carga (0.16) = o que a estação troca: KIT (Atta G) | CARRINHO (Atta E) |
+     //   ESTEIRA (Atta R) | COMBOIO (parada do Atta T); vazio = qualquer módulo
 
      // CAMADA DE NAVEGACAO (por onde o AGV anda)
      nos: [ { id, tipo, nome, x, y, rfid, orientacaoChegada, barreira, estacao } ],
      //   tipo: ESTACAO (acesso de uma estacao) | REFERENCIA | ESPERA | BERCO (casa/carregador de AGVs)
-     segmentos: [ { id, tipo, a, b, sentido, velocidadeMaxima, barreira, tags: [{ rfid, distancia }] } ]
-     //   tipo: LINHA (fita no chao) | LATERAL (troca de faixa andando de lado, sem fita)
+     segmentos: [ { id, tipo, a, b, sentido, velocidadeMaxima, barreira, tags: [{ rfid, distancia }],
+                    raio?, lado?, guia?, modulos?, ramal? } ]
+     //   tipo: LINHA (fita reta) | LATERAL (troca de faixa andando de lado, sem fita)
+     //         | CURVA (0.16: arco de "raio" m indo de a para b, virando para "lado" ESQ ou DIR)
+     //   guia (0.16): OPTICA | MAGNETICA | VIRTUAL (sem fita: só Atta -L); padrão planta.guiaPadrao
+     //   modulos (0.16): só esses módulos passam (ex.: ["E","G"]); vazio = todos
+     //   ramal (0.16): quem sai deste trecho para a linha principal cede a vez
      //   sentido: DUPLO | A_PARA_B | B_PARA_A
      //   Dois segmentos LINHA entre os mesmos pontos sao permitidos se forem de
      //   sentido unico e opostos (faixa de ida e faixa de volta).
@@ -64,18 +72,63 @@
     const DISTANCIA_SUGESTAO_LATERAL = 1.0;
 
     const TIPOS_NO = ["ESTACAO", "REFERENCIA", "ESPERA", "BERCO"];
-    const TIPOS_SEGMENTO = ["LINHA", "LATERAL"];
+    const TIPOS_SEGMENTO = ["LINHA", "LATERAL", "CURVA"];
+    const GUIAS = { OPTICA: "Fita óptica", MAGNETICA: "Fita magnética", VIRTUAL: "Sem fita (LiDAR)" };
+    // O que cada estação troca e qual módulo faz isso
+    const CARGAS = {
+        KIT:      { nome: "Kit ou caixa",       modulo: "G" },
+        CARRINHO: { nome: "Carrinho",           modulo: "E" },
+        ESTEIRA:  { nome: "Esteira",            modulo: "R" },
+        COMBOIO:  { nome: "Parada de comboio",  modulo: "T" }
+    };
+    const RAIO_MINIMO_CURVA = 0.3;     // m (o QTR perde a fita em curvas mais fechadas)
+    const ANGULO_BIFURCACAO = 40;      // graus: fitas que saem do mesmo ponto com menos que isso se dividem
+    // Faixa de pedestre: para 1 s antes, atravessa devagar, LED piscando
+    const FAIXA = { pausaS: 1, folgaParada: 0.30, folgaSaida: 0.20, velocidade: 0.04 };
 
+    // Biblioteca (0.16): cada objeto com o tamanho padrão, a altura (para o 3D),
+    // o grupo na paleta do editor e, para alguns, uma regra para os Atta.
+    //   solido: o Atta não atravessa (erro na planta) e o sensor de distância vê
+    //   regra: FAIXA  (para 1 s antes, atravessa devagar, LED piscando, nunca para em cima)
+    //          LIVRE  (área que precisa ficar livre: nenhum ponto de parada dentro)
+    //          LENTA  (velocidade máxima da zona) | PROIBIDA (nenhum trecho passa)
+    const GRUPOS_LAYOUT = [
+        ["estrutura", "Estrutura"], ["armazenagem", "Armazenagem"], ["maquinas", "Máquinas"],
+        ["logistica", "Postos e logística"], ["circulacao", "Circulação e segurança"], ["escala", "Pessoas e veículos"]
+    ];
     const TIPOS_LAYOUT = {
-        MAQUINA:       { nome: "Máquina",        solido: true,  largura: 1.2, profundidade: 0.8 },
-        BANCADA:       { nome: "Bancada",        solido: true,  largura: 1.5, profundidade: 0.7 },
-        PRATELEIRA:    { nome: "Prateleira",     solido: true,  largura: 2.0, profundidade: 0.5 },
-        PAREDE:        { nome: "Parede",         solido: true,  largura: 4.0, profundidade: 0.15 },
-        PILAR:         { nome: "Pilar",          solido: true,  largura: 0.3, profundidade: 0.3 },
-        POSTO:         { nome: "Posto logístico", solido: true, largura: 0.8, profundidade: 0.6 },
-        CORREDOR:      { nome: "Corredor",       solido: false, largura: 4.0, profundidade: 1.2 },
-        ZONA_LENTA:    { nome: "Zona lenta",     solido: false, largura: 2.0, profundidade: 2.0 },
-        ZONA_PROIBIDA: { nome: "Zona proibida",  solido: false, largura: 2.0, profundidade: 2.0 }
+        PAREDE:        { nome: "Parede",                 grupo: "estrutura",   solido: true,  largura: 4.0, profundidade: 0.15, altura: 3.0 },
+        PILAR:         { nome: "Pilar",                  grupo: "estrutura",   solido: true,  largura: 0.3, profundidade: 0.3, altura: 4.5 },
+        GRADE:         { nome: "Grade de proteção",      grupo: "estrutura",   solido: true,  largura: 3.0, profundidade: 0.05, altura: 2.0 },
+        PORTA:         { nome: "Porta",                  grupo: "estrutura",   solido: false, largura: 1.0, profundidade: 0.15, altura: 2.1 },
+        PORTAO:        { nome: "Portão",                 grupo: "estrutura",   solido: false, largura: 4.0, profundidade: 0.2, altura: 4.0 },
+        PRATELEIRA:    { nome: "Prateleira",             grupo: "armazenagem", solido: true,  largura: 2.0, profundidade: 0.5, altura: 2.0 },
+        PORTA_PALETE:  { nome: "Porta-palete",           grupo: "armazenagem", solido: true,  largura: 2.7, profundidade: 1.1, altura: 4.5 },
+        FLOW_RACK:     { nome: "Flow rack (kits)",       grupo: "armazenagem", solido: true,  largura: 2.0, profundidade: 1.2, altura: 1.8 },
+        PALETE:        { nome: "Palete com carga",       grupo: "armazenagem", solido: true,  largura: 1.2, profundidade: 1.0, altura: 1.3 },
+        CAIXAS:        { nome: "Pilha de caixas",        grupo: "armazenagem", solido: true,  largura: 0.8, profundidade: 0.6, altura: 1.0 },
+        MAQUINA:       { nome: "Máquina",                grupo: "maquinas",    solido: true,  largura: 1.2, profundidade: 0.8, altura: 1.8 },
+        CNC:           { nome: "Centro de usinagem CNC", grupo: "maquinas",    solido: true,  largura: 2.6, profundidade: 2.0, altura: 2.5 },
+        TORNO:         { nome: "Torno",                  grupo: "maquinas",    solido: true,  largura: 3.0, profundidade: 1.2, altura: 1.7 },
+        PRENSA:        { nome: "Prensa",                 grupo: "maquinas",    solido: true,  largura: 2.2, profundidade: 2.0, altura: 3.6 },
+        INJETORA:      { nome: "Injetora",               grupo: "maquinas",    solido: true,  largura: 5.0, profundidade: 1.8, altura: 2.2 },
+        CELULA_ROBO:   { nome: "Célula de robô",         grupo: "maquinas",    solido: true,  largura: 3.5, profundidade: 3.5, altura: 2.4 },
+        SOLDA:         { nome: "Box de solda",           grupo: "maquinas",    solido: true,  largura: 2.5, profundidade: 2.5, altura: 2.2 },
+        ESTEIRA:       { nome: "Esteira",                grupo: "maquinas",    solido: true,  largura: 4.0, profundidade: 0.6, altura: 0.8 },
+        BANCADA:       { nome: "Bancada",                grupo: "maquinas",    solido: true,  largura: 1.5, profundidade: 0.7, altura: 0.9 },
+        INSPECAO:      { nome: "Mesa de inspeção",       grupo: "maquinas",    solido: true,  largura: 1.8, profundidade: 0.9, altura: 1.6 },
+        POSTO:         { nome: "Posto logístico",        grupo: "logistica",   solido: true,  largura: 0.8, profundidade: 0.6, altura: 1.1 },
+        CARREGADOR:    { nome: "Carregador de bateria",  grupo: "logistica",   solido: true,  largura: 0.6, profundidade: 0.3, altura: 0.7 },
+        DOCA:          { nome: "Doca",                   grupo: "logistica",   solido: false, largura: 3.5, profundidade: 0.4, altura: 3.5 },
+        ESCRITORIO:    { nome: "Escritório",             grupo: "logistica",   solido: true,  largura: 6.0, profundidade: 2.5, altura: 2.7 },
+        CORREDOR:      { nome: "Corredor",               grupo: "circulacao",  solido: false, largura: 4.0, profundidade: 1.2, altura: 0 },
+        FAIXA_PEDESTRE:{ nome: "Faixa de pedestre",      grupo: "circulacao",  solido: false, largura: 1.2, profundidade: 3.0, altura: 0, regra: "FAIXA" },
+        CRUZAMENTO_EMPILHADEIRA: { nome: "Cruzamento com empilhadeira", grupo: "circulacao", solido: false, largura: 3.0, profundidade: 3.0, altura: 0, regra: "FAIXA" },
+        AREA_LIVRE:    { nome: "Área livre obrigatória", grupo: "circulacao",  solido: false, largura: 2.0, profundidade: 2.0, altura: 0, regra: "LIVRE" },
+        ZONA_LENTA:    { nome: "Zona lenta",             grupo: "circulacao",  solido: false, largura: 2.0, profundidade: 2.0, altura: 0, regra: "LENTA" },
+        ZONA_PROIBIDA: { nome: "Zona proibida",          grupo: "circulacao",  solido: false, largura: 2.0, profundidade: 2.0, altura: 0, regra: "PROIBIDA" },
+        PESSOA:        { nome: "Pessoa (escala)",        grupo: "escala",      solido: false, largura: 0.5, profundidade: 0.4, altura: 1.75 },
+        EMPILHADEIRA:  { nome: "Empilhadeira parada",    grupo: "escala",      solido: true,  largura: 2.3, profundidade: 1.1, altura: 2.1 }
     };
 
 
@@ -168,6 +221,10 @@
         const a = noPorId(planta, segmento.a);
         const b = noPorId(planta, segmento.b);
         if (!a || !b) return 0;
+        if (segmento.tipo === "CURVA") {
+            const g = geometriaCurva(planta, segmento);
+            return g ? g.comprimento : 0;
+        }
         return Math.hypot(b.x - a.x, b.y - a.y);
     }
 
@@ -198,7 +255,17 @@
     }
 
     function tipoSegmento(segmento) {
-        return segmento && segmento.tipo === "LATERAL" ? "LATERAL" : "LINHA";
+        return segmento && (segmento.tipo === "LATERAL" || segmento.tipo === "CURVA") ? segmento.tipo : "LINHA";
+    }
+
+    // Segmento com fita no chão (ou caminho virtual, para o -L): linha reta ou curva
+    function temFita(segmento) {
+        return tipoSegmento(segmento) !== "LATERAL";
+    }
+
+    function guiaSegmento(planta, segmento) {
+        if (tipoSegmento(segmento) === "LATERAL") return null;
+        return GUIAS[segmento.guia] ? segmento.guia : (GUIAS[planta.guiaPadrao] ? planta.guiaPadrao : "OPTICA");
     }
 
     // Tags de um segmento na ordem de quem anda de "origem" para o outro lado
@@ -286,6 +353,166 @@
         return Math.hypot(a.x + t * dx - p.x, a.y + t * dy - p.y);
     }
 
+    /* ========================================================
+       CURVAS (0.16)
+       ========================================================
+       CURVA: arco de circunferência de raio "raio" ligando a ao b, virando
+       para "lado" (ESQ = anti-horário, DIR = horário) de quem anda de a
+       para b. Sempre o arco menor (até 180°). */
+
+    const graus = r => r * 180 / Math.PI;
+
+    function geometriaCurva(planta, s) {
+        const a = noPorId(planta, s.a), b = noPorId(planta, s.b);
+        if (!a || !b) return null;
+        const corda = Math.hypot(b.x - a.x, b.y - a.y);
+        if (corda < 1e-6) return null;
+        const R = Math.max(Number(s.raio) || 0, corda / 2);
+        const esq = s.lado !== "DIR";
+        const sg = esq ? 1 : -1;
+        const ux = (b.x - a.x) / corda, uy = (b.y - a.y) / corda;
+        const h = Math.sqrt(Math.max(0, R * R - corda * corda / 4));
+        const cx = (a.x + b.x) / 2 - uy * h * sg, cy = (a.y + b.y) / 2 + ux * h * sg;
+        const a0 = Math.atan2(a.y - cy, a.x - cx), a1 = Math.atan2(b.y - cy, b.x - cx);
+        let varredura = a1 - a0;
+        if (esq) { while (varredura <= 1e-9) varredura += 2 * Math.PI; while (varredura > 2 * Math.PI) varredura -= 2 * Math.PI; }
+        else { while (varredura >= -1e-9) varredura -= 2 * Math.PI; while (varredura < -2 * Math.PI) varredura += 2 * Math.PI; }
+        return {
+            cx, cy, R, a0, varredura, esq, corda,
+            comprimento: R * Math.abs(varredura),
+            rumoA: graus(a0 + sg * Math.PI / 2),      // frente em a, andando para b
+            rumoB: graus(a1 + sg * Math.PI / 2),      // frente ao chegar em b
+            raioPedido: Number(s.raio) || 0
+        };
+    }
+
+    // Frente (graus, exata) de quem sai de "deId" pelo segmento
+    function rumoExatoSaida(planta, s, deId) {
+        if (tipoSegmento(s) === "CURVA") {
+            const g = geometriaCurva(planta, s);
+            if (!g) return 0;
+            return deId === s.a ? g.rumoA : g.rumoB + 180;
+        }
+        const de = noPorId(planta, deId), para = noPorId(planta, deId === s.a ? s.b : s.a);
+        return de && para ? anguloExato(de, para) : 0;
+    }
+
+    // Frente (graus, exata) ao chegar na outra ponta, saindo de "deId"
+    function rumoExatoChegada(planta, s, deId) {
+        if (tipoSegmento(s) === "CURVA") {
+            const g = geometriaCurva(planta, s);
+            if (!g) return 0;
+            return deId === s.a ? g.rumoB : g.rumoA + 180;
+        }
+        return rumoExatoSaida(planta, s, deId);
+    }
+
+    // Ponto a "d" metros de "deId" ao longo do segmento, com a frente
+    function pontoNoSegmento(planta, s, deId, d) {
+        const de = noPorId(planta, deId), outroId = deId === s.a ? s.b : s.a, para = noPorId(planta, outroId);
+        if (!de || !para) return null;
+        const L = comprimentoSegmento(planta, s) || 1;
+        const dd = Math.max(0, Math.min(L, Number(d) || 0));
+        if (tipoSegmento(s) === "CURVA") {
+            const g = geometriaCurva(planta, s);
+            const ida = deId === s.a;
+            const sinal = (g.varredura > 0 ? 1 : -1) * (ida ? 1 : -1);
+            const inicio = ida ? g.a0 : g.a0 + g.varredura;
+            const ang = inicio + sinal * dd / g.R;
+            return { x: g.cx + g.R * Math.cos(ang), y: g.cy + g.R * Math.sin(ang), rumo: normalizarAngulo(graus(ang + sinal * Math.PI / 2)) };
+        }
+        const f = dd / L;
+        return { x: de.x + (para.x - de.x) * f, y: de.y + (para.y - de.y) * f, rumo: anguloEntre(de, para) };
+    }
+
+    // Polilinha do segmento (de a para b), para desenhar e para as contas de geometria
+    function pontosSegmento(planta, s, passo = 0.15) {
+        const a = noPorId(planta, s.a), b = noPorId(planta, s.b);
+        if (!a || !b) return [];
+        if (tipoSegmento(s) !== "CURVA") return [{ x: a.x, y: a.y }, { x: b.x, y: b.y }];
+        const L = comprimentoSegmento(planta, s);
+        const n = Math.max(4, Math.ceil(L / passo));
+        const pts = [];
+        for (let i = 0; i <= n; i++) { const p = pontoNoSegmento(planta, s, s.a, L * i / n); pts.push({ x: p.x, y: p.y }); }
+        return pts;
+    }
+
+    function segmentoCruzaRetangulo(planta, s, objeto) {
+        const pts = pontosSegmento(planta, s);
+        for (let i = 1; i < pts.length; i++) if (linhaCruzaRetangulo(pts[i - 1], pts[i], objeto)) return true;
+        return false;
+    }
+
+    function polilinhasSeCruzam(p, q) {
+        for (let i = 1; i < p.length; i++) for (let k = 1; k < q.length; k++) {
+            if (segmentosSeCruzam(p[i - 1], p[i], q[k - 1], q[k])) return true;
+        }
+        return false;
+    }
+
+    // Trechos [inicio, fim] (metros desde "deId") em que o segmento passa por
+    // objetos com a regra FAIXA (faixa de pedestre, cruzamento com empilhadeira)
+    function faixasNoSegmento(planta, s, deId) {
+        const faixas = (planta.layout || []).filter(o => TIPOS_LAYOUT[o.tipo]?.regra === "FAIXA");
+        if (!faixas.length || !temFita(s)) return [];
+        const L = comprimentoSegmento(planta, s);
+        const passo = 0.02, n = Math.max(2, Math.ceil(L / passo));
+        const lista = [];
+        faixas.forEach(o => {
+            if (!segmentoCruzaRetangulo(planta, s, o)) return;
+            let ini = null;
+            for (let i = 0; i <= n; i++) {
+                const d = L * i / n, p = pontoNoSegmento(planta, s, deId, d);
+                const dentro = pontoNoRetangulo(p, o);
+                if (dentro && ini === null) ini = d;
+                if (!dentro && ini !== null) { lista.push({ inicio: ini, fim: d, objeto: o }); ini = null; }
+            }
+            if (ini !== null) lista.push({ inicio: ini, fim: L, objeto: o });
+        });
+        return lista.sort((x, y) => x.inicio - y.inicio);
+    }
+
+    // Bifurcação: outras fitas que saem do mesmo ponto quase na mesma direção.
+    // Devolve de que borda da fita o Atta segue ali: +1 esquerda, -1 direita, 0 nenhuma.
+    //   saida = true: o Atta sai de noId por s; false: chega em noId por s
+    function bordaNoPonto(planta, s, noId, saida) {
+        if (!temFita(s)) return 0;
+        const guia = guiaSegmento(planta, s);
+        if (guia === "VIRTUAL") return 0;
+        const base = noPorId(planta, noId);
+        if (!base) return 0;
+        // direção de cada fita pelo ponto a 30 cm do nó (a curva sai tangente,
+        // então a direção na ponta é igual à da reta; 30 cm adiante elas já se separam)
+        const direcao = seg => {
+            const p = pontoNoSegmento(planta, seg, noId, Math.min(0.3, comprimentoSegmento(planta, seg)));
+            const L = Math.hypot(p.x - base.x, p.y - base.y) || 1;
+            return { x: (p.x - base.x) / L, y: (p.y - base.y) / L };
+        };
+        const minha = direcao(s);
+        const anda = saida ? minha : { x: -minha.x, y: -minha.y };
+        let esquerda = false, direita = false;
+        planta.segmentos.forEach(o => {
+            if (o === s || !temFita(o) || (o.a !== noId && o.b !== noId)) return;
+            if (guiaSegmento(planta, o) !== guia) return;
+            const outra = direcao(o);
+            const ang = Math.acos(Math.max(-1, Math.min(1, minha.x * outra.x + minha.y * outra.y))) * 180 / Math.PI;
+            if (ang < 0.5 || ang > ANGULO_BIFURCACAO) return;
+            if (anda.x * outra.y - anda.y * outra.x > 0) esquerda = true; else direita = true;
+        });
+        if (esquerda === direita) return 0;
+        // a outra fita à esquerda: segue a borda direita da sua (e vice-versa)
+        return esquerda ? -1 : 1;
+    }
+
+    // Comprimento do trecho e direções no sentido de quem anda, para o editor e os testes
+    function descreverSegmento(planta, s, deId = s.a) {
+        return {
+            comprimento: comprimentoSegmento(planta, s),
+            saida: normalizarAngulo(rumoExatoSaida(planta, s, deId)),
+            chegada: normalizarAngulo(rumoExatoChegada(planta, s, deId))
+        };
+    }
+
     function velocidadeSegmento(planta, segmento) {
         if (tipoSegmento(segmento) === "LATERAL") return 0;
         let v = Number(segmento.velocidadeMaxima) || 0;
@@ -294,7 +521,7 @@
             planta.layout
                 .filter(o => o.tipo === "ZONA_LENTA" && Number(o.velocidadeMaxima) > 0)
                 .forEach(zona => {
-                    if (linhaCruzaRetangulo(a, b, zona)) {
+                    if (segmentoCruzaRetangulo(planta, segmento, zona)) {
                         v = v > 0 ? Math.min(v, zona.velocidadeMaxima) : Number(zona.velocidadeMaxima);
                     }
                 });
@@ -313,8 +540,8 @@
         const a = noPorId(planta, segmento.a), b = noPorId(planta, segmento.b);
         if (!a || !b) return false;
         const salto = anguloExato(a, b);
-        const linhasDe = no => planta.segmentos.filter(s => tipoSegmento(s) === "LINHA" && (s.a === no.id || s.b === no.id))
-            .map(s => anguloExato(noPorId(planta, s.a) || no, noPorId(planta, s.b) || no));
+        const linhasDe = no => planta.segmentos.filter(s => temFita(s) && (s.a === no.id || s.b === no.id))
+            .map(s => rumoExatoSaida(planta, s, no.id));
         const ok = no => linhasDe(no).some(ang => Math.abs(diferencaDirecao(ang, salto) - 90) <= 15);
         return ok(a) && ok(b);
     }
@@ -363,12 +590,16 @@
             o.profundidade = Math.max(0.05, Number(o.profundidade) || 1);
             o.rotacao = Number(o.rotacao) || 0;
             if (!TIPOS_LAYOUT[o.tipo]) o.tipo = "MAQUINA";
+            if (Number(o.altura) > 0) o.altura = arred(Number(o.altura), 2); else delete o.altura;
         });
         p.estacoes.forEach(e => {
             e.id = String(e.id || "");
             e.nome = e.nome || "";
             if (!e.maquina) delete e.maquina;
             if (Array.isArray(e.modelos)) { e.modelos = e.modelos.map(String).filter(Boolean); if (!e.modelos.length) delete e.modelos; } else delete e.modelos;
+            if (!CARGAS[e.carga]) delete e.carga;
+            if (!["ESQ", "DIR", "FRENTE"].includes(e.lado)) delete e.lado;
+            if (Number(e.altura) > 0) e.altura = Math.round(Number(e.altura)); else delete e.altura;
         });
         p.nos.forEach(no => {
             no.x = Number(no.x) || 0;
@@ -409,10 +640,18 @@
             if (!["DUPLO", "A_PARA_B", "B_PARA_A"].includes(s.sentido)) s.sentido = "DUPLO";
             s.velocidadeMaxima = s.tipo === "LATERAL" ? 0 : Number(s.velocidadeMaxima) || 0;
             s.barreira = Number(s.barreira) || 0;
-            s.tags = s.tipo === "LINHA" && Array.isArray(s.tags)
+            s.tags = s.tipo !== "LATERAL" && Array.isArray(s.tags)
                 ? s.tags.map(t => ({ rfid: normalizarRfid(t.rfid), distancia: arred(Number(t.distancia) || 0) }))
                 : [];
+            if (s.tipo === "CURVA") {
+                s.raio = arred(Math.max(0, Number(s.raio) || 0));
+                s.lado = s.lado === "DIR" ? "DIR" : "ESQ";
+            } else { delete s.raio; delete s.lado; }
+            if (s.tipo === "LATERAL" || !GUIAS[s.guia]) delete s.guia;
+            if (Array.isArray(s.modulos)) { s.modulos = s.modulos.map(String).filter(m => /^[GERT]$/.test(m)); if (!s.modulos.length) delete s.modulos; } else delete s.modulos;
+            if (s.ramal) s.ramal = true; else delete s.ramal;
         });
+        if (!GUIAS[p.guiaPadrao]) delete p.guiaPadrao;
         return p;
     }
 
@@ -544,7 +783,9 @@
        VALIDACAO
        ======================================================== */
 
-    function validar(planta) {
+    // opcoes.perfis (0.16): [{ nome, perfil }] dos modelos da frota: confere se
+    // cada um chega nas estações que atende (comboio sem giro, raio, guia...)
+    function validar(planta, opcoes = {}) {
         const erros = [];
         const avisos = [];
         const ids = new Set();
@@ -647,6 +888,18 @@
             } else if (comprimento < 0.15) {
                 erros.push({ alvo: s.id, msg: `Segmento ${s.id} (${s.a}–${s.b}) muito curto (${arred(comprimento, 2)} m).` });
             }
+            if (tipoSegmento(s) === "CURVA") {
+                const corda = Math.hypot(b.x - a.x, b.y - a.y);
+                if (!(s.raio > 0) || s.raio < corda / 2 - 0.001) {
+                    erros.push({ alvo: s.id, msg: `Curva ${s.id}: o raio (${arred(s.raio || 0, 2)} m) precisa ser pelo menos metade da distância entre ${s.a} e ${s.b} (${arred(corda / 2, 2)} m).` });
+                } else if (s.raio < RAIO_MINIMO_CURVA) {
+                    erros.push({ alvo: s.id, msg: `Curva ${s.id}: raio mínimo de ${RAIO_MINIMO_CURVA} m (o sensor perde a fita em curvas mais fechadas).` });
+                }
+            }
+            const faixasSeg = faixasNoSegmento(planta, s, s.a);
+            if (faixasSeg.length > 1) {
+                erros.push({ alvo: s.id, msg: `Segmento ${s.id} passa por ${faixasSeg.length} faixas: ponha um ponto entre elas (o Atta trata uma faixa por trecho).` });
+            }
             if ((s.tags || []).length > LIMITES.checkpointsPorTrecho) {
                 erros.push({ alvo: s.id, msg: `Segmento ${s.id}: no máximo ${LIMITES.checkpointsPorTrecho} tags intermediárias.` });
             }
@@ -676,9 +929,9 @@
             }
 
             planta.layout.forEach(o => {
-                if (o.tipo === "ZONA_PROIBIDA" && linhaCruzaRetangulo(a, b, o)) {
+                if (o.tipo === "ZONA_PROIBIDA" && segmentoCruzaRetangulo(planta, s, o)) {
                     erros.push({ alvo: s.id, msg: `Segmento ${s.id} passa pela zona proibida ${o.nome || o.id}.` });
-                } else if (TIPOS_LAYOUT[o.tipo]?.solido && linhaCruzaRetangulo(a, b, o)) {
+                } else if (TIPOS_LAYOUT[o.tipo]?.solido && segmentoCruzaRetangulo(planta, s, o)) {
                     const dentroA = pontoNoRetangulo(a, o), dentroB = pontoNoRetangulo(b, o);
                     if (!dentroA && !dentroB) {
                         erros.push({ alvo: s.id, msg: `Segmento ${s.id} atravessa ${TIPOS_LAYOUT[o.tipo].nome.toLowerCase()} ${o.nome || o.id}.` });
@@ -691,18 +944,46 @@
         planta.segmentos.forEach(s => { delete s.gemeoVisto; });
 
         // Cruzamentos de linhas sem ponto (o AGV veria uma linha transversal)
-        const linhas = planta.segmentos.filter(s => tipoSegmento(s) === "LINHA");
+        const linhas = planta.segmentos.filter(s => temFita(s) && noPorId(planta, s.a) && noPorId(planta, s.b))
+            .map(s => {
+                const pts = pontosSegmento(planta, s);
+                const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+                return { s, pts, x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+            });
         for (let i = 0; i < linhas.length; i++) {
             for (let j = i + 1; j < linhas.length; j++) {
-                const s1 = linhas[i], s2 = linhas[j];
-                const n = [s1.a, s1.b, s2.a, s2.b].map(id => noPorId(planta, id));
-                if (n.some(x => !x)) continue;
+                const l1 = linhas[i], l2 = linhas[j], s1 = l1.s, s2 = l2.s;
+                if (l1.x1 < l2.x0 || l2.x1 < l1.x0 || l1.y1 < l2.y0 || l2.y1 < l1.y0) continue;
                 if (new Set([s1.a, s1.b, s2.a, s2.b]).size < 4) continue;
-                if (segmentosSeCruzam(n[0], n[1], n[2], n[3])) {
+                if (polilinhasSeCruzam(l1.pts, l2.pts)) {
                     avisos.push({ alvo: s1.id, msg: `Segmentos ${s1.id} e ${s2.id} se cruzam sem um ponto no cruzamento.` });
                 }
             }
         }
+
+        // Faixa de pedestre e área livre: o Atta nunca para em cima (0.16).
+        // Todo ponto é um lugar onde ele para (chega, confere a tag e segue).
+        (planta.layout || []).forEach(o => {
+            const regra = TIPOS_LAYOUT[o.tipo]?.regra;
+            if (regra !== "FAIXA" && regra !== "LIVRE") return;
+            planta.nos.forEach(no => {
+                const parada = no.tipo === "ESTACAO" || no.tipo === "ESPERA" || no.tipo === "BERCO";
+                if (regra === "FAIXA" && pontoNoRetangulo(no, o, FAIXA.folgaParada)) {
+                    erros.push({ alvo: no.id, msg: `${no.id} está em cima (ou colado) de ${TIPOS_LAYOUT[o.tipo].nome.toLowerCase()} ${o.nome || o.id}: o Atta nunca pode parar ali. Mude o ponto para fora.` });
+                } else if (regra === "LIVRE" && pontoNoRetangulo(no, o)) {
+                    (parada ? erros : avisos).push({ alvo: no.id, msg: `${no.id} está dentro da área livre ${o.nome || o.id}${parada ? ": nenhum ponto de parada pode ficar ali." : ": o Atta para rapidamente nesse ponto."}` });
+                }
+            });
+        });
+
+        // Bifurcação sem tag: o Atta precisa saber onde a fita se divide
+        planta.nos.forEach(no => {
+            if (no.rfid) return;
+            const fitas = planta.segmentos.filter(s => temFita(s) && (s.a === no.id || s.b === no.id));
+            if (fitas.length >= 3 && fitas.some(s => bordaNoPonto(planta, s, no.id, true) !== 0)) {
+                avisos.push({ alvo: no.id, msg: `${no.id} é uma bifurcação (a fita se divide) sem tag RFID: ponha uma tag para o Atta saber de que lado seguir.` });
+            }
+        });
 
         // Conectividade e becos sem saida
         const grau = new Map(planta.nos.map(no => [no.id, { entra: 0, sai: 0 }]));
@@ -727,15 +1008,20 @@
             const base = estacoes[0];
             const origem = acessosDaEstacao(planta, base.id)[0];
             estacoes.slice(1).forEach(e => {
-                if (!compilarIrPara(planta, origem.id, origem.orientacaoChegada ?? 0, e.id).sucesso) {
+                if (!compilarIrPara(planta, origem.id, origem.orientacaoChegada ?? 0, e.id, false, null, true).sucesso) {
                     avisos.push({ alvo: e.id, msg: `Não há caminho de ${base.id} até ${e.id}.` });
                 }
                 const volta = acessosDaEstacao(planta, e.id)[0];
-                if (!compilarIrPara(planta, volta.id, volta.orientacaoChegada ?? 0, base.id).sucesso) {
+                if (!compilarIrPara(planta, volta.id, volta.orientacaoChegada ?? 0, base.id, false, null, true).sucesso) {
                     avisos.push({ alvo: e.id, msg: `Não há caminho de ${e.id} até ${base.id}.` });
                 }
             });
         }
+
+        // Por modelo (0.16): cada modelo chega nas estações que atende, vazio e carregado?
+        (opcoes.perfis || []).forEach(({ nome, perfil }) => {
+            avisosDoModelo(planta, nome, perfil).forEach(a => avisos.push(a));
+        });
 
         // Frota: AGV que termina numa estacao sem nada na fila sai para um ponto de espera
         if (planta.nos.some(n => n.tipo === "ESTACAO") && !planta.nos.some(n => n.tipo === "ESPERA" || n.tipo === "BERCO")) {
@@ -755,8 +1041,52 @@
         return g * Math.PI / 180 / CUSTO.wManobra + CUSTO.paradaPorManobra;
     }
 
+    // Perfil de rota (0.16): o que um modelo consegue fazer, vazio ou carregado.
+    //   { modulo: "E", guia: "O"|"M"|"L", gira: bool (gira no ponto), lateral: bool,
+    //     raioMinimo: m, comboio: m (comprimento atrás do Atta), frente: m (do centro à frente) }
+    // null = sem restrição (a planta sozinha, como até a 0.15).
+    function normalizarPerfil(perfil) {
+        if (!perfil) return null;
+        return {
+            modulo: perfil.modulo || null,
+            guia: ["O", "M", "L"].includes(perfil.guia) ? perfil.guia : null,
+            gira: perfil.gira !== false,
+            lateral: perfil.lateral !== false,
+            raioMinimo: Math.max(0, Number(perfil.raioMinimo) || 0),
+            comboio: Math.max(0, Number(perfil.comboio) || 0),
+            frente: Math.max(0, Number(perfil.frente) || 0.2),
+            nome: perfil.nome || ""
+        };
+    }
+
+    const GIRO_TOLERADO_SEM_GIRAR = 10;   // graus: comboio não gira no ponto, mas aceita fita levemente torta
+
+    function podeGirar(perfil, giro) {
+        return !perfil || perfil.gira || Math.abs(giro) <= GIRO_TOLERADO_SEM_GIRAR;
+    }
+
+    // Por que este perfil não pode passar por este segmento (null = pode)
+    function recusaSegmento(planta, perfil, s) {
+        if (!perfil) return null;
+        const tipo = tipoSegmento(s);
+        if (tipo === "LATERAL") return perfil.lateral ? null : "não anda de lado";
+        const guia = guiaSegmento(planta, s);
+        if (perfil.guia === "O" && guia !== "OPTICA") return guia === "VIRTUAL" ? "trecho sem fita" : "trecho com fita magnética";
+        if (perfil.guia === "M" && guia !== "MAGNETICA") return guia === "VIRTUAL" ? "trecho sem fita" : "trecho com fita óptica";
+        if (s.modulos && perfil.modulo && !s.modulos.includes(perfil.modulo)) return "trecho não liberado para o módulo";
+        if (tipo === "CURVA" && perfil.raioMinimo > (Number(s.raio) || 0) + 1e-6) return `curva de ${arred(s.raio, 2)} m (precisa de ${arred(perfil.raioMinimo, 2)} m)`;
+        return null;
+    }
+
+    // A estação aceita este módulo? (pelo tipo de carga dela)
+    function estacaoAceita(planta, estacaoId, modulo) {
+        const e = estacaoPorId(planta, estacaoId);
+        if (!e || !e.carga || !modulo) return true;
+        return CARGAS[e.carga]?.modulo === modulo;
+    }
+
     // Lista de passagens possiveis saindo de um no
-    function saidas(planta, noId) {
+    function saidas(planta, noId, perfil = null) {
         const resultado = [];
         planta.segmentos.forEach(s => {
             if (s.a !== noId && s.b !== noId) return;
@@ -764,14 +1094,22 @@
             const outro = s.a === noId ? s.b : s.a;
             const de = noPorId(planta, noId), para = noPorId(planta, outro);
             if (!de || !para) return;
-            resultado.push({ segmento: s, tipo: tipoSegmento(s), de: noId, para: outro, angulo: anguloEntre(de, para) });
+            if (recusaSegmento(planta, perfil, s)) return;
+            const tipo = tipoSegmento(s);
+            resultado.push({
+                segmento: s, tipo, de: noId, para: outro,
+                angulo: tipo === "CURVA" ? normalizarAngulo(rumoExatoSaida(planta, s, noId)) : anguloEntre(de, para),
+                anguloChegada: tipo === "CURVA" ? normalizarAngulo(rumoExatoChegada(planta, s, noId)) : anguloEntre(de, para)
+            });
         });
         return resultado;
     }
 
     // orientacaoInicial: graus ou null (desconhecida -> sem custo no primeiro giro)
     // Cada passo devolvido tem "orientacao": a frente do AGV durante o trecho.
-    function calcularRota(planta, origemId, orientacaoInicial, destinoId, orientacaoFinal = null) {
+    // perfil (0.16): o que o modelo consegue fazer (normalizarPerfil); null = tudo
+    function calcularRota(planta, origemId, orientacaoInicial, destinoId, orientacaoFinal = null, perfil = null) {
+        perfil = normalizarPerfil(perfil);
         if (!noPorId(planta, origemId)) return { sucesso: false, erro: `Ponto de origem "${origemId}" não existe na planta.` };
         if (!noPorId(planta, destinoId)) return { sucesso: false, erro: `Ponto de destino "${destinoId}" não existe na planta.` };
 
@@ -793,10 +1131,10 @@
             if (atual.no === destinoId) {
                 const giroFinal = orientacaoFinal === null || atual.ang === null ? 0 : calcularGiro(atual.ang, orientacaoFinal);
                 const total = atual.custo + custoGiro(giroFinal);
-                if (!melhorFinal || total < melhorFinal.custo) melhorFinal = { chave: kAtual, custo: total };
+                if (podeGirar(perfil, giroFinal) && (!melhorFinal || total < melhorFinal.custo)) melhorFinal = { chave: kAtual, custo: total };
             }
 
-            saidas(planta, atual.no).forEach(passo => {
+            saidas(planta, atual.no, perfil).forEach(passo => {
                 let custo, angulo;
                 const L = comprimentoSegmento(planta, passo.segmento);
                 if (passo.tipo === "LATERAL") {
@@ -808,6 +1146,7 @@
                         : [normalizarAngulo(passo.angulo + 90), normalizarAngulo(passo.angulo - 90)];
                     opcoes.forEach(frente => {
                         const giro = atual.ang === null ? 0 : calcularGiro(atual.ang, frente);
+                        if (!podeGirar(perfil, giro)) return;
                         const c = atual.custo + custoGiro(giro) + L / CUSTO.velocidadeLateral + CUSTO.paradaPorManobra;
                         const k = chave(passo.para, frente);
                         if (c < (dist.get(k) ?? Infinity)) {
@@ -819,8 +1158,10 @@
                     return;
                 } else {
                     const giro = atual.ang === null ? 0 : calcularGiro(atual.ang, passo.angulo);
-                    const v = velocidadeSegmento(planta, passo.segmento) || CUSTO.velocidadePadrao;
-                    angulo = passo.angulo;
+                    if (!podeGirar(perfil, giro)) return;
+                    let v = velocidadeSegmento(planta, passo.segmento) || CUSTO.velocidadePadrao;
+                    if (passo.tipo === "CURVA") v = Math.min(v, CUSTO.velocidadePadrao * 0.7);
+                    angulo = passo.anguloChegada;
                     custo = atual.custo + custoGiro(giro) + L / v;
                 }
                 const k = chave(passo.para, angulo);
@@ -833,7 +1174,9 @@
         }
 
         if (!melhorFinal) {
-            return { sucesso: false, erro: `Não existe caminho de ${origemId} até ${destinoId} respeitando os sentidos.` };
+            const quem = perfil && perfil.nome ? ` para ${perfil.nome}` : "";
+            const porque = perfil && !perfil.gira ? " (carregado ele não gira no ponto nem anda de lado: precisa de curvas e de saída para a frente)" : "";
+            return { sucesso: false, erro: `Não existe caminho${quem} de ${origemId} até ${destinoId} respeitando os sentidos${porque}.` };
         }
         const passos = [];
         let k = melhorFinal.chave;
@@ -846,11 +1189,39 @@
     }
 
 
+    // Avisos de um modelo na planta (0.16): estações que ele atende (pelo tipo
+    // de carga) e onde ele, carregado, não chega ou de onde não sai.
+    // perfis: { vazio, carregado } ou um perfil só.
+    function avisosDoModelo(planta, nome, perfis) {
+        const avisos = [];
+        const pc = normalizarPerfil(perfis && (perfis.carregado || perfis.vazio) || perfis);
+        if (!pc || !pc.modulo) return avisos;
+        const estacoes = (planta.estacoes || []).filter(e => e.carga && CARGAS[e.carga].modulo === pc.modulo && acessosDaEstacao(planta, e.id).length);
+        if (estacoes.length < 2) return avisos;
+        const chega = new Map(estacoes.map(e => [e.id, false])), sai = new Map(estacoes.map(e => [e.id, false]));
+        estacoes.forEach(o => {
+            acessosDaEstacao(planta, o.id).forEach(acesso => {
+                estacoes.forEach(d => {
+                    if (d === o || (sai.get(o.id) && chega.get(d.id))) return;
+                    const r = compilarIrPara(planta, acesso.id, acesso.orientacaoChegada ?? 0, d.id, false, pc, true);
+                    if (r.sucesso) { sai.set(o.id, true); chega.set(d.id, true); }
+                });
+            });
+        });
+        estacoes.forEach(e => {
+            const nomeE = e.nome || e.id;
+            if (!chega.get(e.id)) avisos.push({ alvo: e.id, msg: `${nome} carregado não chega em ${nomeE} vindo das outras estações dele${pc.gira ? "" : " (sem girar no ponto: falta curva ou ramal)"}.` });
+            else if (!sai.get(e.id)) avisos.push({ alvo: e.id, msg: `${nome} carregado chega em ${nomeE} mas não sai de lá${pc.gira ? "" : " (comboio não anda de ré: a estação precisa de saída para a frente)"}.` });
+        });
+        return avisos;
+    }
+
+
     /* ========================================================
        COMPILACAO DAS MISSOES PARA O FIRMWARE
        ======================================================== */
 
-    function montarTrecho(planta, passo) {
+    function montarTrecho(planta, passo, perfil = null) {
         const de = noPorId(planta, passo.de);
         const para = noPorId(planta, passo.para);
         const s = passo.segmento;
@@ -868,11 +1239,36 @@
             trecho.tipo = "LATERAL";
             trecho.orientacao = passo.orientacao;   // frente durante o deslocamento (o ESP usa)
         } else {
+            if (tipoSegmento(s) === "CURVA") {
+                // 0.16: segue a fita em arco; a frente gira de "angulo" até "anguloFinal"
+                const g = geometriaCurva(planta, s);
+                trecho.tipo = "CURVA";
+                trecho.anguloFinal = passo.anguloChegada;
+                trecho.raio = arred(g.R);
+                trecho.curva = (g.esq === (de.id === s.a)) ? 1 : -1;   // +1 vira para a esquerda
+            }
             const checkpoints = tagsNoSentido(planta, s, de.id).map(t => ({ rfid: t.rfid, distancia: arred(t.distancia) }));
             if (checkpoints.length) trecho.checkpoints = checkpoints;
             const v = velocidadeSegmento(planta, s);
             if (v > 0) trecho.velocidade = arred(v);
+            // Bifurcação: de que borda da fita seguir ao sair do ponto / ao chegar
+            const bs = bordaNoPonto(planta, s, de.id, true), bc = bordaNoPonto(planta, s, para.id, false);
+            if (bs) trecho.bordaSaida = bs;
+            if (bc) trecho.bordaChegada = bc;
+            // Faixa de pedestre: para 1 s antes, atravessa devagar até a traseira passar
+            const faixa = faixasNoSegmento(planta, s, de.id)[0];
+            if (faixa) {
+                const frente = perfil ? perfil.frente : 0.2;
+                const cauda = (perfil ? perfil.comboio : 0) + frente;
+                trecho.faixa = {
+                    parar: arred(Math.max(0, faixa.inicio - FAIXA.folgaParada - frente), 2),
+                    ate: arred(Math.min(comprimento + 5, faixa.fim + FAIXA.folgaSaida + cauda), 2)
+                };
+                trecho.faixaNome = faixa.objeto.nome || faixa.objeto.id || "";   // só o site usa
+            }
+            if (s.ramal) trecho.ramal = true;          // só o site usa (ceder a vez)
         }
+        if (perfil && perfil.comboio > 0) trecho.cauda = arred(perfil.comboio, 2);   // só o site usa
         if (barreira > 0) trecho.barreira = Math.max(LIMITES.barreiraMinima, Math.round(barreira));
         // ignorados pelo ESP; usados no mapa do site
         trecho.segmento = s.id;
@@ -892,7 +1288,10 @@
         return { estacao: estacaoDoNo(planta, no), nos: [no] };
     }
 
-    function compilarIrPara(planta, origemId, orientacao, destinoId, exato = false) {
+    // longo (0.16): aceita rota com mais trechos que o Atta guarda por etapa
+    // (compilarMissao divide em etapas seguidas); sem ele, é erro como antes.
+    function compilarIrPara(planta, origemId, orientacao, destinoId, exato = false, perfil = null, longo = false) {
+        perfil = normalizarPerfil(perfil);
         const candidatos = candidatosDestino(planta, destinoId, exato && Boolean(noPorId(planta, destinoId)));
         if (!candidatos || !candidatos.nos.length) {
             return { sucesso: false, erro: `Destino "${destinoId}" não existe na planta publicada${candidatos ? " (estação sem acessos)" : ""}.` };
@@ -904,6 +1303,10 @@
         candidatos.nos.forEach(destino => {
             const chegada = (destino.tipo === "ESTACAO" || destino.tipo === "BERCO") && destino.orientacaoChegada !== null && destino.orientacaoChegada !== undefined ? destino.orientacaoChegada : null;
             if (origemId === destino.id) {
+                if (chegada !== null && !podeGirar(perfil, calcularGiro(orientacaoInicial, chegada))) {
+                    ultimoErro = { sucesso: false, erro: `Em ${destino.id}, carregado, o Atta não consegue girar para a orientação de chegada.` };
+                    return;
+                }
                 const custo = chegada === null ? 0 : custoGiro(calcularGiro(orientacaoInicial, chegada));
                 if (!melhor || custo < melhor.custo) {
                     melhor = {
@@ -918,9 +1321,14 @@
                 }
                 return;
             }
-            const rota = calcularRota(planta, origemId, orientacao, destino.id, chegada);
+            if (perfil && perfil.modulo && destino.estacao && !estacaoAceita(planta, destino.estacao, perfil.modulo)) {
+                const est = estacaoPorId(planta, destino.estacao);
+                ultimoErro = { sucesso: false, erro: `${est.nome || est.id} troca ${CARGAS[est.carga].nome.toLowerCase()}: precisa de um Atta ${CARGAS[est.carga].modulo}.` };
+                return;
+            }
+            const rota = calcularRota(planta, origemId, orientacao, destino.id, chegada, perfil);
             if (!rota.sucesso) { ultimoErro = rota; return; }
-            if (rota.passos.length > LIMITES.trechosPorEtapa) {
+            if (rota.passos.length > LIMITES.trechosPorEtapa && !longo) {
                 ultimoErro = {
                     sucesso: false,
                     erro: `Rota de ${origemId} até ${destino.id} tem ${rota.passos.length} trechos ` +
@@ -929,7 +1337,7 @@
                 return;
             }
             if (melhor && rota.custo >= melhor.custo) return;
-            const trechos = rota.passos.map(p => montarTrecho(planta, p));
+            const trechos = rota.passos.map(p => montarTrecho(planta, p, perfil));
             const ultima = rota.passos[rota.passos.length - 1].orientacao;
             melhor = {
                 custo: rota.custo, destino, chegada,
@@ -949,9 +1357,50 @@
         return { sucesso: true, etapa: melhor.etapa, orientacaoFinal: melhor.orientacaoFinal, ponto: melhor.destino.id };
     }
 
-    // missao: { id, etapas: [{ tipo: IR_PARA, destino } | AGUARDAR | ...] }
+    function dividirEtapasLongas(planta, etapas) {
+        const limite = LIMITES.trechosPorEtapa;
+        if (!etapas.some(e => e.tipo === "MOVIMENTO" && (e.trechos || []).length > limite)) {
+            return etapas.map(e => Object.assign(e, { passo: e.indice }));
+        }
+        const emZona = new Set();
+        zonasDeConflito(planta).forEach(z => z.nos.forEach(n => emZona.add(n)));
+        const saida = [];
+        etapas.forEach(e => {
+            const trechos = e.trechos || [];
+            if (e.tipo !== "MOVIMENTO" || trechos.length <= limite) { saida.push(Object.assign(e, { passo: e.indice })); return; }
+            let inicio = 0, orientacao = e.orientacaoInicial;
+            while (inicio < trechos.length) {
+                let fim = Math.min(trechos.length, inicio + limite);
+                if (fim < trechos.length) {
+                    // corta no último ponto fora de zona (o Atta espera ali sem prender ninguém)
+                    for (let k = fim; k > inicio + 1; k--) if (!emZona.has(trechos[k - 1].destino)) { fim = k; break; }
+                }
+                const pedaco = trechos.slice(inicio, fim);
+                const ultimo = fim === trechos.length;
+                const final = pedaco[pedaco.length - 1].frente ?? pedaco[pedaco.length - 1].angulo;
+                const etapa = {
+                    tipo: "MOVIMENTO", origem: pedaco[0].origem, destino: pedaco[pedaco.length - 1].destino,
+                    orientacaoInicial: orientacao, orientacaoFinal: ultimo ? e.orientacaoFinal : final,
+                    orientacaoChegada: ultimo ? e.orientacaoChegada : -1, trechos: pedaco, passo: e.indice
+                };
+                if (ultimo && e.estacao) etapa.estacao = e.estacao;
+                saida.push(etapa);
+                orientacao = final;
+                inicio = fim;
+            }
+        });
+        saida.forEach((e, i) => { e.indice = i; });
+        return saida;
+    }
+
+    // missao: { id, etapas: [{ tipo: IR_PARA, destino } | AGUARDAR | CARREGAR | DESCARREGAR | ...] }
     // posicao: { ponto, orientacao } (pode ser null se a missao nao anda)
-    function compilarMissao(planta, missao, posicao) {
+    // opcoes (0.16): { perfil: { vazio, carregado } (o modelo do Atta), carregado: bool (já sai com carga) }
+    //   CARREGAR (pegar a carga) passa para o perfil carregado; DESCARREGAR (entregar) volta ao vazio.
+    function compilarMissao(planta, missao, posicao, opcoes = {}) {
+        const perfis = opcoes.perfil || null;
+        let carregado = opcoes.carregado === true;
+        const perfilAgora = () => !perfis ? null : (perfis.vazio || perfis.carregado ? (carregado ? (perfis.carregado || perfis.vazio) : (perfis.vazio || perfis.carregado)) : perfis);
         if (!missao || !Array.isArray(missao.etapas) || missao.etapas.length === 0) {
             return { sucesso: false, erro: "A missão não possui etapas." };
         }
@@ -975,8 +1424,10 @@
 
         for (let i = 0; i < missao.etapas.length; i++) {
             const etapa = missao.etapas[i];
+            if (etapa.tipo === "CARREGAR") carregado = true;
+            if (etapa.tipo === "DESCARREGAR") carregado = false;
             if (etapa.tipo === "IR_PARA") {
-                const r = compilarIrPara(planta, ponto, orientacao, etapa.destino, etapa.exato === true);
+                const r = compilarIrPara(planta, ponto, orientacao, etapa.destino, etapa.exato === true, perfilAgora(), true);
                 if (!r.sucesso) return { sucesso: false, erro: `Etapa ${i + 1}: ${r.erro}` };
                 etapas.push(Object.assign({ indice: i }, r.etapa));
                 ponto = r.ponto;
@@ -991,7 +1442,15 @@
             etapas.push(copia);
         }
 
-        const pacote = { tipo: "CARREGAR_MISSAO", missao: String(missao.id), revisaoPlanta: planta.revisao, etapas };
+        // 0.16: rota longa (o anel de uma fábrica grande) vira etapas de movimento
+        // seguidas, de até LIMITES.trechosPorEtapa trechos, cortadas de
+        // preferência num ponto fora das zonas de conflito. "passo" (só o site
+        // usa) diz de qual etapa da missão cada uma veio.
+        const divididas = dividirEtapasLongas(planta, etapas);
+        if (divididas.length > LIMITES.etapasPorMissao) {
+            return { sucesso: false, erro: `A missão ficou com ${divididas.length} etapas no Atta (rotas longas são divididas; máximo ${LIMITES.etapasPorMissao}). Divida a missão em duas.` };
+        }
+        const pacote = { tipo: "CARREGAR_MISSAO", missao: String(missao.id), revisaoPlanta: planta.revisao, etapas: divididas };
         const prioridade = Math.max(0, Math.min(3, Math.round(Number(missao.prioridade ?? 1))));
         if (prioridade !== 1) pacote.prioridade = prioridade;
         const trafego = anotarTrafego(planta, pacote, posicao?.ponto || null);
@@ -999,7 +1458,8 @@
         return {
             sucesso: true,
             pacote,
-            posicaoFinal: { ponto, orientacao }
+            posicaoFinal: { ponto, orientacao },
+            carregadoFinal: carregado
         };
     }
 
@@ -1100,7 +1560,7 @@
             e.trechos.forEach(t => trechos.push(t));
             fimEtapa.add(trechos.length - 1);
         });
-        trechos.forEach(t => { delete t.pedir; delete t.parada; delete t.liberar; delete t.liberarEm; });
+        trechos.forEach(t => { delete t.pedir; delete t.parada; delete t.liberar; delete t.liberarEm; delete t.ceder; });
         delete pacote.zonas; delete pacote.zonasInicio;
         const inicio = pontoInicial ? doNo.get(pontoInicial) : null;
         const ocupa = trechos.map(t => {
@@ -1136,31 +1596,67 @@
         // - pede antes de sair do ponto (comeco de etapa que nao e trecho de
         //   espera) ou no ponto de parada de cada trecho de espera;
         // - solta o que nao vai mais usar ate a proxima parada.
+        // Sai do ramal para a linha principal neste grupo? Então cede a vez (0.16)
+        const cedeNoGrupo = j => {
+            for (let k = j; k < trechos.length; k++) {
+                if (k > j && espera[k]) break;
+                if (trechos[k].ramal && k + 1 < trechos.length && !trechos[k + 1].ramal) return true;
+                if (fimEtapa.has(k)) break;
+            }
+            return false;
+        };
+        // Comboio (0.16): a zona só é solta quando o último carrinho sai dela.
+        // pendentes: { ids, falta } metros que ainda faltam andar para soltar.
+        let pendentes = [];
         let segura = new Set(inicio ? [inicio] : []);
         trechos.forEach((t, j) => {
             if (inicioEtapa.has(j) && !espera[j]) {
                 const g = grupo(j);
                 const falta = [...g].filter(id => !segura.has(id));
-                if (falta.length) { t.pedir = mascara(g); t.parada = -1; }
+                if (falta.length) { t.pedir = mascara(g); t.parada = -1; if (cedeNoGrupo(j)) t.ceder = 1; }
                 g.forEach(id => segura.add(id));
             }
             const fica = grupo(j);
-            const soltar = [...segura].filter(id => !fica.has(id));
-            if (soltar.length) {
-                t.liberar = mascara(soltar);
-                t.liberarEm = arred(Math.min(TRAFEGO.margemSaida, t.comprimento || 0), 2);
-                soltar.forEach(id => segura.delete(id));
+            const soltar = [...segura].filter(id => !fica.has(id) && !pendentes.some(p => p.ids.includes(id)));
+            const L = t.comprimento || 0;
+            // sem comboio: como até a 0.15 (solta neste trecho, no máximo no fim dele)
+            if (soltar.length) pendentes.push({ ids: soltar, falta: Number(t.cauda) > 0 ? TRAFEGO.margemSaida + Number(t.cauda) : Math.min(TRAFEGO.margemSaida, L) });
+            // solta neste trecho o que já dá; o resto passa para os próximos
+            const agora = pendentes.filter(p => p.falta <= L || fimEtapa.has(j) && j === trechos.length - 1);
+            const voltaram = [];
+            pendentes = pendentes.filter(p => {
+                if (agora.includes(p)) return false;
+                if (p.ids.some(id => fica.has(id))) { voltaram.push(p); return false; }   // a rota volta a usar: segue com ela
+                p.falta -= L;
+                return true;
+            });
+            if (agora.length) {
+                const ids = agora.flatMap(p => p.ids);
+                t.liberar = mascara(ids);
+                t.liberarEm = arred(Math.min(Math.max(...agora.map(p => p.falta)), L), 2);
+                ids.forEach(id => segura.delete(id));
             }
             if (espera[j]) {
                 const g = grupo(j);
                 const falta = [...g].filter(id => !segura.has(id));
                 if (falta.length) {
                     t.pedir = mascara(g);
-                    t.parada = arred(Math.max(TRAFEGO.margemSaida, t.comprimento - TRAFEGO.margemParada), 2);
+                    let parada = Math.max(TRAFEGO.margemSaida, t.comprimento - TRAFEGO.margemParada);
+                    // nunca espera em cima da faixa: para antes dela
+                    if (t.faixa && parada > t.faixa.parar && parada < t.faixa.ate) parada = t.faixa.parar;
+                    t.parada = arred(parada, 2);
+                    if (cedeNoGrupo(j)) t.ceder = 1;
                 }
                 g.forEach(id => segura.add(id));
             }
         });
+        // O que sobrou (a missão terminou antes da cauda sair): solta no fim do último trecho
+        if (pendentes.length && trechos.length) {
+            const ultimo = trechos[trechos.length - 1];
+            const ids = pendentes.flatMap(p => p.ids);
+            ultimo.liberar = (ultimo.liberar || 0) + mascara(ids.filter(id => !(ultimo.liberar & bit(id))));
+            ultimo.liberarEm = arred(ultimo.comprimento || 0, 2);
+        }
         pacote.zonas = nomes;
         if (inicio) pacote.zonasInicio = bit(inicio);
         return { sucesso: true };
@@ -1171,7 +1667,8 @@
         const copia = clonar(pacote);
         copia.etapas.forEach(e => {
             delete e.estacao;
-            (e.trechos || []).forEach(t => { delete t.segmento; delete t.frente; });
+            delete e.passo;
+            (e.trechos || []).forEach(t => { delete t.segmento; delete t.frente; delete t.faixaNome; delete t.ramal; delete t.cauda; });
         });
         return copia;
     }
@@ -1185,6 +1682,14 @@
     function poseNoTrecho(planta, trecho, distancia, orientacao) {
         const de = noPorId(planta, trecho.origem), para = noPorId(planta, trecho.destino);
         if (!de || !para) return null;
+        if (trecho.tipo === "CURVA") {
+            const s = segmentoPorId(planta, trecho.segmento) ||
+                planta.segmentos.find(x => tipoSegmento(x) === "CURVA" && ((x.a === de.id && x.b === para.id) || (x.b === de.id && x.a === para.id)));
+            if (s) {
+                const p = pontoNoSegmento(planta, s, de.id, distancia);
+                return { x: p.x, y: p.y, orientacao: orientacao !== undefined && orientacao !== null ? orientacao : p.rumo };
+            }
+        }
         const L = Math.hypot(para.x - de.x, para.y - de.y) || 1;
         const f = Math.max(0, Math.min(1, (Number(distancia) || 0) / L));
         const frente = orientacao !== undefined && orientacao !== null ? orientacao
@@ -1254,6 +1759,127 @@
         };
         planta.segmentos.push(s);
         return { sucesso: true, segmento: s };
+    }
+
+    // Divide um segmento reto (0.16) a "distancia" metros de a: cria um ponto
+    // ali e um segmento novo do ponto até b (mesmas propriedades). A faixa
+    // gêmea (sentido contrário entre os mesmos pontos) é dividida junto.
+    function dividirSegmento(planta, segmentoId, distancia) {
+        const s = segmentoPorId(planta, segmentoId);
+        if (!s || tipoSegmento(s) !== "LINHA") return { sucesso: false, erro: "Escolha um segmento reto." };
+        const a = noPorId(planta, s.a), b = noPorId(planta, s.b);
+        const L = comprimentoSegmento(planta, s);
+        if (!(distancia >= 0.15 && distancia <= L - 0.15)) return { sucesso: false, erro: `Ponto fora do segmento (entre 0,15 e ${arred(L - 0.15, 2)} m).` };
+        const f = distancia / L;
+        const no = { id: proximoId(planta.nos, "R"), tipo: "REFERENCIA", nome: "", x: arred(a.x + (b.x - a.x) * f), y: arred(a.y + (b.y - a.y) * f), rfid: "", orientacaoChegada: null, barreira: 0 };
+        planta.nos.push(no);
+        const partir = seg => {
+            const daA = seg.a === s.a;     // gêmeo pode estar invertido
+            const d = daA ? distancia : L - distancia;
+            const novo = Object.assign(clonar(seg), { id: proximoId(planta.segmentos, "S") });
+            novo.a = no.id; novo.b = seg.b;
+            seg.b = no.id;
+            const tags = seg.tags || [];
+            seg.tags = tags.filter(t => t.distancia < d - 0.05);
+            novo.tags = tags.filter(t => t.distancia > d + 0.05).map(t => ({ rfid: t.rfid, distancia: arred(t.distancia - d) }));
+            planta.segmentos.push(novo);
+            return novo;
+        };
+        const gemeo = segmentoGemeo(planta, s);
+        const novo = partir(s);
+        if (gemeo) partir(gemeo);
+        return { sucesso: true, ponto: no, segmento: novo };
+    }
+
+    // Curva de concordância (0.16): no canto entre dois segmentos retos, um arco
+    // de "raio" m que corta o canto (para o rebocador carregado, que não gira
+    // no ponto). Os Atta omni continuam usando o canto.
+    function criarCurvaConcordancia(planta, noId, raio, idsSegmentos = null) {
+        const no = noPorId(planta, noId);
+        if (!no) return { sucesso: false, erro: "Escolha o ponto do canto." };
+        const retos = planta.segmentos.filter(s => tipoSegmento(s) === "LINHA" && (s.a === noId || s.b === noId) &&
+            (!idsSegmentos || idsSegmentos.includes(s.id)));
+        if (retos.length !== 2) return { sucesso: false, erro: retos.length < 2 ? "O canto precisa de dois segmentos retos." : "Este ponto tem mais de dois segmentos: escolha quais formam o canto." };
+        if (!(raio >= RAIO_MINIMO_CURVA)) return { sucesso: false, erro: `Raio mínimo de ${RAIO_MINIMO_CURVA} m.` };
+        const dir = seg => { const o = noPorId(planta, seg.a === noId ? seg.b : seg.a); const L = Math.hypot(o.x - no.x, o.y - no.y); return { x: (o.x - no.x) / L, y: (o.y - no.y) / L, L }; };
+        const u1 = dir(retos[0]), u2 = dir(retos[1]);
+        const fi = Math.acos(Math.max(-1, Math.min(1, u1.x * u2.x + u1.y * u2.y)));   // ângulo interno
+        if (fi < 20 * Math.PI / 180 || fi > 160 * Math.PI / 180) return { sucesso: false, erro: "Os dois segmentos não formam um canto (já estão quase alinhados ou voltam um sobre o outro)." };
+        const t = raio / Math.tan(fi / 2);
+        if (t > u1.L - 0.15 || t > u2.L - 0.15) return { sucesso: false, erro: `Raio grande demais para estes segmentos: a curva começaria a ${arred(t, 2)} m do canto.` };
+        // divide cada segmento a t metros do canto
+        const pontoEm = seg => {
+            const d = seg.a === noId ? t : comprimentoSegmento(planta, seg) - t;
+            const r = dividirSegmento(planta, seg.id, d);
+            return r.sucesso ? r.ponto : null;
+        };
+        const p1 = pontoEm(retos[0]), p2 = pontoEm(retos[1]);
+        if (!p1 || !p2) return { sucesso: false, erro: "Não deu para dividir os segmentos." };
+        // de p1 para p2: a frente em p1 aponta para o canto (-u1); vira para o lado de u2
+        const cruz = (-u1.x) * u2.y - (-u1.y) * u2.x;
+        const parte = id => planta.segmentos.find(s => tipoSegmento(s) === "LINHA" && ((s.a === id && s.b === noId) || (s.b === id && s.a === noId)));
+        const s1 = parte(p1.id), s2 = parte(p2.id);
+        const vai = (seg, de) => segmentoPermite(seg, de);
+        const ida = vai(s1, p1.id) && vai(s2, noId), volta = vai(s2, p2.id) && vai(s1, noId);
+        const curva = {
+            id: proximoId(planta.segmentos, "S"), tipo: "CURVA", a: p1.id, b: p2.id, raio: arred(raio), lado: cruz > 0 ? "ESQ" : "DIR",
+            sentido: ida && volta ? "DUPLO" : ida ? "A_PARA_B" : "B_PARA_A", velocidadeMaxima: 0, barreira: 0, tags: []
+        };
+        if (s1.guia) curva.guia = s1.guia;
+        planta.segmentos.push(curva);
+        return { sucesso: true, curva, pontos: [p1, p2] };
+    }
+
+    // Ramal (0.16): sai da linha principal em curva, corre paralelo a
+    // "afastamento" m e volta, entre "de" e "ate" metros do ponto a do segmento.
+    // Quem está no ramal deixa a linha principal livre e, para voltar, cede a vez.
+    //   opcoes: { de, ate, afastamento, raio, lado: "ESQ"|"DIR" (de quem anda de a para b), angulo: graus (45) }
+    function criarRamal(planta, segmentoId, opcoes = {}) {
+        const s = segmentoPorId(planta, segmentoId);
+        if (!s || tipoSegmento(s) !== "LINHA") return { sucesso: false, erro: "Escolha um segmento reto da linha principal." };
+        const a = noPorId(planta, s.a), b = noPorId(planta, s.b);
+        const L = comprimentoSegmento(planta, s);
+        const de = Number(opcoes.de), ate = Number(opcoes.ate);
+        const d = Number(opcoes.afastamento) || 1.5, R = Number(opcoes.raio) || 1.5;
+        if (!(R >= RAIO_MINIMO_CURVA)) return { sucesso: false, erro: `Raio mínimo de ${RAIO_MINIMO_CURVA} m.` };
+        if (!(de >= 0.15 && ate <= L - 0.15 && ate > de)) return { sucesso: false, erro: "Escolha o começo e o fim do ramal dentro do segmento." };
+        let th = (Number(opcoes.angulo) || 45) * Math.PI / 180;
+        let diagonal = (d - 2 * R * (1 - Math.cos(th))) / Math.sin(th);
+        if (diagonal < 0) { th = Math.acos(Math.max(-1, 1 - d / (2 * R))); diagonal = 0; }
+        const avanco = 2 * R * Math.sin(th) + diagonal * Math.cos(th);
+        if (ate - de < 2 * avanco + 0.3) return { sucesso: false, erro: `Ramal curto: com raio ${arred(R, 2)} m e afastamento ${arred(d, 2)} m, precisa de pelo menos ${arred(2 * avanco + 0.3, 2)} m na linha principal.` };
+        const ux = (b.x - a.x) / L, uy = (b.y - a.y) / L;
+        const sg = opcoes.lado === "DIR" ? -1 : 1;
+        const nx = -uy * sg, ny = ux * sg;
+        const em = (ao, lat) => ({ x: arred(a.x + ux * ao + nx * lat), y: arred(a.y + uy * ao + ny * lat) });
+        const novo = (p, tipo = "REFERENCIA") => { const n = { id: proximoId(planta.nos, "R"), tipo, nome: "", x: p.x, y: p.y, rfid: "", orientacaoChegada: null, barreira: 0 }; planta.nos.push(n); return n; };
+        const arco1 = R * Math.sin(th), lat1 = R * (1 - Math.cos(th));
+        // pontos na linha principal (divide; o pedaço depois de "de" é dividido em "ate")
+        const r1 = dividirSegmento(planta, s.id, de);
+        if (!r1.sucesso) return r1;
+        const r2 = dividirSegmento(planta, r1.segmento.id, ate - de);
+        if (!r2.sucesso) return r2;
+        const f1 = r1.ponto, f2 = r2.ponto;
+        const c1 = novo(em(de + arco1, lat1));
+        const c2 = diagonal > 0 ? novo(em(de + arco1 + diagonal * Math.cos(th), lat1 + diagonal * Math.sin(th))) : c1;
+        const p1 = novo(em(de + avanco, d)), p2 = novo(em(ate - avanco, d));
+        const c3 = diagonal > 0 ? novo(em(ate - arco1 - diagonal * Math.cos(th), lat1 + diagonal * Math.sin(th))) : null;
+        const c4 = novo(em(ate - arco1, lat1));
+        const lado = sg > 0 ? "ESQ" : "DIR", outro = sg > 0 ? "DIR" : "ESQ";
+        const sentido = s.sentido;     // mesmo sentido da principal (a -> b)
+        const base = { sentido, velocidadeMaxima: 0, barreira: 0, tags: [], ramal: true };
+        if (s.guia) base.guia = s.guia;
+        const segs = [];
+        const ligar = (x, y, tipo, extra = {}) => { const seg = Object.assign({ id: proximoId(planta.segmentos, "S"), tipo, a: x.id, b: y.id }, clonar(base), extra); planta.segmentos.push(seg); segs.push(seg); };
+        ligar(f1, c1, "CURVA", { raio: arred(R), lado });
+        if (diagonal > 0) ligar(c1, c2, "LINHA");
+        ligar(c2, p1, "CURVA", { raio: arred(R), lado: outro });
+        ligar(p1, p2, "LINHA");
+        const c3r = c3 || c4;
+        ligar(p2, c3r, "CURVA", { raio: arred(R), lado: outro });
+        if (c3) ligar(c3, c4, "LINHA");
+        ligar(c4, f2, "CURVA", { raio: arred(R), lado });
+        return { sucesso: true, entrada: f1, saida: f2, paralelo: [p1, p2], segmentos: segs, comprimentoUtil: arred(ate - de - 2 * avanco, 2) };
     }
 
     // Move o ponto "b" para o segmento ficar exatamente no multiplo de 45 graus mais proximo
@@ -1329,7 +1955,13 @@
         localizarRfid, velocidadeSegmento, proximoId, prefixoNo, normalizarAngulo, diferencaDirecao,
         normalizarRfid, rfidValido, FORMATO_RFID, calcularGiro, poseNoTrecho, poseOdometria, cantosRetangulo, pontoNoRetangulo,
         distanciaPontoSegmento, lateralPerpendicular, sugestaoTrocaFaixa,
-        criarFaixaParalela, ligarFaixas, alinharSegmento, clonar, arred
+        criarFaixaParalela, ligarFaixas, alinharSegmento, clonar, arred,
+        // 0.16
+        GUIAS, CARGAS, FAIXA, GRUPOS_LAYOUT, RAIO_MINIMO_CURVA, ANGULO_BIFURCACAO,
+        geometriaCurva, rumoExatoSaida, rumoExatoChegada, pontoNoSegmento, pontosSegmento, segmentoCruzaRetangulo,
+        faixasNoSegmento, bordaNoPonto, descreverSegmento, temFita, guiaSegmento,
+        normalizarPerfil, recusaSegmento, estacaoAceita, podeGirar, avisosDoModelo,
+        dividirSegmento, criarCurvaConcordancia, criarRamal
     };
 
     if (typeof module !== "undefined" && module.exports) {

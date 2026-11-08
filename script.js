@@ -156,6 +156,7 @@ const agvs = agvsSalvos
     };
 // Com a nuvem, a frota é a cadastrada no banco para a empresa.
 if (window.Nuvem) Nuvem.ajustarFrota(agvs, criarAGV);
+setTimeout(() => { try { localStorage.setItem("agvs016", "1"); } catch (e) { /* ignora */ } }, 0);
 Object.values(agvs).forEach(agv => {
 
     // A fila agora mora no AGV (0.11): a antiga, do navegador, sai.
@@ -168,6 +169,9 @@ Object.values(agvs).forEach(agv => {
     if (!("missaoSelecionada" in agv)) {
         agv.missaoSelecionada = null;
     }
+
+    // 0.16: o protótipo virou Atta E-O ("atta-g-o" agora é a família de garras)
+    if (!window.Nuvem?.emNuvem?.() && agv.modelo === "atta-g-o" && !localStorage.getItem("agvs016")) agv.modelo = "atta-e-o";
 
     if (!("missaoAtual" in agv)) {
         agv.missaoAtual = null;
@@ -381,8 +385,8 @@ const ICONES_ETAPA = {
     IR_PARA: ["local", "cor-ir", "Ir para"],
     AGUARDAR: ["relogio", "cor-aguardar", "Aguardar"],
     AGUARDAR_CONFIRMACAO: ["confirmar", "cor-confirmar", "Confirmação"],
-    CARREGAR: ["subir", "cor-carregar", "Carregar"],
-    DESCARREGAR: ["descer", "cor-descarregar", "Descarregar"]
+    CARREGAR: ["subir", "cor-carregar", "Pegar carga"],
+    DESCARREGAR: ["descer", "cor-descarregar", "Entregar carga"]
 };
 
 function nomeCurtoDestino(id) {
@@ -647,8 +651,9 @@ function renderizarEtapasMissao() {
             }
             case "AGUARDAR": tituloEtapa = `Esperar ${etapa.tempo} s`; detalhe = "parado no lugar"; break;
             case "AGUARDAR_CONFIRMACAO": tituloEtapa = "Operador confirma"; detalhe = `“${etapa.mensagem || "Confirmar"}” · no site ou no botão START MISSÃO`; break;
-            case "CARREGAR": tituloEtapa = "Erguer a garra"; detalhe = "curso inteiro"; break;
-            case "DESCARREGAR": tituloEtapa = "Baixar a garra"; detalhe = "até a posição zero"; break;
+            // 0.16: cada módulo pega e entrega do seu jeito (o mesmo comando para o Atta)
+            case "CARREGAR": tituloEtapa = "Pegar a carga"; detalhe = "E: levanta o carrinho · G: fecha a garra · R: puxa pela esteira · T: engata"; break;
+            case "DESCARREGAR": tituloEtapa = "Entregar a carga"; detalhe = "E: baixa o carrinho · G: abre a garra · R: empurra para a esteira · T: desengata"; break;
         }
         return `
             <li class="etapa ${classe}">
@@ -676,7 +681,7 @@ function renderizarPreviaMissao(est) {
     if (!host) return;
     const planta = plantaPublicada();
     if (!mapaPreviaMissao) {
-        mapaPreviaMissao = MapaSVG.criar(host, { grade: false, rotulos: true, mostrarTags: false, rastro: false, zoomRoda: false });
+        mapaPreviaMissao = MapaSVG.criar(host, { grade: false, rotulos: true, mostrarTags: false, rastro: false, zoomRoda: false, tresD: false });
     }
     if (mapaPreviaMissao.planta !== planta) {
         mapaPreviaMissao.ajustado = false;
@@ -1961,8 +1966,9 @@ function resumoMissaoCard(agv) {
     }
     const missao = obterMissaoPorId(missaoId);
     const nome = missao?.nome ? `${missaoId} · ${missao.nome}` : missaoId;
-    const total = agv.totalEtapasMissao || missao?.etapas?.length || 0;
-    const indice = Number(agv.etapaMissao) || 0;
+    // 0.16: rota longa vira várias etapas no Atta; mostra a etapa da missão
+    const total = missao?.etapas?.length || agv.totalEtapasMissao || 0;
+    const indice = passoDaEtapa(agv, Number(agv.etapaMissao) || 0);
     const etapa = missao?.etapas?.[indice];
     let detalhe = total ? `Etapa ${Math.min(indice + 1, total)} de ${total}` : "";
     if (agv.estadoMissao === "CARREGADA") detalhe = "Esperando START MISSÃO no AGV";
@@ -2921,7 +2927,7 @@ function adicionarNaFilaDoAGV(agvId, missaoId, { silencioso = false, prioridade 
         : (no?.orientacaoChegada ?? 0);
     // pedido urgente: a missão vai com a prioridade do pedido (tráfego), sem mudar o cadastro
     const paraCompilar = prioridade != null ? Object.assign({}, missao, { prioridade }) : missao;
-    const c = Planta.compilarMissao(planta, paraCompilar, ponto ? { ponto, orientacao } : null);
+    const c = Planta.compilarMissao(planta, paraCompilar, ponto ? { ponto, orientacao } : null, opcoesRotaAgv(agv, ponto === agv.pontoAtual));
     if (!c.sucesso) return falhar(`Não deu para preparar ${missaoId}${ponto ? ` saindo de ${ponto}` : ""}: ${c.erro}`);
 
     if (!publicar(TOPICOS.comando.filaAdicionar, JSON.stringify(Planta.pacoteParaESP(c.pacote)), agv.id)) {
@@ -2946,7 +2952,7 @@ function garantirMissaoCompilada(agv, missaoId) {
         const origem = agv.fila?.atual?.origem || (agv.posicaoConhecida ? agv.pontoAtual : null);
         if (missao && origem) {
             const no = Planta.noPorId(planta, origem);
-            const c = Planta.compilarMissao(planta, missao, { ponto: origem, orientacao: Number(agv.orientacao) || no?.orientacaoChegada || 0 });
+            const c = Planta.compilarMissao(planta, missao, { ponto: origem, orientacao: Number(agv.orientacao) || no?.orientacaoChegada || 0 }, opcoesRotaAgv(agv, origem === agv.pontoAtual));
             if (c.sucesso) etapas = c.pacote.etapas;
         }
     }
@@ -4825,14 +4831,28 @@ function textoCausa(causa) {
     return TEXTOS_CAUSA[causa] || String(causa || "").toLowerCase();
 }
 
+// Etapa do Atta -> etapa da missão (0.16: uma rota longa vira várias etapas de movimento)
+function passoDaEtapa(agv, indice) {
+    const c = agv?.missaoCompilada;
+    const e = c && c.missao === (agv.missaoAtual || agv.missaoCarregada) ? c.etapas?.[indice] : null;
+    return e && Number.isInteger(e.passo) ? e.passo : indice;
+}
+
+// 0.16: a rota respeita o que o modelo do AGV consegue fazer (comboio sem giro, raio, guia)
+function opcoesRotaAgv(agv, comCargaAtual = true) {
+    const perfil = typeof Modelos !== "undefined" && Modelos.perfil ? Modelos.perfil(agv) : null;
+    if (!perfil) return {};
+    return { perfil, carregado: comCargaAtual && typeof garraCarregada === "function" ? Boolean(garraCarregada(agv)) : false };
+}
+
 function descreverEtapaMissao(etapa) {
     if (!etapa) return "--";
     switch (etapa.tipo) {
         case "IR_PARA": return `Ir para ${nomeCurtoDestino(etapa.destino)}`;
         case "AGUARDAR": return `Aguardar ${etapa.tempo} s`;
         case "AGUARDAR_CONFIRMACAO": return "Aguardar confirmação";
-        case "CARREGAR": return "Carregar";
-        case "DESCARREGAR": return "Descarregar";
+        case "CARREGAR": return "Pegar carga";
+        case "DESCARREGAR": return "Entregar carga";
         default: return etapa.tipo;
     }
 }
@@ -4872,8 +4892,9 @@ function montarHtmlMissaoAtual(agv) {
     }
     const missao = obterMissaoPorId(missaoId);
     const etapas = missao ? missao.etapas : [];
-    const total = agv.totalEtapasMissao || etapas.length;
-    const indice = Number(agv.etapaMissao) || 0;
+    const total = etapas.length || agv.totalEtapasMissao;
+    const indiceAgv = Number(agv.etapaMissao) || 0;
+    const indice = passoDaEtapa(agv, indiceAgv);     // etapa da missão (rota longa = várias no Atta)
     const estado = agv.estadoMissao;
     const carregada = estado === "CARREGADA";
     const progresso = carregada ? 0 : progressoDetalhado(agv, missao);
@@ -4882,7 +4903,7 @@ function montarHtmlMissaoAtual(agv) {
     let extraAtual = "";
     let classeAtual = "";
     if (estado === "EM_EXECUCAO") {
-        const ce = compilada?.etapas?.[indice];
+        const ce = compilada?.etapas?.[indiceAgv];
         if (ce && ce.tipo === "MOVIMENTO" && ce.trechos.length) extraAtual = `trecho ${Math.min((Number(agv.trechoMissao) || 0) + 1, ce.trechos.length)} de ${ce.trechos.length}`;
         else if (etapas[indice]?.tipo === "AGUARDAR") extraAtual = `${etapas[indice].tempo} s`;
         else extraAtual = "agora";
@@ -4960,7 +4981,8 @@ const SINAIS_LED_SITE = {
     PARTINDO_BERCO: ["#9B5CFF", "pisca", "Vai para o berço"],
     INDO_BERCO: ["#9B5CFF", "perseguicao", "Indo para o berço"],
     TURNO_ENCERRADO: ["#9B5CFF", "respira", "Turno encerrado"],
-    EM_MANUTENCAO: ["#F2F4F7", "fixo", "Em manutenção: não aceita missão"]
+    EM_MANUTENCAO: ["#F2F4F7", "fixo", "Em manutenção: não aceita missão"],
+    FAIXA: ["#FFB000", "pisca", "Na faixa de pedestre: parado 1 s antes e atravessando devagar"]
 };
 
 const NOMES_EFEITO = { fixo: "aceso", pisca: "piscando", estrobo: "piscando rápido", respira: "respirando", "respira-rapida": "respirando rápido", perseguicao: "correndo", flash3: "3 piscadas" };
