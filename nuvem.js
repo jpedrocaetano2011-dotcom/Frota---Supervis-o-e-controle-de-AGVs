@@ -43,7 +43,9 @@
         // 0.14
         manutencao: ["fornecedor", "admin", "operador", "manutencao"],
         documentacao: ["fornecedor", "admin", "manutencao"],
-        copiar_config: ["fornecedor", "admin", "operador", "posto", "manutencao"]
+        copiar_config: ["fornecedor", "admin", "operador", "posto", "manutencao"],
+        // 0.19: fechar e reabrir corredores
+        trafego: ["fornecedor", "admin", "operador", "lider"]
     };
     // Comandos que o despachante manda (o tablet do posto também despacha)
     const TOPICOS_DESPACHO = /^comando\/(fila|fila\/adicionar|saidas)$/;

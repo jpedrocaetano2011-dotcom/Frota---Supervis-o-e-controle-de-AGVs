@@ -370,6 +370,20 @@
                 }
                 return t.muted;
             }
+            case "PORTA_AUTOMATICA": {
+                // 0.19: duas folhas que correm para os lados; cor pelo estado do Eciton I/O
+                const ao = typeof Dispositivos !== "undefined" ? Dispositivos.estadoObjeto(o.id) : null;
+                const abre = ao ? ({ ABERTA: 1, ABRINDO: 0.5, FECHANDO: 0.5 }[ao.estado] || 0) : 0;
+                const cor = !ao ? t.muted : ao.estado === "FALHA" || ao.offline ? t.red : ao.estado === "ABERTA" ? (t.green || t.accent) : ao.estado === "FECHADA" ? t.parede : t.amber;
+                r({ fill: t.papel, stroke: cor, "stroke-width": 1.4, "stroke-dasharray": "5 3" });
+                const folha = w / 2 * (1 - abre * 0.9);
+                el("rect", { x: x0, y: y0, width: folha, height: h, fill: cor, opacity: 0.85, "pointer-events": "none" }, g);
+                el("rect", { x: x0 + w - folha, y: y0, width: folha, height: h, fill: cor, opacity: 0.85, "pointer-events": "none" }, g);
+                if (ao && mapa.opcoes.rotulos) {
+                    o.__rotuloEstado = ao.texto;
+                }
+                return cor;
+            }
             case "PAREDE": case "PILAR":
                 r({ fill: t.parede, stroke: t.parede });
                 return t.papel;
@@ -556,10 +570,18 @@
             const base = { x: -o.largura / 2, y: -o.profundidade / 2, width: o.largura, height: o.profundidade, "vector-effect": "non-scaling-stroke" };
             const destaque = selecionado ? { stroke: t.accent, "stroke-width": 2.5 } : {};
             const corTexto = simboloLayout(mapa, g, o, t, px, base, destaque);
+            // 0.19: semáforo (Eciton I/O) no canto da faixa/cruzamento
+            if (o.io && Planta.TIPOS_LAYOUT[o.tipo]?.regra === "FAIXA") {
+                const ao = typeof Dispositivos !== "undefined" ? Dispositivos.estadoObjeto(o.id) : null;
+                const cx = o.largura / 2 - px(7), cy = -o.profundidade / 2 + px(7);
+                el("circle", { cx, cy, r: px(5.5), fill: !ao || ao.offline ? t.muted : ao.vermelho ? t.red : (t.green || t.accent), stroke: t.papel, "stroke-width": 1.5, "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, g);
+            }
             if (mapa.opcoes.rotulos && Math.min(o.largura, o.profundidade) * ppm > 16) {
                 const tipoInfo = Planta.TIPOS_LAYOUT[o.tipo];
                 let rotulo = o.nome || (["CNC", "TORNO", "PRENSA", "INJETORA", "CELULA_ROBO", "SOLDA", "ESTEIRA", "FAIXA_PEDESTRE", "CRUZAMENTO_EMPILHADEIRA", "AREA_LIVRE"].includes(o.tipo) ? (tipoInfo?.nome || "") : "");
                 if (o.tipo === "ZONA_LENTA") rotulo = `${(o.nome || "ZONA LENTA").toUpperCase()}${o.velocidadeMaxima ? " · " + String(o.velocidadeMaxima).replace(".", ",") + " m/s" : ""}`;
+                if (o.horario && Planta.horarioAtivo) rotulo = `${rotulo || (tipoInfo?.nome || "").toUpperCase()} · ${Planta.horarioAtivo(o) ? "AGORA" : o.horario.de + "–" + o.horario.ate}`;
+                if (o.tipo === "PORTA_AUTOMATICA") rotulo = `${o.nome || "Porta"}${o.__rotuloEstado ? " · " + o.__rotuloEstado : ""}`;
                 if (rotulo) {
                     const tam = Math.min(px(13), o.profundidade * 0.42, o.largura / Math.max(4, rotulo.length) * 1.7);
                     texto(c.textos, o.x, Y(o.y), rotulo, tam, { fill: corTexto, "font-weight": 600 });
@@ -663,6 +685,11 @@
                 "stroke-width": lateral ? 2.5 : guia === "VIRTUAL" ? 2.5 : (selecionado ? 5 : 4), "stroke-linecap": "round", "vector-effect": "non-scaling-stroke",
                 "stroke-dasharray": lateral ? "2 6" : guia === "VIRTUAL" ? "8 6" : null, opacity: lateral ? 0.85 : 1
             }, g);
+            // 0.19: corredor fechado agora (Visão geral › Corredores fechados)
+            if (Planta.recusaAgora && Planta.definirContextoRota && Planta.definirContextoRota().fechados.includes(s.id)) {
+                el("line", { x1, y1: Y(y1), x2, y2: Y(y2), stroke: t.red, "stroke-width": 9, "stroke-opacity": 0.35, "stroke-dasharray": "6 5", "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, g);
+                if (mapa.opcoes.rotulos) pilula(c.textos, (x1 + x2) / 2, Y((y1 + y2) / 2) - px(14), "FECHADO", px, { fundo: t.papel, borda: t.red, cor: t.red, tamanho: 9.5, altura: 16 });
+            }
             const ang = Math.atan2(y2 - y1, x2 - x1);
             const triangulo = (mx, my, angulo, tamanho) => {
                 const pts = [

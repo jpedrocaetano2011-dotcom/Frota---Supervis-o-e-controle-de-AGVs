@@ -180,6 +180,16 @@ const Planta3D = (function () {
             [-w / 2, w / 2].forEach(x => caixa(mat, g, 0.15, h, o.profundidade, x, 0, 0, COR.amarelo));
             caixa(mat, g, w, 0.5, o.profundidade * 1.4, 0, h - 0.5, 0, COR.maquinaEscura);
         },
+        // 0.19: porta automática (Eciton I/O): batentes, caixa do motor e duas folhas de vidro (meio abertas)
+        PORTA_AUTOMATICA(mat, g, o, h) {
+            const w = o.largura;
+            [-w / 2, w / 2].forEach(x => caixa(mat, g, 0.12, h, o.profundidade, x, 0, 0, COR.maquinaEscura));
+            caixa(mat, g, w + 0.12, 0.35, o.profundidade * 1.6, 0, h - 0.35, 0, COR.maquinaEscura);
+            [-1, 1].forEach(lado => {
+                caixa(mat, g, w * 0.32, h - 0.4, 0.04, lado * (w / 2 - w * 0.16 - 0.06), 0, 0, 0x8ec5e8, { transparent: true, opacity: 0.45 });
+            });
+            caixa(mat, g, 0.18, 0.08, 0.05, w / 2 - 0.2, h - 0.5, o.profundidade, COR.amarelo);
+        },
         PRATELEIRA(mat, g, o, h) {
             prateleira(mat, g, o.largura, h, o.profundidade, 4, COR.azulRack, COR.laranja,
                 (x, y, w, d, hh) => caixa(mat, g, w * 0.8, Math.min(0.3, hh * 0.6), d * 0.8, x, y, 0, COR.caixa));

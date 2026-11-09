@@ -1326,12 +1326,16 @@ function processarMensagemMQTT(topico, valor) {
 
     const id = partes[1];
     const agv = agvs[id];
+    const caminho = partes.slice(2).join("/");
+
+    // 0.19: Eciton I/O (portas, semáforos, alarme) usa os mesmos tópicos
+    if (!agv && typeof Dispositivos !== "undefined" && Dispositivos.processar(id, caminho, valor)) {
+        return;
+    }
 
     if (!agv) {
         return;
     }
-
-    const caminho = partes.slice(2).join("/");
 
     const lerJSON = () => {
         try {
@@ -2035,7 +2039,8 @@ function renderizarTrafegoFrota() {
         </tr>`;
     }).join("");
     ui.trocarHtml(caixa, `
-        <div class="card-barra"><div><h2>Tráfego</h2><div class="card-sub">Zonas de conflito: cruzamentos, corredores de mão dupla com estação e trocas laterais. Um AGV por zona.</div></div></div>
+        <div class="card-barra"><div><h2>Tráfego</h2><div class="card-sub">Zonas de conflito: cruzamentos, corredores de mão dupla com estação, trocas laterais e portas automáticas. Um AGV por zona.</div></div></div>
+        ${typeof TrafegoOperacao !== "undefined" ? TrafegoOperacao.htmlImpasses() : ""}
         <div class="tabela-rolagem"><table class="tabela-usuarios">
             <thead><tr><th>AGV</th><th>Ocupa</th><th>Situação</th><th></th></tr></thead>
             <tbody>${linhas}</tbody>
@@ -2316,6 +2321,7 @@ const informacoesTelas = {
     usuarios: ["Usuários", "Quem acessa o sistema e o que cada um pode fazer"],
     modelos: ["Modelos", "Catálogo do Atta: ficha técnica, foto e documentação de cada modelo"],
     manutencao: ["Manutenção", "AGVs fora da operação, uso da frota, cópias da configuração e documentação"],
+    dispositivos: ["Dispositivos", "Eciton I/O: portas automáticas, semáforos e alarme de incêndio"],
     indicadores: ["Indicadores", "O que a frota fez: entregas, disponibilidade, paradas, tráfego e ganhos"],
     programacao: ["Programação", "Botões dos postos que pedem sozinhos: pelo consumo, a cada X minutos ou em horários fixos"]
 };
@@ -2370,9 +2376,11 @@ function mudarTela(nomeTela) {
     if (nomeTela === "missoes") abrirTelaMissoes();
     if (nomeTela === "rotina" && typeof renderizarRotina === "function") renderizarRotina(true);
     if (nomeTela === "despacho" && typeof Despacho !== "undefined") Despacho.abrir();
+    if (nomeTela === "despacho" && typeof TrafegoOperacao !== "undefined") TrafegoOperacao.renderizar();
     if (nomeTela === "postos" && typeof Postos !== "undefined") Postos.abrir();
     if (nomeTela === "posto" && typeof TelaPosto !== "undefined") TelaPosto.abrir();
     if (nomeTela === "usuarios" && typeof Usuarios !== "undefined") Usuarios.abrir();
+    if (nomeTela === "dispositivos" && typeof Dispositivos !== "undefined") Dispositivos.abrir();
     if (nomeTela === "modelos" && typeof Modelos !== "undefined") Modelos.abrir();
     if (nomeTela === "manutencao" && typeof Manutencao !== "undefined") Manutencao.abrir();
     if (nomeTela === "indicadores" && typeof Indicadores !== "undefined") Indicadores.abrir();

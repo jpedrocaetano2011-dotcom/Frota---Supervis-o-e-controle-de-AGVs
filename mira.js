@@ -76,6 +76,17 @@
             const pl = plantaPublicada();
             if (pl) c.planta = { nome: pl.nome, revisao: pl.revisao, estacoes: (pl.estacoes || []).length, pontos: (pl.nos || []).length, desenhoCAD: Boolean(pl.desenho), modelos3d: (pl.modelos3d || []).length };
         }
+        // 0.19: Eciton I/O, corredores fechados e impasses
+        if (typeof Dispositivos !== "undefined") {
+            const d = Dispositivos.resumo();
+            if (d.length) c.dispositivos = d;
+        }
+        if (typeof TrafegoOperacao !== "undefined") {
+            const f = TrafegoOperacao.ativos().map(x => ({ trecho: x.segmento, motivo: x.motivo || "", ate: x.ate || "até reabrir" }));
+            if (f.length) c.corredoresFechados = f;
+            const i = TrafegoOperacao.impassesConfirmados ? TrafegoOperacao.impasses() : [];
+            if (i.length) c.impasses = i;
+        }
         if (NOME_TELA() === "indicadores") c.indicadores = (document.getElementById("indicadoresConteudo")?.innerText || "").slice(0, 4000);
         return c;
     }

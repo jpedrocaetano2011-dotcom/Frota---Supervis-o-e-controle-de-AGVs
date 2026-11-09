@@ -1965,3 +1965,61 @@ option.opcao-nao-serve { color: var(--muted); }
 .editor-rfid-atual { font-size: 12px; color: var(--muted); padding: 6px 10px; border: 1px dashed var(--border); border-radius: 8px; }
 .editor-esperando { font-size: 13px; line-height: 1.45; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--accent); background: var(--accent-soft); display: grid; gap: 8px; justify-items: start; }
 .editor-sugestao { font-size: 13px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* ============================================================
+   0.19 — DISPOSITIVOS (Eciton I/O), CORREDORES FECHADOS, IMPASSE
+   ============================================================ */
+.alerta-alarme {
+    position: sticky; top: 0; z-index: 60;
+    background: var(--red); color: #fff; padding: 10px 16px;
+    font-size: 14px; line-height: 1.4; text-align: center;
+    animation: alerta-pisca 1.2s ease-in-out infinite;
+}
+.alerta-alarme b { text-transform: uppercase; letter-spacing: .04em; }
+@keyframes alerta-pisca { 50% { background: #8f1d1d; } }
+@media (prefers-reduced-motion: reduce) { .alerta-alarme { animation: none; } }
+.menu-badge.vermelho { background: var(--red); color: #fff; }
+
+.dispositivos-tela { display: grid; gap: 16px; }
+.io-texto { margin: 0; max-width: 80ch; }
+.io-intro ol { margin: 8px 0 14px; padding-left: 20px; line-height: 1.6; }
+.io-intro p { max-width: 75ch; }
+.io-modulo .card-sub { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.io-modulo .grupo { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.io-modulo .editor-aviso { margin: 0 16px 12px; }
+.io-vazio { padding: 0 16px 8px; }
+.io-pinos { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; padding: 12px 16px 4px; }
+.io-chips { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 6px; }
+.io-chip {
+    display: flex; flex-direction: column; gap: 2px; min-width: 0;
+    border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; background: var(--soft);
+}
+.io-chip b { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.io-chip small { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.io-chip.ligado { background: var(--green-soft); border-color: var(--green); }
+.io-chip.ligado b { color: var(--green); }
+.io-teste { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 16px 0; }
+.io-modulo details.editor-mais { margin: 10px 16px 14px; }
+.io-eventos { margin: 6px 0 0; padding-left: 18px; font-size: 13px; line-height: 1.6; }
+.io-codigo { background: var(--soft); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-family: var(--mono); font-size: 12.5px; overflow-x: auto; }
+.semaforo { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: -1px; margin-right: 2px; }
+.semaforo.vermelho { background: var(--red); box-shadow: 0 0 0 3px var(--red-soft); }
+.semaforo.verde { background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
+
+.editor-dispositivo { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin: 8px 0; display: grid; gap: 6px; }
+.editor-dias { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 6px 0; }
+
+.trafego-operacao { display: grid; gap: 16px; margin-top: 16px; }
+.trafego-impasse {
+    border: 1px solid var(--red-line); background: var(--red-soft); color: var(--text);
+    border-radius: 10px; padding: 10px 14px; margin: 0 0 10px; line-height: 1.5; font-size: 14px;
+}
+.frota-trafego .trafego-impasse { margin: 0 16px 10px; }
+.trafego-impasse .btn { margin-left: 6px; }
+.trafego-vazio { padding: 0 16px 12px; margin: 0; }
+.trafego-form { display: grid; grid-template-columns: minmax(200px, 2fr) minmax(160px, 2fr) minmax(140px, 1fr) auto; gap: 10px; align-items: end; padding: 12px 16px 16px; border-top: 1px solid var(--border); }
+.trafego-regras { margin: 8px 0 0; padding-left: 0; list-style: none; display: grid; gap: 6px; }
+@media (max-width: 760px) {
+    .trafego-form { grid-template-columns: 1fr; }
+    .io-chips { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

@@ -477,10 +477,101 @@
         const tipo = Planta.TIPOS_LAYOUT[o.tipo] || {};
         if (tipo.regra === "FAIXA") return `${o.tipo === "FAIXA_PEDESTRE" ? "Faixa de pedestre" : "Cruzamento com empilhadeira"}: o Atta para ${Planta.FAIXA.pausaS} s antes, atravessa devagar com o LED piscando e nunca para em cima (nenhum ponto pode ficar aqui).`;
         if (tipo.regra === "LIVRE") return "Área livre obrigatória (frente de quadro elétrico, hidrante, saída de emergência): nenhum ponto de parada pode ficar aqui.";
-        if (o.tipo === "ZONA_PROIBIDA") return "Nenhuma linha pode passar por aqui.";
+        if (tipo.regra === "PORTA") return "Porta automática: ligada a um Eciton I/O, o Atta pede para abrir, espera o sensor confirmar e só então passa. Nenhum ponto pode ficar embaixo dela.";
+        if (o.tipo === "ZONA_PROIBIDA") return o.horario ? "Nenhuma linha passa por aqui no horário abaixo: os Atta desviam ou esperam." : "Nenhuma linha pode passar por aqui.";
         if (o.tipo === "ZONA_LENTA") return "Linhas que cruzam a zona ficam limitadas a esta velocidade.";
         if (tipo.solido) return "Objeto sólido: as linhas não podem atravessá-lo e o AGV virtual o enxerga nos sensores de distância.";
         return "Referência visual.";
+    }
+
+    /* ---------- Eciton I/O (0.19) ---------- */
+    const opcoesRele = (vazio = "— nenhum —") => [["0", vazio]].concat([1, 2, 3, 4].map(n => [String(n), `Relé ${n}`]));
+    const opcoesEntrada = (vazio = "— nenhuma —") => [["0", vazio]].concat([1, 2, 3, 4].map(n => [String(n), `Entrada ${n}`]));
+
+    // Módulos da planta (no painel da planta)
+    function blocoDispositivos(planta) {
+        const lista = planta.dispositivos || [];
+        return `
+            <div class="editor-bloco">
+                <span class="editor-subtitulo">Eciton I/O (portas, semáforos e alarme)</span>
+                <p class="editor-texto suave">Cada módulo é um controlador na parede, com 4 relés e 4 entradas, no mesmo broker dos Atta. Ligue portas automáticas, faixas e cruzamentos a ele (selecione o objeto). O estado ao vivo fica em Dispositivos.</p>
+                ${lista.map(d => {
+                    const ligados = Planta.objetosIo(planta, d.id);
+                    return `<div class="editor-dispositivo">
+                        <div class="editor-linha">
+                            <label class="editor-campo"><span>${esc(d.id)}</span><input data-campo="dispNome" data-id="${esc(d.id)}" value="${esc(d.nome || "")}" placeholder="Ex.: Portas do almoxarifado"></label>
+                            <div class="editor-acoes compacto"><button class="btn btn-mini btn-perigo" data-acao="removerDispositivo" data-id="${esc(d.id)}" aria-label="Remover ${esc(d.id)}">✕</button></div>
+                        </div>
+                        <div class="editor-linha">
+                            ${campoSelect("Alarme de incêndio", "dispAlarme", d.alarme?.entrada || 0, opcoesEntrada("— sem alarme —")).replace('data-campo="dispAlarme"', `data-campo="dispAlarme" data-id="${esc(d.id)}"`)}
+                            ${d.alarme ? campoSelect("Contato", "dispAlarmeNf", d.alarme.nf ? "nf" : "na", [["nf", "NF (fio rompido = alarme)"], ["na", "NA"]]).replace('data-campo="dispAlarmeNf"', `data-campo="dispAlarmeNf" data-id="${esc(d.id)}"`) : ""}
+                        </div>
+                        <small class="suave">${ligados.length ? ligados.map(o => esc(o.nome || Planta.TIPOS_LAYOUT[o.tipo].nome) + " (" + esc(o.id) + ")").join(", ") : "Nada ligado ainda."}${d.alarme ? " · alarme na entrada " + d.alarme.entrada : ""}</small>
+                    </div>`;
+                }).join("")}
+                <button class="btn btn-mini" data-acao="novoDispositivo">+ Módulo Eciton I/O</button>
+            </div>`;
+    }
+
+    // Porta automática / faixa / cruzamento: ligação com o módulo
+    function blocoIoObjeto(planta, o) {
+        const regra = Planta.TIPOS_LAYOUT[o.tipo]?.regra;
+        if (regra !== "PORTA" && regra !== "FAIXA") return "";
+        const disp = planta.dispositivos || [];
+        const io = o.io || {};
+        const seletor = campoSelect("Módulo", "ioDispositivo", io.dispositivo || "", [["", regra === "PORTA" ? "— escolha —" : "— sem semáforo —"]].concat(disp.map(d => [d.id, d.nome ? `${d.id} · ${d.nome}` : d.id])));
+        if (!disp.length) {
+            return `<div class="editor-bloco"><span class="editor-subtitulo">${regra === "PORTA" ? "Eciton I/O" : "Semáforo e botão (Eciton I/O)"}</span>
+                <p class="editor-texto suave">${regra === "PORTA" ? "A porta precisa de um módulo Eciton I/O para abrir para o Atta." : "Opcional: um semáforo para a empilhadeira ou o pedestre, e um botão que segura os Atta."} Crie o módulo no painel da planta (clique num lugar vazio do mapa).</p>
+                <button class="btn btn-mini" data-acao="novoDispositivo">+ Módulo Eciton I/O</button></div>`;
+        }
+        if (regra === "PORTA") {
+            return `<div class="editor-bloco"><span class="editor-subtitulo">Eciton I/O</span>
+                ${seletor}
+                ${o.io ? `
+                    <div class="editor-linha">
+                        ${campoSelect("Relé que abre", "ioRele", io.rele || 0, opcoesRele("— escolha —"))}
+                        ${campoSelect("Sensor “aberta”", "ioAberta", io.aberta || 0, opcoesEntrada("— escolha —"))}
+                    </div>
+                    <div class="editor-linha">
+                        ${campoSelect("Sensor “fechada”", "ioFechada", io.fechada || 0, opcoesEntrada("— sem sensor —"))}
+                        ${campoNumero("Fecha depois de", "ioFechar", io.fechar, 1, "s", 'min="1" max="120"')}
+                    </div>
+                    ${campoNumero("Tempo máximo para abrir", "ioAbrirMax", io.abrirMax, 1, "s", 'min="2" max="120"')}
+                    <p class="editor-texto suave">Ligue o relé na entrada da porta que a <b>mantém aberta</b> enquanto o contato está fechado (a mesma do radar ou do botão). O sensor “aberta” (fim de curso) é obrigatório: o Atta só passa com a porta confirmada aberta. Sem o “fechada”, vale o “aberta” desligado.</p>` : ""}
+                <div class="editor-acoes"><button class="btn btn-mini" data-acao="criarPontosPorta">Criar pontos dos dois lados</button></div>
+                <small class="suave">Divide a fita a ${Planta.IO.pontoPorta.toString().replace(".", ",")} m de cada lado da porta: ela abre só quando o Atta chega perto.</small>
+            </div>`;
+        }
+        return `<div class="editor-bloco"><span class="editor-subtitulo">Semáforo e botão (Eciton I/O)</span>
+            ${seletor}
+            ${o.io ? `
+                <div class="editor-linha">
+                    ${campoSelect("Relé vermelho", "ioVermelho", io.vermelho || 0, opcoesRele())}
+                    ${campoSelect("Relé verde", "ioVerde", io.verde || 0, opcoesRele())}
+                </div>
+                <div class="editor-linha">
+                    ${campoSelect("Botão", "ioBotao", io.botao || 0, opcoesEntrada("— sem botão —"))}
+                    ${campoNumero("Segura os Atta por", "ioSegurar", io.segurar, 1, "s", 'min="3" max="600"')}
+                </div>
+                <p class="editor-texto suave">Vermelho para a empilhadeira ou o pedestre enquanto um Atta reserva ou passa. O botão faz os Atta esperarem (o módulo ocupa o cruzamento) pelo tempo escolhido depois de soltar.</p>` : ""}
+        </div>`;
+    }
+
+    // Zona lenta / proibida só num horário
+    function blocoHorario(o) {
+        if (!Planta.TEM_HORARIO.includes(o.tipo)) return "";
+        const h = o.horario;
+        const NOMES = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+        return `<div class="editor-bloco"><span class="editor-subtitulo">Quando vale</span>
+            <label class="config-chave"><input type="checkbox" data-campo="horarioLigado" ${h ? "checked" : ""}><span>Só num horário (ex.: troca de turno)</span></label>
+            ${h ? `<div class="editor-linha">
+                    <label class="editor-campo"><span>Das</span><input type="time" data-campo="horarioDe" value="${esc(h.de)}"></label>
+                    <label class="editor-campo"><span>Às</span><input type="time" data-campo="horarioAte" value="${esc(h.ate)}"></label>
+                </div>
+                <div class="editor-dias">${NOMES.map((n, i) => `<label class="config-chave"><input type="checkbox" data-campo="horarioDia" data-dia="${i}" ${h.dias.includes(i) ? "checked" : ""}><span>${n}</span></label>`).join("")}</div>
+                <small class="suave">Vale ${esc(Planta.descreverHorario(h))} (hora deste computador). A regra entra nas missões que saírem nesse horário.</small>` : `<small class="suave">Vale sempre.</small>`}
+        </div>`;
     }
 
     // A estação: o que ela é, quem atende e os acessos (0.18.1: sem formulário dentro de formulário)
@@ -692,6 +783,7 @@
                 </div>
                 ${blocoDesenho(planta)}
                 ${blocoGalpao3d(planta)}
+                ${blocoDispositivos(planta)}
                 <div class="editor-bloco">
                     <span class="editor-subtitulo">Resumo</span>
                     <p class="editor-texto">${(planta.estacoes || []).length} estações (${planta.nos.filter(n => n.tipo === "ESTACAO").length} acessos) · ${planta.nos.length} pontos · ${planta.segmentos.filter(x => Planta.tipoSegmento(x) === "LINHA").length} linhas · ${planta.segmentos.filter(x => Planta.tipoSegmento(x) === "LATERAL").length} trocas laterais · ${planta.layout.length} objetos</p>
@@ -919,6 +1011,8 @@
                 ${o.tipo === "ZONA_LENTA" ? campoNumero("Velocidade máx. na zona", "objVelocidade", o.velocidadeMaxima || "", 0.005, "m/s", `min="0" max="${Planta.LIMITES.velocidadeMaxima}"`) : ""}
                 ${(Planta.TIPOS_LAYOUT[o.tipo]?.altura || 0) > 0 ? campoNumero("Altura (vista 3D)", "objAltura", o.altura || "", 0.1, "m", `min="0" placeholder="${Planta.TIPOS_LAYOUT[o.tipo].altura}"`) : ""}
                 <p class="editor-texto suave">${esc(textoRegraObjeto(o))}</p>
+                ${blocoIoObjeto(planta, o)}
+                ${blocoHorario(o)}
                 ${(Planta.TIPOS_LAYOUT[o.tipo]?.altura || 0) > 0 || o.modelo3d ? blocoModelo3d(o) : ""}
                 <div class="editor-acoes">
                     <button class="btn btn-mini" data-acao="duplicarObjeto">Duplicar</button>
@@ -964,6 +1058,13 @@
             case "desenhoEscala": if (num > 0) planta.desenho.escala = num; break;
             case "camadaVisivel": planta.desenho.camadas[Number(alvo.dataset.indice)].visivel = alvo.checked; break;
             case "camadaUso": planta.desenho.camadas[Number(alvo.dataset.indice)].uso = valor; break;
+            case "dispNome": { const d = (planta.dispositivos || []).find(x => x.id === alvo.dataset.id); if (d) d.nome = valor.trim().slice(0, 40); break; }
+            case "dispAlarme": {
+                const d = (planta.dispositivos || []).find(x => x.id === alvo.dataset.id);
+                if (d) d.alarme = num >= 1 ? { entrada: num, nf: d.alarme ? d.alarme.nf : true } : null;
+                break;
+            }
+            case "dispAlarmeNf": { const d = (planta.dispositivos || []).find(x => x.id === alvo.dataset.id); if (d && d.alarme) d.alarme.nf = valor === "nf"; break; }
             case "fundoX": planta.fundo.x = num; break;
             case "fundoY": planta.fundo.y = num; break;
             case "fundoLargura":
@@ -1074,6 +1175,36 @@
                 case "objVelocidade": o.velocidadeMaxima = Math.max(0, Math.min(Planta.LIMITES.velocidadeMaxima, num || 0)); break;
                 case "objAltura": if (num > 0) o.altura = Planta.arred(num, 2); else delete o.altura; break;
                 case "objAjuste3d": o.ajuste3d = valor === "real" ? "real" : "caber"; break;
+                // 0.19: Eciton I/O e horário
+                case "ioDispositivo":
+                    if (!valor) delete o.io;
+                    else {
+                        const porta = Planta.TIPOS_LAYOUT[o.tipo]?.regra === "PORTA";
+                        o.io = Object.assign(porta ? { rele: 0, aberta: 0, fechada: 0, fechar: Planta.IO.fecharPadrao, abrirMax: Planta.IO.abrirMaxPadrao }
+                                                   : { vermelho: 0, verde: 0, botao: 0, segurar: Planta.IO.segurarPadrao }, o.io || {}, { dispositivo: valor });
+                    }
+                    break;
+                case "ioRele": case "ioAberta": case "ioFechada": case "ioVermelho": case "ioVerde": case "ioBotao":
+                    if (o.io) o.io[nome.slice(2, 3).toLowerCase() + nome.slice(3)] = Math.max(0, Math.min(4, Math.round(num) || 0));
+                    break;
+                case "ioFechar": if (o.io) o.io.fechar = Math.max(1, Math.min(120, Math.round(num) || Planta.IO.fecharPadrao)); break;
+                case "ioAbrirMax": if (o.io) o.io.abrirMax = Math.max(2, Math.min(120, Math.round(num) || Planta.IO.abrirMaxPadrao)); break;
+                case "ioSegurar": if (o.io) o.io.segurar = Math.max(3, Math.min(600, Math.round(num) || Planta.IO.segurarPadrao)); break;
+                case "horarioLigado":
+                    if (alvo.checked) o.horario = o.horario || { de: "13:50", ate: "14:10", dias: [1, 2, 3, 4, 5] };
+                    else delete o.horario;
+                    break;
+                case "horarioDe": case "horarioAte":
+                    if (o.horario) { const h = Object.assign({}, o.horario, { [nome === "horarioDe" ? "de" : "ate"]: valor }); const n = Planta.normalizarHorario(h); if (n) o.horario = n; }
+                    break;
+                case "horarioDia":
+                    if (o.horario) {
+                        const d = Number(alvo.dataset.dia);
+                        const dias = new Set(o.horario.dias);
+                        if (alvo.checked) dias.add(d); else dias.delete(d);
+                        if (dias.size) o.horario.dias = [...dias].sort();
+                    }
+                    break;
             }
         }
         alterado();
@@ -1100,6 +1231,42 @@
                 return;
             }
             case "cancelarAcesso": estado.novoAcessoDe = null; selecionarFerramenta("SELECIONAR"); renderizarPropriedades(); return;
+            case "novoDispositivo": {
+                registrarDesfazer();
+                planta.dispositivos = planta.dispositivos || [];
+                const id = Planta.proximoId(planta.dispositivos, "IO").replace(/^IO0(\d)$/, "IO$1");
+                planta.dispositivos.push({ id, nome: "", alarme: null });
+                // vindo do painel de um objeto: já liga a ele
+                const o = sel?.tipo === "layout" ? planta.layout.find(x => x.id === sel.id) : null;
+                if (o && ["PORTA", "FAIXA"].includes(Planta.TIPOS_LAYOUT[o.tipo]?.regra) && !o.io) {
+                    o.io = Planta.TIPOS_LAYOUT[o.tipo].regra === "PORTA"
+                        ? { dispositivo: id, rele: 1, aberta: 1, fechada: 0, fechar: Planta.IO.fecharPadrao, abrirMax: Planta.IO.abrirMaxPadrao }
+                        : { dispositivo: id, vermelho: 0, verde: 0, botao: 0, segurar: Planta.IO.segurarPadrao };
+                }
+                ui.aviso(`Módulo ${id} criado. Ligue as portas e cruzamentos a ele e publique a planta: a configuração vai sozinha para o módulo.`, "sucesso");
+                alterado();
+                return;
+            }
+            case "removerDispositivo": {
+                const id = botao.dataset.id;
+                const ligados = Planta.objetosIo(planta, id);
+                ui.confirmar({ titulo: `Remover o módulo ${id}?`, texto: ligados.length ? `${ligados.length} objeto(s) ficam sem Eciton I/O (as portas deixam de abrir para os Atta).` : "Nada está ligado a ele.", confirmar: "Remover", perigo: true }).then(okRemover => {
+                    if (!okRemover) return;
+                    registrarDesfazer();
+                    planta.dispositivos = (planta.dispositivos || []).filter(d => d.id !== id);
+                    ligados.forEach(o => delete o.io);
+                    alterado();
+                });
+                return;
+            }
+            case "criarPontosPorta": {
+                registrarDesfazer();
+                const r = Planta.criarPontosPorta(planta, sel.id);
+                if (!r.sucesso) { estado.desfazer.pop(); ui.aviso(r.erro, "aviso"); return; }
+                ui.aviso(`Pontos ${r.pontos.join(" e ")} criados dos dois lados da porta. Ponha uma tag RFID em cada um.`, "sucesso");
+                alterado();
+                return;
+            }
             case "usarMaquina": {
                 const no = Planta.noPorId(planta, sel.id), e = no && Planta.estacaoPorId(planta, no.estacao), o = planta.layout.find(x => x.id === botao.dataset.id);
                 if (!e || !o) return;
@@ -2008,6 +2175,7 @@
         publicar,
         // seleciona um ponto, segmento ou objeto (como o clique no mapa)
         selecionar: (tipo, id) => { estado.selecao = tipo ? { tipo, id } : null; desenharMapa(); renderizarPropriedades(); },
+        redesenhar: () => { if (estado.mapa) desenharMapa(); },
         _estado: estado
     };
 })(typeof window !== "undefined" ? window : globalThis);

@@ -92,6 +92,8 @@
     //   regra: FAIXA  (para 1 s antes, atravessa devagar, LED piscando, nunca para em cima)
     //          LIVRE  (área que precisa ficar livre: nenhum ponto de parada dentro)
     //          LENTA  (velocidade máxima da zona) | PROIBIDA (nenhum trecho passa)
+    //          PORTA  (0.19: porta automática ligada a um Eciton I/O; o Atta pede e
+    //                  só passa com o sensor "aberta" confirmado)
     const GRUPOS_LAYOUT = [
         ["estrutura", "Estrutura"], ["armazenagem", "Armazenagem"], ["maquinas", "Máquinas"],
         ["logistica", "Postos e logística"], ["circulacao", "Circulação e segurança"], ["escala", "Pessoas e veículos"]
@@ -102,6 +104,7 @@
         GRADE:         { nome: "Grade de proteção",      grupo: "estrutura",   solido: true,  largura: 3.0, profundidade: 0.05, altura: 2.0 },
         PORTA:         { nome: "Porta",                  grupo: "estrutura",   solido: false, largura: 1.0, profundidade: 0.15, altura: 2.1 },
         PORTAO:        { nome: "Portão",                 grupo: "estrutura",   solido: false, largura: 4.0, profundidade: 0.2, altura: 4.0 },
+        PORTA_AUTOMATICA: { nome: "Porta automática",    grupo: "estrutura",   solido: false, largura: 3.0, profundidade: 0.2, altura: 3.5, regra: "PORTA" },
         PRATELEIRA:    { nome: "Prateleira",             grupo: "armazenagem", solido: true,  largura: 2.0, profundidade: 0.5, altura: 2.0 },
         PORTA_PALETE:  { nome: "Porta-palete",           grupo: "armazenagem", solido: true,  largura: 2.7, profundidade: 1.1, altura: 4.5 },
         FLOW_RACK:     { nome: "Flow rack (kits)",       grupo: "armazenagem", solido: true,  largura: 2.0, profundidade: 1.2, altura: 1.8 },
@@ -179,7 +182,8 @@
             layout: [],
             estacoes: [],
             nos: [],
-            segmentos: []
+            segmentos: [],
+            dispositivos: []    // 0.19: Eciton I/O [{ id, nome, alarme }]
         };
     }
 
@@ -556,7 +560,7 @@
         const a = noPorId(planta, segmento.a), b = noPorId(planta, segmento.b);
         if (a && b) {
             planta.layout
-                .filter(o => o.tipo === "ZONA_LENTA" && Number(o.velocidadeMaxima) > 0)
+                .filter(o => o.tipo === "ZONA_LENTA" && Number(o.velocidadeMaxima) > 0 && horarioAtivo(o))
                 .forEach(zona => {
                     if (segmentoCruzaRetangulo(planta, segmento, zona)) {
                         v = v > 0 ? Math.min(v, zona.velocidadeMaxima) : Number(zona.velocidadeMaxima);
@@ -606,6 +610,197 @@
        NORMALIZACAO E MIGRACAO
        ======================================================== */
 
+    /* ========================================================
+       ECITON I/O (0.19): portas automáticas, semáforos e alarme
+       ========================================================
+       planta.dispositivos: [{ id: "IO1", nome, alarme: { entrada: 4, nf: true } | null }]
+       objeto.io (porta automática):   { dispositivo, rele, aberta, fechada, fechar, abrirMax }
+       objeto.io (faixa / cruzamento): { dispositivo, vermelho, verde, botao, segurar }
+       Reles e entradas numerados 1..4. A zona de tráfego do objeto é "P"+id
+       (porta) ou "F"+id (faixa/cruzamento): o módulo ocupa a zona e os Atta
+       pedem, como num cruzamento. */
+    const IO = { reles: 4, entradas: 4, maxZonas: 8, fecharPadrao: 5, abrirMaxPadrao: 15, segurarPadrao: 20, folgaPorta: 0.5, pontoPorta: 1.5 };
+    const TEM_HORARIO = ["ZONA_LENTA", "ZONA_PROIBIDA"];
+    const idIoValido = id => /^[A-Za-z0-9_-]{1,12}$/.test(String(id || ""));
+    const pino = (v, max) => { const n = Math.round(Number(v)); return n >= 1 && n <= max ? n : 0; };
+
+    function normalizarDispositivo(d) {
+        if (!d || !idIoValido(d.id)) return null;
+        const r = { id: String(d.id), nome: String(d.nome || "").slice(0, 40) };
+        const e = pino(d.alarme?.entrada, IO.entradas);
+        r.alarme = d.alarme && e ? { entrada: e, nf: d.alarme.nf !== false } : null;
+        if (d.virtual) r.virtual = true;
+        return r;
+    }
+
+    function normalizarIoObjeto(o) {
+        const regra = TIPOS_LAYOUT[o.tipo]?.regra;
+        if (!o.io || (regra !== "PORTA" && regra !== "FAIXA")) { delete o.io; return; }
+        const d = String(o.io.dispositivo || "");
+        if (regra === "PORTA") {
+            o.io = { dispositivo: d, rele: pino(o.io.rele, IO.reles), aberta: pino(o.io.aberta, IO.entradas), fechada: pino(o.io.fechada, IO.entradas),
+                     fechar: Math.min(120, Math.max(1, Math.round(Number(o.io.fechar) || IO.fecharPadrao))),
+                     abrirMax: Math.min(120, Math.max(2, Math.round(Number(o.io.abrirMax) || IO.abrirMaxPadrao))) };
+        } else {
+            o.io = { dispositivo: d, vermelho: pino(o.io.vermelho, IO.reles), verde: pino(o.io.verde, IO.reles), botao: pino(o.io.botao, IO.entradas),
+                     segurar: Math.min(600, Math.max(3, Math.round(Number(o.io.segurar) || IO.segurarPadrao))) };
+        }
+        if (!d) delete o.io;
+    }
+
+    // "HH:MM" -> minutos do dia
+    const minutos = t => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || "")); return m ? Math.min(1439, Number(m[1]) * 60 + Number(m[2])) : null; };
+    function normalizarHorario(h) {
+        const de = minutos(h?.de), ate = minutos(h?.ate);
+        if (de === null || ate === null || de === ate) return null;
+        const dias = Array.isArray(h.dias) ? [...new Set(h.dias.map(Number).filter(d => d >= 0 && d <= 6))].sort() : [0, 1, 2, 3, 4, 5, 6];
+        const fmt = m => String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
+        return { de: fmt(de), ate: fmt(ate), dias: dias.length ? dias : [0, 1, 2, 3, 4, 5, 6] };
+    }
+    // A regra vale agora? Sem horário: sempre. Atravessa a meia-noite se "de" > "ate".
+    function horarioAtivo(objeto, agora = null) {
+        if (!objeto.horario) return true;
+        const d = agora || contextoRota.agora || new Date();
+        const m = d.getHours() * 60 + d.getMinutes(), de = minutos(objeto.horario.de), ate = minutos(objeto.horario.ate);
+        const dia = d.getDay(), ontem = (dia + 6) % 7;
+        if (de < ate) return objeto.horario.dias.includes(dia) && m >= de && m < ate;
+        return (m >= de && objeto.horario.dias.includes(dia)) || (m < ate && objeto.horario.dias.includes(ontem));
+    }
+    function descreverHorario(h) {
+        if (!h) return "sempre";
+        const NOMES = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+        const dias = h.dias.length === 7 ? "todo dia" : h.dias.length === 5 && h.dias.join() === "1,2,3,4,5" ? "seg a sex" : h.dias.map(d => NOMES[d]).join(", ");
+        return `das ${h.de} às ${h.ate}, ${dias}`;
+    }
+
+    // Contexto das rotas (0.19): corredores fechados agora e a hora (regras por horário).
+    // O site atualiza; os testes podem fixar a hora.
+    const contextoRota = { fechados: new Set(), agora: null };
+    function definirContextoRota(c = {}) {
+        if (c.fechados !== undefined) contextoRota.fechados = new Set(c.fechados || []);
+        if (c.agora !== undefined) contextoRota.agora = c.agora;
+        return { fechados: [...contextoRota.fechados], agora: contextoRota.agora };
+    }
+    // Por que nenhum Atta pode passar por este segmento agora (null = pode)
+    function recusaAgora(planta, s) {
+        if (contextoRota.fechados.has(s.id)) return "corredor fechado";
+        const z = (planta.layout || []).find(o => o.tipo === "ZONA_PROIBIDA" && o.horario && horarioAtivo(o) && segmentoCruzaRetangulo(planta, s, o));
+        return z ? `zona proibida agora (${z.nome || z.id}, ${descreverHorario(z.horario)})` : null;
+    }
+
+    const zonaDoObjetoIo = o => ((TIPOS_LAYOUT[o.tipo]?.regra === "PORTA" ? "P" : "F") + o.id).slice(0, 9);
+    function objetosIo(planta, dispositivoId = null) {
+        return (planta.layout || []).filter(o => o.io && (!dispositivoId || o.io.dispositivo === dispositivoId));
+    }
+
+    // A configuração que o site manda para o módulo (config/io, retida)
+    function configIO(planta, dispositivoId) {
+        const d = (planta.dispositivos || []).find(x => x.id === dispositivoId);
+        if (!d) return null;
+        const portas = [], cruzamentos = [];
+        objetosIo(planta, dispositivoId).forEach(o => {
+            const nome = o.nome || TIPOS_LAYOUT[o.tipo].nome;
+            if (TIPOS_LAYOUT[o.tipo].regra === "PORTA") {
+                const p = { id: o.id, nome, zona: zonaDoObjetoIo(o), rele: o.io.rele, aberta: o.io.aberta, fechar: o.io.fechar, abrirMax: o.io.abrirMax };
+                if (o.io.fechada) p.fechada = o.io.fechada;
+                portas.push(p);
+            } else {
+                const c = { id: o.id, nome, zona: zonaDoObjetoIo(o), segurar: o.io.segurar };
+                if (o.io.vermelho) c.vermelho = o.io.vermelho;
+                if (o.io.verde) c.verde = o.io.verde;
+                if (o.io.botao) c.botao = o.io.botao;
+                cruzamentos.push(c);
+            }
+        });
+        const cfg = { rev: Number(planta.revisao) || 0, portas, cruzamentos };
+        if (d.alarme) cfg.alarme = { entrada: d.alarme.entrada, nf: d.alarme.nf };
+        return cfg;
+    }
+
+    // Problemas do Eciton I/O (erros impedem publicar)
+    function validarIO(planta, erros, avisos) {
+        const disp = planta.dispositivos || [];
+        const usados = new Map();   // dispositivo -> { reles: Map, entradas: Map, zonas }
+        const uso = id => { if (!usados.has(id)) usados.set(id, { reles: new Map(), entradas: new Map(), zonas: 0 }); return usados.get(id); };
+        const marcar = (id, tipo, n, quem, alvo) => {
+            if (!n) return;
+            const u = uso(id)[tipo];
+            const nome = tipo === "reles" ? `Relé ${n}` : `Entrada ${n}`;
+            if (u.has(n)) erros.push({ alvo, msg: `${id}: ${nome} usado em ${u.get(n)} e em ${quem}.` });
+            else u.set(n, quem);
+        };
+        disp.forEach(d => { if (d.alarme) marcar(d.id, "entradas", d.alarme.entrada, "alarme de incêndio", null); });
+        (planta.layout || []).forEach(o => {
+            const regra = TIPOS_LAYOUT[o.tipo]?.regra;
+            const nome = o.nome || `${TIPOS_LAYOUT[o.tipo]?.nome || "objeto"} ${o.id}`;
+            if (regra === "PORTA" && !o.io) {
+                avisos.push({ alvo: o.id, msg: `${nome}: porta automática sem Eciton I/O. Os Atta passam sem pedir para abrir; ligue a porta a um módulo.` });
+                return;
+            }
+            if (!o.io) return;
+            if (!disp.some(d => d.id === o.io.dispositivo)) { erros.push({ alvo: o.id, msg: `${nome}: o módulo ${o.io.dispositivo} não existe (crie em Dispositivos da planta).` }); return; }
+            const u = uso(o.io.dispositivo);
+            u.zonas++;
+            if (regra === "PORTA") {
+                if (!o.io.rele) erros.push({ alvo: o.id, msg: `${nome}: escolha o relé que abre a porta.` });
+                if (!o.io.aberta) erros.push({ alvo: o.id, msg: `${nome}: escolha a entrada do sensor "aberta" (o Atta só passa com a porta confirmada aberta).` });
+                marcar(o.io.dispositivo, "reles", o.io.rele, nome, o.id);
+                marcar(o.io.dispositivo, "entradas", o.io.aberta, nome + " (aberta)", o.id);
+                marcar(o.io.dispositivo, "entradas", o.io.fechada, nome + " (fechada)", o.id);
+                const cruzam = planta.segmentos.filter(s => temFita(s) && noPorId(planta, s.a) && noPorId(planta, s.b) && segmentoCruzaRetangulo(planta, s, o));
+                if (!cruzam.length) avisos.push({ alvo: o.id, msg: `${nome}: nenhuma fita passa pela porta.` });
+                cruzam.forEach(s => {
+                    if (comprimentoSegmento(planta, s) > 6) avisos.push({ alvo: s.id, msg: `${nome}: o trecho ${s.id} que passa pela porta é longo; ponha um ponto de cada lado da porta (botão "Criar pontos dos dois lados") para ela abrir só na hora.` });
+                });
+                planta.nos.forEach(no => {
+                    if (pontoNoRetangulo(no, o, IO.folgaPorta)) erros.push({ alvo: no.id, msg: `${no.id} está embaixo (ou colado) da ${nome}: o Atta nunca pode parar ali. Mude o ponto para fora.` });
+                });
+            } else {
+                if (!o.io.vermelho && !o.io.verde && !o.io.botao) erros.push({ alvo: o.id, msg: `${nome}: escolha o relé do semáforo ou a entrada do botão.` });
+                marcar(o.io.dispositivo, "reles", o.io.vermelho, nome + " (vermelho)", o.id);
+                marcar(o.io.dispositivo, "reles", o.io.verde, nome + " (verde)", o.id);
+                marcar(o.io.dispositivo, "entradas", o.io.botao, nome + " (botão)", o.id);
+            }
+        });
+        disp.forEach(d => {
+            const u = usados.get(d.id);
+            if (!u || (!u.zonas && !d.alarme)) avisos.push({ alvo: null, msg: `Módulo ${d.id}${d.nome ? " (" + d.nome + ")" : ""} sem nada ligado.` });
+            if (u && u.zonas > IO.maxZonas) erros.push({ alvo: null, msg: `Módulo ${d.id}: no máximo ${IO.maxZonas} portas e cruzamentos.` });
+            const portas = objetosIo(planta, d.id).filter(o => TIPOS_LAYOUT[o.tipo].regra === "PORTA").length;
+            if (portas > 4 || objetosIo(planta, d.id).length - portas > 4) erros.push({ alvo: null, msg: `Módulo ${d.id}: no máximo 4 portas e 4 cruzamentos.` });
+        });
+    }
+
+    // Pontos de referência dos dois lados da porta (a porta abre só quando o Atta chega perto)
+    function criarPontosPorta(planta, objetoId, distancia = IO.pontoPorta) {
+        const o = (planta.layout || []).find(x => x.id === objetoId);
+        if (!o) return { sucesso: false, erro: "Porta não encontrada." };
+        const criados = [];
+        const cruzam = planta.segmentos.filter(s => tipoSegmento(s) === "LINHA" && segmentoCruzaRetangulo(planta, s, o));
+        if (!cruzam.length) return { sucesso: false, erro: "Nenhuma linha reta passa pela porta." };
+        const vistos = new Set();
+        cruzam.forEach(s0 => {
+            if (vistos.has(s0.id)) return;
+            const g = segmentoGemeo(planta, s0);
+            if (g) vistos.add(g.id);
+            let s = s0;
+            const a = noPorId(planta, s.a), b = noPorId(planta, s.b);
+            const L = comprimentoSegmento(planta, s);
+            // onde a fita entra e sai da porta (amostra de 2 cm)
+            let primeiro = null, ultimo = null;
+            for (let d = 0; d <= L; d += 0.02) {
+                const f = d / L, q = { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
+                if (pontoNoRetangulo(q, o)) { if (primeiro === null) primeiro = d; ultimo = d; }
+            }
+            if (primeiro === null) return;
+            const antes = primeiro - distancia, depois = ultimo + distancia;
+            // primeiro o ponto de depois (as distâncias de antes continuam valendo)
+            if (depois <= L - 0.3) { const r = dividirSegmento(planta, s.id, arred(depois, 2)); if (r.sucesso) criados.push(r.ponto.id); }
+            if (antes >= 0.3) { const r = dividirSegmento(planta, s.id, arred(antes, 2)); if (r.sucesso) criados.push(r.ponto.id); }
+        });
+        return criados.length ? { sucesso: true, pontos: criados } : { sucesso: false, erro: "A porta já está perto dos pontos (nada a dividir)." };
+    }
+
     function normalizar(entrada) {
         const p = Object.assign(criarVazia(), clonar(entrada || {}));
         p.versao = VERSAO;
@@ -628,7 +823,12 @@
             o.rotacao = Number(o.rotacao) || 0;
             if (!TIPOS_LAYOUT[o.tipo]) o.tipo = "MAQUINA";
             if (Number(o.altura) > 0) o.altura = arred(Number(o.altura), 2); else delete o.altura;
+            normalizarIoObjeto(o);
+            if (TEM_HORARIO.includes(o.tipo) && o.horario) o.horario = normalizarHorario(o.horario); else delete o.horario;
+            if (!o.horario) delete o.horario;
         });
+        p.dispositivos = (Array.isArray(p.dispositivos) ? p.dispositivos : []).map(normalizarDispositivo).filter(Boolean)
+            .filter((d, i, l) => l.findIndex(x => x.id === d.id) === i);
         p.estacoes.forEach(e => {
             e.id = String(e.id || "");
             e.nome = e.nome || "";
@@ -984,7 +1184,9 @@
             }
 
             planta.layout.forEach(o => {
-                if (o.tipo === "ZONA_PROIBIDA" && segmentoCruzaRetangulo(planta, s, o)) {
+                if (o.tipo === "ZONA_PROIBIDA" && o.horario && segmentoCruzaRetangulo(planta, s, o)) {
+                    avisos.push({ alvo: s.id, msg: `Segmento ${s.id} passa pela zona proibida ${o.nome || o.id} (${descreverHorario(o.horario)}): nesse horário os Atta desviam ou esperam.` });
+                } else if (o.tipo === "ZONA_PROIBIDA" && segmentoCruzaRetangulo(planta, s, o)) {
                     erros.push({ alvo: s.id, msg: `Segmento ${s.id} passa pela zona proibida ${o.nome || o.id}.` });
                 } else if (TIPOS_LAYOUT[o.tipo]?.solido && segmentoCruzaRetangulo(planta, s, o)) {
                     const dentroA = pontoNoRetangulo(a, o), dentroB = pontoNoRetangulo(b, o);
@@ -1040,6 +1242,8 @@
                 }
             });
         });
+
+        validarIO(planta, erros, avisos);
 
         // Bifurcação sem tag: o Atta precisa saber onde a fita se divide
         planta.nos.forEach(no => {
@@ -1159,7 +1363,7 @@
             const outro = s.a === noId ? s.b : s.a;
             const de = noPorId(planta, noId), para = noPorId(planta, outro);
             if (!de || !para) return;
-            if (recusaSegmento(planta, perfil, s)) return;
+            if (recusaSegmento(planta, perfil, s) || recusaAgora(planta, s)) return;
             const tipo = tipoSegmento(s);
             resultado.push({
                 segmento: s, tipo, de: noId, para: outro,
@@ -1241,7 +1445,10 @@
         if (!melhorFinal) {
             const quem = perfil && perfil.nome ? ` para ${perfil.nome}` : "";
             const porque = perfil && !perfil.gira ? " (carregado ele não gira no ponto nem anda de lado: precisa de curvas e de saída para a frente)" : "";
-            return { sucesso: false, erro: `Não existe caminho${quem} de ${origemId} até ${destinoId} respeitando os sentidos${porque}.` };
+            // 0.19: corredor fechado ou zona proibida neste horário pode ser o motivo
+            const agora = planta.segmentos.filter(s => recusaAgora(planta, s)).map(s => s.id);
+            const fechado = agora.length ? ` (agora fechados: ${agora.slice(0, 6).join(", ")}${agora.length > 6 ? "…" : ""})` : "";
+            return { sucesso: false, erro: `Não existe caminho${quem} de ${origemId} até ${destinoId} respeitando os sentidos${porque}${fechado}.` };
         }
         const passos = [];
         let k = melhorFinal.chave;
@@ -1604,6 +1811,12 @@
         // ids unicos (cortados em 9 caracteres para caber no firmware)
         const usados = new Map();
         lista.forEach(z => { const n = usados.get(z.id) || 0; usados.set(z.id, n + 1); if (n) z.id = (z.id.slice(0, 7) + "~" + n).slice(0, 9); });
+        // 0.19: porta automática e faixa/cruzamento ligados a um Eciton I/O:
+        // zona própria (o módulo ocupa), por cima das zonas de sempre
+        objetosIo(planta).forEach(o => {
+            const segs = planta.segmentos.filter(s => temFita(s) && noPorId(planta, s.a) && noPorId(planta, s.b) && segmentoCruzaRetangulo(planta, s, o)).map(s => s.id).sort();
+            if (segs.length) lista.push({ id: zonaDoObjetoIo(o), nos: [], segmentos: segs, objeto: o.id, tipo: TIPOS_LAYOUT[o.tipo].regra, dispositivo: o.io.dispositivo });
+        });
         return lista.sort((a, b) => a.id.localeCompare(b.id));
     }
 
@@ -1615,8 +1828,8 @@
     // Na missao: zonas (nomes; bit i = zonas[i]) e zonasInicio (do ponto de partida).
     function anotarTrafego(planta, pacote, pontoInicial) {
         const zonas = zonasDeConflito(planta);
-        const doNo = new Map(), doSeg = new Map();
-        zonas.forEach(z => { z.nos.forEach(n => doNo.set(n, z.id)); z.segmentos.forEach(s => doSeg.set(s, z.id)); });
+        const doNo = new Map(), doSeg = new Map();   // segmento -> [zonas] (0.19: porta por cima do corredor)
+        zonas.forEach(z => { z.nos.forEach(n => doNo.set(n, z.id)); z.segmentos.forEach(s => { if (!doSeg.has(s)) doSeg.set(s, []); doSeg.get(s).push(z.id); }); });
         const trechos = [];
         const inicioEtapa = new Set(), fimEtapa = new Set();
         pacote.etapas.forEach(e => {
@@ -1630,7 +1843,7 @@
         const inicio = pontoInicial ? doNo.get(pontoInicial) : null;
         const ocupa = trechos.map(t => {
             const z = new Set();
-            if (doSeg.has(t.segmento)) z.add(doSeg.get(t.segmento));
+            (doSeg.get(t.segmento) || []).forEach(id => z.add(id));
             if (doNo.has(t.destino)) z.add(doNo.get(t.destino));
             return z;
         });
@@ -2028,7 +2241,10 @@
         normalizarPerfil, recusaSegmento, estacaoAceita, podeGirar, avisosDoModelo,
         dividirSegmento, criarCurvaConcordancia, criarRamal,
         // 0.17
-        normalizarDesenho, paredesDoDesenho
+        normalizarDesenho, paredesDoDesenho,
+        // 0.19
+        IO, configIO, validarIO, objetosIo, zonaDoObjetoIo, criarPontosPorta, normalizarHorario, horarioAtivo, descreverHorario,
+        definirContextoRota, recusaAgora, TEM_HORARIO
     };
 
     if (typeof module !== "undefined" && module.exports) {

@@ -10,6 +10,7 @@
 
 EditorPlanta.iniciar({
     aoPublicar: () => {
+        if (typeof Dispositivos !== "undefined") Dispositivos.aoPublicarPlanta();
         renderizarMapaVisaoGeral();
         agendarAtualizacaoTela();
     },

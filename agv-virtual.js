@@ -240,6 +240,8 @@ const AgvVirtual = (function () {
             }
         });
         inst.obstaculos.forEach(o => e.vi_mundo_obstaculo(o.x, o.y, o.largura, o.profundidade, 0));
+        // 0.19: folhas das portas automáticas fechadas (Eciton I/O virtual)
+        if (typeof IoVirtual !== "undefined") IoVirtual.obstaculos().forEach(o => e.vi_mundo_obstaculo(o.x, o.y, o.largura, o.profundidade, (o.rotacao || 0) * Math.PI / 180));
         if (!e.vi_outro_agv) {
             Object.values(instancias).forEach(outro => {
                 if (outro === inst || !outro.exp) return;
@@ -284,8 +286,10 @@ const AgvVirtual = (function () {
     }
 
     function entregarTrafego(origem, topico, payload, retido) {
-        if (retido) trafegoRetido.set(topico, payload);
+        if (retido) { if (payload === "") trafegoRetido.delete(topico); else trafegoRetido.set(topico, payload); }
         Object.values(instancias).forEach(inst => { if (inst !== origem) entregarMqtt(inst, topico, payload); });
+        // 0.19: os módulos Eciton I/O virtuais também participam
+        if (typeof IoVirtual !== "undefined") IoVirtual.receberTrafego(topico, payload);
     }
 
     // Ao ligar (ou o broker voltar): recebe o que estava retido, inclusive o
@@ -972,6 +976,11 @@ const AgvVirtual = (function () {
     return {
         ligar, desligar, receberComando, pulsar, alternar, posicionar, abrir, criarNovo, criarFrotaExemplo, trocarModelo, adicionarObstaculo,
         retomar, ligarBotoes, instancias, BITS, esquecerTrafego,
+        // 0.19: Eciton I/O virtual no mesmo "broker"
+        entregarTrafegoExterno: (topico, payload, retido) => entregarTrafego(null, topico, payload, retido),
+        retidosTrafego: () => [...trafegoRetido],
+        atualizarObstaculosTodos: () => Object.values(instancias).forEach(inst => { if (inst.exp) atualizarObstaculos(inst); }),
+        velocidade: () => Math.max(1, ...Object.values(instancias).map(inst => Number(inst.mundo?.velocidade) || 1)),
         _passo: passo
     };
 })();
