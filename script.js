@@ -335,6 +335,9 @@ function obterMissaoPorId(id) {
         return null;
     }
 
+    // 0.20: "Ir para o ponto" (missão temporária, não fica na lista)
+    if (typeof FrotaControle !== "undefined" && FrotaControle.missaoTemporaria(id)) return FrotaControle.missaoTemporaria(id);
+
     const missoesSalvas =
         localStorage.getItem("missoesAGV");
 
@@ -1261,7 +1264,8 @@ function conectarMQTT() {
             `${prefixo}+/status/#`,
             `${prefixo}+/evento`,
             `${prefixo}+/evento/#`,
-            `${prefixo}+/sistema/#`
+            `${prefixo}+/sistema/#`,
+            `${prefixo}frota/controle`
         ].forEach(topico => {
 
             clienteMQTT.subscribe(topico, { qos: 1 }, erro => {
@@ -1327,6 +1331,12 @@ function processarMensagemMQTT(topico, valor) {
     const id = partes[1];
     const agv = agvs[id];
     const caminho = partes.slice(2).join("/");
+
+    // 0.20: mensagens da empresa (agv/<empresa>/frota/controle: pausa e modo devagar)
+    if (id === "frota" && !agv) {
+        if (typeof FrotaControle !== "undefined") FrotaControle.processar(caminho, valor);
+        return;
+    }
 
     // 0.19: Eciton I/O (portas, semáforos, alarme) usa os mesmos tópicos
     if (!agv && typeof Dispositivos !== "undefined" && Dispositivos.processar(id, caminho, valor)) {
@@ -1453,6 +1463,13 @@ function processarMensagemMQTT(topico, valor) {
             break;
 
 
+        case "status/sinais": {
+            // 0.20: revisão da sinalização da empresa que o AGV está usando
+            const r = lerJSON();
+            agv.sinaisRev = r && Number.isFinite(Number(r.rev)) ? Number(r.rev) : undefined;
+            if (document.getElementById("sinalizacao")?.classList.contains("ativa") && typeof Sinalizacao !== "undefined") Sinalizacao.renderizar();
+            break;
+        }
         case "status/rotina":
 
             // Berço e turno (estado no AGV); confere se a rotina dele está igual à do site
@@ -1717,6 +1734,8 @@ function processarMensagemMQTT(topico, valor) {
                     estacao: ponto ? ponto.id : "--"
                 };
                 if (nova) {
+                    // 0.20: o Escanear e a corrida das tags (editor) esperam a próxima leitura
+                    document.dispatchEvent(new CustomEvent("rfid-lida", { detail: { agv: id, codigo: dadosRFID.codigo, sequencia: dadosRFID.sequencia, quando: Date.now() } }));
                     if (!Array.isArray(agv.rfidHistorico)) agv.rfidHistorico = [];
                     agv.rfidHistorico.unshift({ codigo: dadosRFID.codigo, quando: Date.now() });
                     agv.rfidHistorico.length = Math.min(agv.rfidHistorico.length, 20);
@@ -2139,12 +2158,14 @@ function renderizarFrota() {
                     </div>
                     <dl class="lista-dl">
                         <dt>Posição</dt><dd>${escaparHtml(agv.online || agv.pontoAtual ? descreverPosicaoAGV(agv) : "--")}</dd>
+                        ${typeof Sinalizacao !== "undefined" ? Sinalizacao.linhaCartao(agv) : ""}
                         <dt>Sinal</dt><dd class="mono">${escaparHtml(rotuloSinal(agv))}</dd>
                         ${typeof linhaRotinaCard === "function" ? linhaRotinaCard(agv) : ""}
                         ${typeof Manutencao !== "undefined" ? Manutencao.linhaCartao(agv) : ""}
                     </dl>
                     <div class="agv-card-acoes">
                         <button type="button" class="btn ${cat.chave === "emergencia" ? "btn-perigo-cheio" : ""}" data-abrir="${id}">${acao}</button>
+                        ${agv.online && typeof FrotaControle !== "undefined" && (!window.Nuvem || !Nuvem.emNuvem() || Nuvem.pode("operar")) && !["EM_EXECUCAO", "AGUARDANDO_CONFIRMACAO"].includes(agv.estadoMissao) ? `<button type="button" class="btn" data-ir-ponto="${id}" title="Mandar para uma espera, um berço ou uma estação sem criar missão">Ir para…</button>` : ""}
                         ${podeManut && Manutencao.podeMexerNo(agv) ? `<button type="button" class="btn btn-icone ${emManut ? "ativo" : ""}" data-manut-alternar="${id}" title="${emManut ? "Voltar à operação" : "Pôr em manutenção"}" aria-label="${emManut ? "Tirar da manutenção" : "Pôr em manutenção"} o AGV ${id}">${ui.icone("chave")}</button>` : ""}
                         <button type="button" class="btn btn-icone" data-editar="${id}" data-requer="administrar" title="Editar nome e ID" aria-label="Editar AGV ${id}">${ui.icone("lapis")}</button>
                         <button type="button" class="btn btn-icone btn-perigo" data-excluir="${id}" data-requer="administrar" title="Excluir da frota" aria-label="Excluir AGV ${id}">${ui.icone("lixo")}</button>
@@ -2314,7 +2335,7 @@ const informacoesTelas = {
     configuracoes: ["Configurações", "parâmetros salvos no próprio AGV"],
     controlePlanta: ["Planta", "Layout do galpão: linhas, estações, tags e zonas"],
     agvVirtual: ["AGV virtual", "O firmware real rodando no navegador, num mundo montado a partir da planta publicada"],
-    rotina: ["Rotina da frota", "Berços, turnos e calendário de cada AGV"],
+    rotina: ["Turnos e berços", "O calendário da fábrica e a rotina de cada AGV"],
     despacho: ["Despacho", "Pedidos de missão: o sistema escolhe o AGV, ou vai o AGV que você fixar"],
     postos: ["Postos", "Botões de cada posto, quem usa e se aceita pedido urgente"],
     posto: ["Posto", ""],
@@ -2322,6 +2343,7 @@ const informacoesTelas = {
     modelos: ["Modelos", "Catálogo do Atta: ficha técnica, foto e documentação de cada modelo"],
     manutencao: ["Manutenção", "AGVs fora da operação, uso da frota, cópias da configuração e documentação"],
     dispositivos: ["Dispositivos", "Eciton I/O: portas automáticas, semáforos e alarme de incêndio"],
+    sinalizacao: ["Sinalização", "O que cada luz do Atta quer dizer, e as cores da empresa"],
     indicadores: ["Indicadores", "O que a frota fez: entregas, disponibilidade, paradas, tráfego e ganhos"],
     programacao: ["Programação", "Botões dos postos que pedem sozinhos: pelo consumo, a cada X minutos ou em horários fixos"]
 };
@@ -2381,6 +2403,7 @@ function mudarTela(nomeTela) {
     if (nomeTela === "posto" && typeof TelaPosto !== "undefined") TelaPosto.abrir();
     if (nomeTela === "usuarios" && typeof Usuarios !== "undefined") Usuarios.abrir();
     if (nomeTela === "dispositivos" && typeof Dispositivos !== "undefined") Dispositivos.abrir();
+    if (nomeTela === "sinalizacao" && typeof Sinalizacao !== "undefined") Sinalizacao.abrir();
     if (nomeTela === "modelos" && typeof Modelos !== "undefined") Modelos.abrir();
     if (nomeTela === "manutencao" && typeof Manutencao !== "undefined") Manutencao.abrir();
     if (nomeTela === "indicadores" && typeof Indicadores !== "undefined") Indicadores.abrir();
@@ -3119,6 +3142,7 @@ function processarEventoMissao(agvId, evento) {
     const tipo = dados?.evento || dados?.tipo;
     const mensagem = dados?.mensagem || "";
     if (typeof Despacho !== "undefined") Despacho.aoEventoMissao(agv, tipo, dados);
+    if (typeof CamadasMapa !== "undefined") CamadasMapa.evento(agvId, tipo, mensagem);   // 0.20: tags com problema
 
     switch (tipo) {
 

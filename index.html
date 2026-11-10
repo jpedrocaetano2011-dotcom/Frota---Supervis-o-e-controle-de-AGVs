@@ -38,10 +38,11 @@
 
     <nav class="menu" aria-label="Menu principal">
         <a href="#" class="menu-item ativo" data-tela="frota" id="menuFrota"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg><span>Frota</span><b class="menu-badge" id="menuBadgeFrota" hidden>0</b></a>
-        <a href="#" class="menu-item menu-sub" data-tela="rotina"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-7 9 7M5 9.5V20h14V9.5M10 20v-5h4v5"/></svg><span>Rotina e berços</span></a>
+        <a href="#" class="menu-item menu-sub" data-tela="rotina"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-7 9 7M5 9.5V20h14V9.5M10 20v-5h4v5"/></svg><span>Turnos e berços</span></a>
         <a href="#" class="menu-item menu-sub" data-tela="modelos"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l8-4 8 4v10l-8 4-8-4zM4 7l8 4 8-4M12 11v10"/></svg><span>Modelos</span></a>
         <a href="#" class="menu-item menu-sub" data-tela="manutencao"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"/></svg><span>Manutenção</span><b class="menu-badge cinza" id="menuBadgeManutencao" hidden>0</b></a>
         <a href="#" class="menu-item menu-sub" data-tela="postos"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21zM12 7a2.5 2.5 0 1 0 0 5a2.5 2.5 0 1 0 0-5z"/></svg><span>Postos</span></a>
+        <a href="#" class="menu-item menu-sub" data-tela="sinalizacao"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h2M19 12h2M12 3v2M12 19v2M7 7l1.4 1.4M15.6 15.6L17 17M7 17l1.4-1.4M15.6 8.4L17 7"/><circle cx="12" cy="12" r="3.5"/></svg><span>Sinalização</span></a>
         <a href="#" class="menu-item menu-sub" data-tela="dispositivos"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h16v18H4zM9 3v18M13 11h3M13 8h3M6.5 12h0"/></svg><span>Dispositivos</span><b class="menu-badge vermelho" id="menuBadgeDispositivos" hidden>!</b></a>
         <a href="#" class="menu-item agv-menu" data-tela="visaoGeral"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3zM9 3v15M15 6v15"/></svg><span>Visão geral</span></a>
         <a href="#" class="menu-item agv-menu" data-tela="controleManual"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6zM12 3v3M12 18v3M3 12h3M18 12h3"/></svg><span>Controle manual</span></a>
@@ -107,7 +108,7 @@
                 <label class="busca"><svg class="icone icone-p" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4a7 7 0 1 0 0 14a7 7 0 1 0 0-14zM20 20l-4-4"/></svg><input type="search" id="buscaFrota" name="busca-frota-agv" placeholder="Nome ou ID" autocomplete="off" readonly aria-label="Buscar AGV por nome ou ID"></label>
             </div>
             <div class="grupo">
-                <button type="button" class="btn" onclick="mudarTela('rotina')">Rotina e berços</button>
+                <button type="button" class="btn" onclick="mudarTela('rotina')">Turnos e berços</button>
                 <button type="button" class="btn" id="frotaNovoVirtual">+ AGV virtual</button>
                 <button type="button" class="btn btn-primario" onclick="abrirCadastroAGV()" data-requer="administrar">+ Adicionar AGV</button>
             </div>
@@ -121,6 +122,10 @@
          ROTINA: BERÇOS E TURNOS
          ======================================================== -->
     <section id="rotina" class="tela">
+        <section class="card card-sem-padding cal-card" aria-label="Calendário da fábrica">
+            <div class="card-barra"><div><h2>Calendário da fábrica</h2><div class="card-sub">Turnos, intervalos e paradas da planta inteira. Cada AGV escolhe, logo abaixo, em quais turnos trabalha. No intervalo em que a frota vai para o berço, ela termina a entrega, vai e volta sozinha no fim.</div></div></div>
+            <div id="calendarioFabrica" class="cal-conteudo"></div>
+        </section>
         <div class="rotina-grade">
             <section class="card card-sem-padding" aria-label="Turnos dos AGVs">
                 <div class="card-barra">
@@ -172,6 +177,10 @@
     <!-- ========================================================
          FROTA › MANUTENÇÃO
          ======================================================== -->
+    <section id="sinalizacao" class="tela">
+        <div id="sinalizacaoConteudo" class="sinalizacao-tela"></div>
+    </section>
+
     <section id="dispositivos" class="tela">
         <div id="dispositivosConteudo" class="dispositivos-tela"></div>
     </section>
@@ -1012,11 +1021,11 @@
 <script>
     // Sem nuvem configurada (config.js) os scripts carregam na hora, como antes.
     // Com nuvem, carregam depois do login e dos dados da empresa.
-    Nuvem.iniciar(["planta.js", "planta-exemplo.js", "importar-dxf.js", "arquivos-3d.js", "mapa-svg.js", "planta-3d.js", "editor-planta.js", "operacao-planta.js",
-                   "configuracoes.js", "agv-virtual.js", "script.js", "rotina.js", "usuarios.js",
+    Nuvem.iniciar(["planta.js", "planta-exemplo.js", "importar-dxf.js", "arquivos-3d.js", "mapa-svg.js", "planta-3d.js", "editor-planta.js", "corrida-tags.js", "operacao-planta.js",
+                   "configuracoes.js", "agv-virtual.js", "script.js", "calendario.js", "rotina.js", "usuarios.js",
                    "despachante.js", "despacho.js", "postos.js", "programacao.js",
                    "modelos.js", "manutencao.js", "copias.js", "indicadores.js", "mira.js",
-                   "dispositivos.js", "io-virtual.js", "corredores.js"]);
+                   "dispositivos.js", "io-virtual.js", "corredores.js", "sinalizacao.js", "frota-controle.js", "camadas.js"]);
 </script>
 </body>
 </html>

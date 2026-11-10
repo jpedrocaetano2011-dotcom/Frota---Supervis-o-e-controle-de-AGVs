@@ -36,6 +36,8 @@ const Modelos = (function () {
         ["dimensoes", "corredor_min_mm", "Corredor mínimo", "mm"],
         ["dimensoes", "massa_kg", "Massa vazio", "kg"],
         ["movimento", "vel_max_ms", "Velocidade máxima", "m/s"],
+        ["movimento", "vel_cruzeiro_ms", "Velocidade em corredor só da frota", "m/s"],
+        ["movimento", "vel_pessoas_ms", "Velocidade perto de pessoas", "m/s"],
         ["movimento", "vel_lateral_ms", "Velocidade de lado", "m/s"],
         ["movimento", "aceleracao_ms2", "Aceleração", "m/s²"],
         ["movimento", "parada_mm", "Distância de parada (máx., com carga)", "mm"],
@@ -45,6 +47,7 @@ const Modelos = (function () {
         ["tracao", "raio_roda_m", "Raio da roda", "m"],
         ["tracao", "rodas", "Rodas", ""],
         ["carga", "carga_kg", "Carga máxima", "kg"],
+        ["carga", "carga_tipica", "Carga típica", ""],
         ["carga", "indexacao", "Indexação (como pega a carga)", ""],
         ["carga", "garra_curso_mm", "Curso", "mm"],
         ["carga", "garra_altura_min_mm", "Altura mínima", "mm"],
@@ -74,14 +77,37 @@ const Modelos = (function () {
     ].map(([grupo, chave, rotulo, unidade]) => ({ grupo, chave, rotulo, unidade }));
 
     // Fotos que vêm com o site (o fornecedor pode trocar)
-    const FOTOS = { "atta-e-o": "img/modelos/atta-e-o.webp" };
+    const FOTOS = { "atta-e-o": "img/modelos/atta-e-o.webp", "atta-e-o-serie": "img/modelos/atta-e-o.webp" };
     // 0.16: o protótipo ergue o carrinho por baixo, então é um Atta E (era "Atta G-O";
     // "atta-g-o" agora é a família de garras). Na nuvem o banco renomeia; aqui, o script.js.
 
+    // 0.20: valores de produção por módulo (os do site de vendas). vel_max = o topo da faixa
+    // típica; em corredor só da frota anda a 1,2 m/s; perto de pessoas, a 0,8 m/s (zona lenta).
+    const PRODUCAO = {
+        E: { vel_max_ms: 1.5, carga_kg: 1000, carga_tipica: "300 a 1.000 kg" },
+        G: { vel_max_ms: 1.5, carga_kg: 250, carga_tipica: "50 a 250 kg" },
+        R: { vel_max_ms: 1.2, carga_kg: 1000, carga_tipica: "100 a 1.000 kg" },
+        T: { vel_max_ms: 2.0, carga_kg: 3000, carga_tipica: "500 a 3.000 kg rebocados (vazio 1 a 2 m/s, menos com comboio)" }
+    };
+    const VEL_FROTA = 1.2, VEL_PESSOAS = 0.8, ACEL_PRODUCAO = 0.4, VEL_LATERAL_PRODUCAO = 0.3;
+    function VALORES_PRODUCAO(modulo, extra) {
+        const p = PRODUCAO[modulo];
+        return Object.assign({ vel_max_ms: p.vel_max_ms, vel_cruzeiro_ms: Math.min(VEL_FROTA, p.vel_max_ms), vel_pessoas_ms: VEL_PESSOAS,
+            vel_lateral_ms: "a definir", aceleracao_ms2: ACEL_PRODUCAO, carga_kg: p.carga_kg, carga_tipica: p.carga_tipica }, extra || {});
+    }
+    // Os parâmetros do firmware que fazem o Atta virtual andar como o de produção
+    function PARAMETROS_PRODUCAO(modulo) {
+        const v = PRODUCAO[modulo].vel_max_ms;
+        return { VELOCIDADE_MAXIMA: v, FRACAO_CRUZEIRO: Math.round(Math.min(VEL_FROTA, v) / v * 100) / 100,
+            FRACAO_APROXIMACAO: 0.3, ACELERACAO_LINEAR: ACEL_PRODUCAO, VELOCIDADE_LATERAL: VEL_LATERAL_PRODUCAO };
+    }
+
     // O protótipo e os modelos de referência dos outros módulos (o mesmo do 01_esquema.sql)
     const PADRAO = [{
-        id: "atta-e-o", nome: "Atta E-O", modulo: "E", guiamento: "O", ativo: true,
-        descricao: "Entra embaixo do carrinho e ergue por um fuso, guiado por fita óptica no chão. Protótipo funcional (TCC).",
+        // 0.20: o código "atta-e-o" continua sendo o protótipo (as plantas, os postos e
+        // os AGVs que já usam esse código não mudam); o de produção é o "atta-e-o-serie".
+        id: "atta-e-o", nome: "Atta E-O protótipo", modulo: "E", guiamento: "O", ativo: true,
+        descricao: "Protótipo funcional (TCC): entra embaixo do carrinho e ergue por um fuso, guiado por fita óptica no chão. Até 0,10 m/s e 10 kg.",
         ficha: {
             comprimento_mm: "a medir", largura_mm: "a medir", altura_mm: "a medir", giro_diametro_mm: "a medir",
             corredor_min_mm: "a medir", massa_kg: 5, vel_max_ms: 0.10, vel_lateral_ms: 0.03, aceleracao_ms2: 0.20,
@@ -99,23 +125,32 @@ const Modelos = (function () {
         parametros: { RAIO_RODA: 0.036, VELOCIDADE_MAXIMA: 0.10, ACELERACAO_LINEAR: 0.20 },
         foto: "", docUrl: ""
     }, {
+        // 0.20: os valores de produção são os do site de vendas (Atta › "Velocidade típica",
+        // "Carga típica" e a conta do configurador: 0,8 m/s perto de pessoas, 1,2 m/s em
+        // corredor só da frota, 0,4 m/s²). Os que ainda não existem ficam "a definir".
+        id: "atta-e-o-serie", nome: "Atta E-O", modulo: "E", guiamento: "O", ativo: true,
+        descricao: "Entra embaixo do carrinho e ergue, guiado por fita óptica no chão. Modelo de produção: 0,8 a 1,5 m/s, 300 a 1.000 kg.",
+        ficha: VALORES_PRODUCAO("E", { indexacao: "Elevação por baixo do carrinho", comprimento_carregado_mm: "tamanho do carrinho",
+            gira_carregado: "sim", lateral_carregado: "sim", rodas: "4 mecanum", guiamento: "Fita óptica no chão e tags RFID nos pontos", situacao: "Em desenvolvimento" }),
+        parametros: PARAMETROS_PRODUCAO("E"), foto: "", docUrl: ""
+    }, {
         id: "atta-g-o", nome: "Atta G-O", modulo: "G", guiamento: "O", ativo: true,
         descricao: "Família de garras feitas para cada carga (caixa, KLT, kit). Pega e solta sozinho na estação.",
-        ficha: { indexacao: "Garra sob medida para a carga", gira_carregado: "sim", lateral_carregado: "sim", rodas: "4 mecanum",
-            guiamento: "Fita óptica no chão e tags RFID nos pontos", situacao: "Sob encomenda" },
-        parametros: {}, foto: "", docUrl: ""
+        ficha: VALORES_PRODUCAO("G", { indexacao: "Garra sob medida para a carga", gira_carregado: "sim", lateral_carregado: "sim", rodas: "4 mecanum",
+            guiamento: "Fita óptica no chão e tags RFID nos pontos", situacao: "Sob encomenda" }),
+        parametros: PARAMETROS_PRODUCAO("G"), foto: "", docUrl: ""
     }, {
         id: "atta-r-o", nome: "Atta R-O", modulo: "R", guiamento: "O", ativo: true,
         descricao: "Rolos no topo: encosta na esteira e transfere a carga pelos rolos.",
-        ficha: { indexacao: "Rolos motorizados, troca com a esteira", gira_carregado: "sim", lateral_carregado: "sim", rodas: "4 mecanum",
-            precisao_parada_mm: 10, guiamento: "Fita óptica no chão e tags RFID nos pontos", situacao: "Sob encomenda" },
-        parametros: {}, foto: "", docUrl: ""
+        ficha: VALORES_PRODUCAO("R", { indexacao: "Rolos motorizados, troca com a esteira", gira_carregado: "sim", lateral_carregado: "sim", rodas: "4 mecanum",
+            precisao_parada_mm: 10, guiamento: "Fita óptica no chão e tags RFID nos pontos", situacao: "Sob encomenda" }),
+        parametros: PARAMETROS_PRODUCAO("R"), foto: "", docUrl: ""
     }, {
         id: "atta-t-o", nome: "Atta T-O", modulo: "T", guiamento: "O", ativo: true,
         descricao: "Rebocador: engata carrinhos em comboio e faz o milk-run pelos ramais.",
-        ficha: { indexacao: "Engate traseiro para comboio", gira_carregado: "não", lateral_carregado: "não", raio_min_carregado_m: 1.5,
-            comboio_m: 6, rodas: "4 mecanum", guiamento: "Fita óptica no chão e tags RFID nos pontos", situacao: "Em desenvolvimento" },
-        parametros: {}, foto: "", docUrl: ""
+        ficha: VALORES_PRODUCAO("T", { indexacao: "Engate traseiro para comboio", gira_carregado: "não", lateral_carregado: "não", raio_min_carregado_m: 1.5,
+            comboio_m: 6, rodas: "4 mecanum", guiamento: "Fita óptica no chão e tags RFID nos pontos", situacao: "Em desenvolvimento" }),
+        parametros: PARAMETROS_PRODUCAO("T"), foto: "", docUrl: ""
     }];
 
     let lista = [];
@@ -205,6 +240,20 @@ const Modelos = (function () {
     const foto = m => (m ? m.foto || FOTOS[m.id] || "" : "");
     const nomeModulo = cod => MODULOS[cod]?.[0] || cod || "";
 
+    // 0.20: as velocidades que o Atta usa de verdade (m/s), para as estimativas do despacho,
+    // da programação e do estudo de frota. Ordem: os parâmetros que o AGV informou
+    // (status/configuracao) > os do modelo > os do firmware do protótipo.
+    const PADRAO_FIRMWARE = { VELOCIDADE_MAXIMA: 0.10, FRACAO_CRUZEIRO: 0.6, FRACAO_APROXIMACAO: 0.35, ACELERACAO_LINEAR: 0.20, VELOCIDADE_LATERAL: 0.03 };
+    function velocidades(m, agv) {
+        const de = chave => {
+            const a = Number(agv?.parametros?.[chave]), b = Number(m?.parametros?.[chave]);
+            return Number.isFinite(a) && a > 0 ? a : Number.isFinite(b) && b > 0 ? b : PADRAO_FIRMWARE[chave];
+        };
+        const maxima = de("VELOCIDADE_MAXIMA");
+        return { maxima, cruzeiro: maxima * de("FRACAO_CRUZEIRO"), aproximacao: maxima * de("FRACAO_APROXIMACAO"),
+            aceleracao: de("ACELERACAO_LINEAR"), lateral: de("VELOCIDADE_LATERAL") };
+    }
+
     // Perfil de rota do modelo (0.16), vazio e carregado, para a planta e o despacho.
     // Sem ficha preenchida: o padrão do módulo (T carregado: sem giro, sem lado, raio 1,5 m, comboio 6 m).
     function perfil(agvOuModelo) {
@@ -216,7 +265,8 @@ const Modelos = (function () {
         const reboque = m.modulo === "T";
         const comprimento = num(f.comprimento_mm, null);
         const frente = comprimento ? comprimento / 2000 : 0.2;
-        const base = { modulo: m.modulo, guia: m.guiamento, frente, nome: m.nome, gira: true, lateral: true, raioMinimo: 0, comboio: 0 };
+        const base = { modulo: m.modulo, guia: m.guiamento, frente, nome: m.nome, gira: true, lateral: true, raioMinimo: 0, comboio: 0,
+            velocidade: velocidades(m, agvOuModelo && agvOuModelo !== m ? agvOuModelo : null) };
         const comCarga = Object.assign({}, base, {
             gira: simNao(f.gira_carregado, !reboque),
             lateral: simNao(f.lateral_carregado, !reboque),
@@ -565,7 +615,7 @@ const Modelos = (function () {
     setTimeout(carregar, 0);   // depois de "Modelos" existir (o aviso redesenha a frota)
 
     return {
-        MODULOS, GUIAMENTOS, CAMPOS, GRUPOS, PADRAO, perfil,
+        MODULOS, GUIAMENTOS, CAMPOS, GRUPOS, PADRAO, perfil, velocidades, PADRAO_FIRMWARE,
         carregar, lista: () => lista.slice(), disponiveis, porId, doAgv, modulo, nome, foto, resumo, valorFicha,
         nomeModulo, opcoesHtml, cartaoCadastroHtml, documentacao, abrirDocumentacao, salvar, liberar, abrir, desenhar, silhuetaSvg,
         podeEditar, podeVerDoc

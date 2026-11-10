@@ -172,6 +172,7 @@ const AgvVirtual = (function () {
         inst.exp.vi_entradas(inst.entradas);
         inst.versaoNvs = inst.exp.vi_nvs_versao();
         entregarRetidos(inst);
+        aplicarModelo(id);
         if (agv) {
             agv.virtualAtivo = true;
             salvarAgvsFrota();
@@ -296,6 +297,14 @@ const AgvVirtual = (function () {
     // próprio estado (o AGV que reiniciou continua dono das zonas que ocupava).
     function entregarRetidos(inst) {
         trafegoRetido.forEach((payload, topico) => entregarMqtt(inst, topico, payload));
+        retidosFrota.forEach((payload, caminho) => entregarMqtt(inst, prefixoEmpresa(inst) + caminho, payload));
+    }
+    // 0.20: mensagens da empresa (agv/<empresa>/frota/...), retidas como no broker
+    const retidosFrota = new Map();
+    const prefixoEmpresa = inst => String(inst.base || "").replace(/[^/]+\/$/, "");
+    function publicarFrota(caminho, payload) {
+        retidosFrota.set(caminho, payload);
+        Object.values(instancias).forEach(inst => { if (inst.brokerDisponivel) entregarMqtt(inst, prefixoEmpresa(inst) + caminho, payload); });
     }
 
     // AGV virtual removido ou desligado com zonas presas: solta tudo dele
@@ -470,9 +479,21 @@ const AgvVirtual = (function () {
         return lista.map(m => `<option value="${escaparHtml(m.id)}" ${m.id === atual ? "selected" : ""}>${escaparHtml(m.nome)} · ${escaparHtml((Modelos.MODULOS[m.modulo] || [m.modulo])[0])}</option>`).join("")
             || `<option value="">Sem modelos no catálogo</option>`;
     }
+    // 0.20: o Atta virtual anda como o modelo dele (velocidade, aceleração). Vale a cada
+    // vez que liga e quando troca de modelo; o firmware do virtual tem teto de 2 m/s.
+    const PARAMETROS_DE_MOVIMENTO = ["VELOCIDADE_MAXIMA", "FRACAO_CRUZEIRO", "FRACAO_APROXIMACAO", "ACELERACAO_LINEAR", "VELOCIDADE_LATERAL", "W_MANOBRA"];
+    function aplicarModelo(id) {
+        const m = typeof Modelos !== "undefined" ? Modelos.porId(agvs[id]?.modelo) : null;
+        const valores = Object.assign({}, typeof Modelos !== "undefined" ? Modelos.PADRAO_FIRMWARE : {});
+        PARAMETROS_DE_MOVIMENTO.forEach(k => { const v = Number(m?.parametros?.[k]); if (Number.isFinite(v) && v > 0) valores[k] = v; });
+        Object.keys(valores).forEach(k => { if (!PARAMETROS_DE_MOVIMENTO.includes(k)) delete valores[k]; });
+        if (!Object.keys(valores).length || !instancias[id]) return false;
+        return receberComando(id, "comando/configuracao", JSON.stringify({ tipo: "ALTERAR_CONFIGURACOES", valores }));
+    }
     function trocarModelo(id, modelo) {
         if (!agvs[id]) return;
         agvs[id].modelo = modelo || null;
+        aplicarModelo(id);
         salvarAgvsFrota();
         renderizarFrota();
         if (typeof agendarAtualizacaoTela === "function") agendarAtualizacaoTela();
@@ -974,7 +995,7 @@ const AgvVirtual = (function () {
     }
 
     return {
-        ligar, desligar, receberComando, pulsar, alternar, posicionar, abrir, criarNovo, criarFrotaExemplo, trocarModelo, adicionarObstaculo,
+        ligar, desligar, receberComando, publicarFrota, pulsar, alternar, posicionar, abrir, criarNovo, criarFrotaExemplo, trocarModelo, adicionarObstaculo,
         retomar, ligarBotoes, instancias, BITS, esquecerTrafego,
         // 0.19: Eciton I/O virtual no mesmo "broker"
         entregarTrafegoExterno: (topico, payload, retido) => entregarTrafego(null, topico, payload, retido),

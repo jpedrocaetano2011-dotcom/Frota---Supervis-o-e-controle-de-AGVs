@@ -59,7 +59,10 @@
     function normalizar(p) {
         const n = Object.assign({ ativo: true, modo: "consumo", dura_min: 5, folga_min: 1, intervalo_min: 30, horarios: [], inicio: "07:00", fim: "17:00",
             dias: [1, 2, 3, 4, 5], fuso: FUSO, primeiro: "janela", pausado: false, pausado_em: null, pausado_por_nome: "", pausa_motivo: "",
-            pular_proximo: false, pulado_em: null }, p || {});
+            pular_proximo: false, pulado_em: null, turnos: [], pausar_intervalos: true, abastecer_min: 0 }, p || {});
+        n.turnos = Array.isArray(n.turnos) ? n.turnos.map(String) : [];
+        n.pausar_intervalos = n.pausar_intervalos !== false;
+        n.abastecer_min = Math.max(0, Number(n.abastecer_min) || 0);
         n.dura_min = n.dura_min == null ? null : Number(n.dura_min);
         n.folga_min = Number(n.folga_min ?? 1);
         n.intervalo_min = n.intervalo_min == null ? null : Number(n.intervalo_min);
@@ -130,6 +133,18 @@
         if (p.pausado) return Object.assign(r, { situacao: "pausado" });
         const aberto = pedidos.filter(x => ATIVOS.includes(x.estado)).sort((a, b) => b.criadoEm - a.criadoEm)[0] || null;
         r.aberto = aberto;
+        // 0.20: calendário da fábrica (opcoes.parada / opcoes.intervalo valendo para o posto agora)
+        if (opcoes.parada) return Object.assign(r, { situacao: "fora", motivo: "parada", proximoEm: opcoes.parada.fimMs, nomeCalendario: opcoes.parada.nome });
+        if (opcoes.intervalo && p.pausar_intervalos) {
+            const it = opcoes.intervalo;
+            const abastecerEm = p.abastecer_min > 0 ? it.fimMs - p.abastecer_min * 60000 : null;
+            if (abastecerEm && agora >= abastecerEm && agora < it.fimMs) {
+                const feito = pedidos.some(x => x.estado !== "cancelado" && x.criadoEm >= abastecerEm - 1000);
+                if (!feito && !aberto) return Object.assign(r, { situacao: "devido", devidoEm: abastecerEm, motivo: "abastecer", nomeCalendario: it.nome });
+                return Object.assign(r, { situacao: aberto ? "em_aberto" : "fora", motivo: "intervalo", proximoEm: it.fimMs, nomeCalendario: it.nome });
+            }
+            return Object.assign(r, { situacao: aberto ? "em_aberto" : "fora", motivo: "intervalo", proximoEm: abastecerEm || it.fimMs, abastecer: Boolean(abastecerEm), nomeCalendario: it.nome });
+        }
 
         if (p.modo === "horarios") {
             if (!p.horarios.length) return r;
@@ -157,7 +172,8 @@
             return r;
         }
 
-        const j = janela(p, agora);
+        // 0.20: com turnos escolhidos, a janela é a dos turnos do calendário
+        const j = p.turnos.length && opcoes.janelaTurnos ? opcoes.janelaTurnos(p.turnos, agora) : janela(p, agora);
         if (!j.dentro) return Object.assign(r, { situacao: "fora", proximoEm: j.proxima });
         if (aberto) return Object.assign(r, { situacao: "em_aberto" });
 
@@ -295,18 +311,41 @@
     function pedidosDoBotao(posto, missao) {
         return (typeof Despacho !== "undefined" ? Despacho.lista() : []).filter(p => p.posto === posto && p.missao === missao);
     }
-    function viagemPadrao(missao) {
+    // 0.20: a viagem estimada usa a velocidade do primeiro modelo que atende o botão
+    function agvDoBotao(missao, posto) {
+        if (typeof Modelos === "undefined" || typeof Despacho === "undefined") return null;
+        const ps = (Despacho.postos() || []).filter(p => !posto || p.id === posto);
+        for (const p of ps) {
+            const b = (p.botoes || []).find(x => x.missao === missao);
+            const id = b && (b.modelos || [])[0];
+            const m = id && Modelos.porId(id);
+            if (m) return { perfil: Modelos.perfil(m) };
+        }
+        return null;
+    }
+    function viagemPadrao(missao, posto) {
         try {
             const m = typeof obterMissaoPorId === "function" ? obterMissaoPorId(missao) : null;
-            const r = m && typeof Despachante !== "undefined" ? Despachante.prever(plantaPublicada(), m, null, null) : null;
+            const r = m && typeof Despachante !== "undefined" ? Despachante.prever(plantaPublicada(), m, null, null, agvDoBotao(missao, posto)) : null;
             if (r && r.ok && r.tempo > 0) return Math.round(r.tempo + 60);   // + a ida de um AGV livre até o começo
         } catch (e) { /* sem planta */ }
         return VIAGEM_PADRAO_S;
     }
+    // 0.20: o que o calendário da fábrica diz para o posto agora
+    function opcoesCalendario(posto, extra = {}) {
+        if (typeof Calendario === "undefined" || !Calendario.carregado || !Calendario.carregado()) return extra;
+        const t = agora();
+        const parada = Calendario.paradaDoPosto(posto, t);
+        return Object.assign({
+            parada: parada && (parada.acao === "PROGRAMACAO" || parada.acao === "BERCO") ? parada : null,
+            intervalo: Calendario.intervaloDoPosto(posto, t),
+            janelaTurnos: (ids, ms) => Calendario.janelaDosTurnos(ids, ms)
+        }, extra);
+    }
     function situacaoDe(posto, missao) {
         const p = programa(posto, missao);
         if (!p) return null;
-        return Object.assign(situacao(p, pedidosDoBotao(posto, missao), agora(), { viagemPadraoS: viagemPadrao(missao) }), { programa: p });
+        return Object.assign(situacao(p, pedidosDoBotao(posto, missao), agora(), opcoesCalendario(posto, { viagemPadraoS: viagemPadrao(missao, posto) })), { programa: p });
     }
     // Quem pode pausar/retomar/pular este posto
     function podePausar(posto) {
@@ -495,7 +534,7 @@
             if (!posto || !(posto.botoes || []).some(b => b.missao === prog.missao)) continue;   // botão tirado do posto
             const k = chave(prog.posto, prog.missao);
             if (tentando[k] > agora()) continue;
-            const s = situacao(prog, pedidosDoBotao(prog.posto, prog.missao), agora(), { viagemPadraoS: viagemPadrao(prog.missao) });
+            const s = situacao(prog, pedidosDoBotao(prog.posto, prog.missao), agora(), opcoesCalendario(prog.posto, { viagemPadraoS: viagemPadrao(prog.missao, prog.posto) }));
             if (s.situacao !== "devido") continue;
             tentando[k] = agora() + 8000;
             if (!naNuvem() && consumirPuloLocal(prog.posto, prog.missao)) { avisar(); continue; }
@@ -526,6 +565,10 @@
         return `Às ${p.horarios.join(", ")}`;
     }
     function janelaTexto(p) {
+        if (p.turnos?.length && typeof Calendario !== "undefined") {
+            const nomes = Calendario.atual().turnos.filter(t => p.turnos.includes(t.id)).map(t => t.nome);
+            if (nomes.length) return `${nomes.join(" e ")}${p.pausar_intervalos ? " · pausa nos intervalos" : ""}${p.abastecer_min ? ` · abastece ${num(p.abastecer_min)} min antes da volta` : ""}`;
+        }
         const dias = [1, 2, 3, 4, 5, 6, 0].filter(d => p.dias.includes(d)).map(d => DIAS[d]);
         const diasTxt = dias.length === 7 ? "todos os dias" : dias.join(", ");
         return p.modo === "horarios" ? diasTxt : `${p.inicio} às ${p.fim} · ${diasTxt}`;
@@ -537,10 +580,13 @@
         switch (s.situacao) {
             case "desligado": return "Programação desligada";
             case "pausado": return `Pausado${p.pausa_motivo ? " · " + p.pausa_motivo : ""}${p.pausado_por_nome ? ` · por ${p.pausado_por_nome}` : ""}${p.pausadoMs ? " às " + hora(p.pausadoMs) : ""}`;
-            case "fora": return s.proximoEm ? `Fora do horário · volta ${new Date(s.proximoEm).toDateString() === new Date().toDateString() ? "às " + hora(s.proximoEm) : DIAS[new Date(s.proximoEm).getDay()] + " às " + hora(s.proximoEm)}` : "Fora do horário";
+            case "fora":
+                if (s.motivo === "parada") return `Parada planejada${s.nomeCalendario ? " · " + s.nomeCalendario : ""}${s.proximoEm ? " · volta às " + hora(s.proximoEm) : ""}`;
+                if (s.motivo === "intervalo") return `${s.nomeCalendario || "Intervalo"}${s.proximoEm ? (s.abastecer ? " · abastece às " : " · volta às ") + hora(s.proximoEm) : ""}`;
+                return s.proximoEm ? `Fora do horário · volta ${new Date(s.proximoEm).toDateString() === new Date().toDateString() ? "às " + hora(s.proximoEm) : DIAS[new Date(s.proximoEm).getDay()] + " às " + hora(s.proximoEm)}` : "Fora do horário";
             case "manual": return "Começa depois do primeiro pedido à mão";
             case "em_aberto": return "Pedido a caminho";
-            case "devido": return s.pular ? "Pulando este" : "Pedindo agora";
+            case "devido": return s.pular ? "Pulando este" : s.motivo === "abastecer" ? `Abastecendo antes da volta do ${s.nomeCalendario || "intervalo"}` : "Pedindo agora";
             default: return s.devidoEm ? `Próximo pedido ${emQuanto(s.devidoEm) === "agora" ? "agora" : "em " + emQuanto(s.devidoEm)}${s.pular ? " (vai ser pulado)" : ""}` : "";
         }
     }
@@ -609,7 +655,7 @@
             if (!v) return;
             n++;
             viagensH += v;
-            ocupS.push([v, ocupacaoEstimada(pedidosDoBotao(p.posto, p.missao), viagemPadrao(p.missao))]);
+            ocupS.push([v, ocupacaoEstimada(pedidosDoBotao(p.posto, p.missao), viagemPadrao(p.missao, p.posto))]);
         });
         const frota = Object.values(typeof agvs === "object" ? agvs : {}).filter(a => !(typeof Manutencao !== "undefined" && Manutencao.ativa(a)));
         const ocupMedia = ocupS.length ? ocupS.reduce((s, [v, o]) => s + v * o, 0) / ocupS.reduce((s, [v]) => s + v, 0) : null;
@@ -636,6 +682,8 @@
 
     function htmlEditor(posto, b) {
         const p = rascunho;
+        const turnosCal = typeof Calendario !== "undefined" ? Calendario.atual().turnos : [];
+        const temIntervalos = typeof Calendario !== "undefined" && Calendario.atual().intervalos.some(i => !i.postos.length || i.postos.includes(posto.id));
         const pode = podeProgramar();
         const campo = (nome, rot, valor, extra = "") => `<label class="campo"><span>${rot}</span><input type="number" data-prog-campo="${nome}" value="${esc(valor ?? "")}" ${extra} ${pode ? "" : "disabled"}></label>`;
         return `<div class="prog-editor" data-prog-editor="${esc(posto.id)}|${esc(b.missao)}">
@@ -647,8 +695,13 @@
                 ${p.modo === "intervalo" ? campo("intervalo_min", "A cada (min)", p.intervalo_min, 'min="1" step="1"') : ""}
                 ${p.modo === "horarios" ? `<div class="campo prog-horarios"><span>Horários</span><div>${p.horarios.map((h, i) => `<span class="pilula prog-hora">${esc(h)}${pode ? `<button type="button" data-prog="tirarHora" data-i="${i}" aria-label="Tirar ${esc(h)}">×</button>` : ""}</span>`).join("")}
                     ${pode ? `<input type="time" data-prog-campo="novaHora" aria-label="Novo horário"><button type="button" class="btn btn-mini" data-prog="maisHora">+ horário</button>` : ""}</div></div>` : ""}
-                ${p.modo !== "horarios" ? `<label class="campo"><span>Das</span><input type="time" data-prog-campo="inicio" value="${esc(p.inicio)}" ${pode ? "" : "disabled"}></label><label class="campo"><span>Às</span><input type="time" data-prog-campo="fim" value="${esc(p.fim)}" ${pode ? "" : "disabled"}></label>` : ""}
-                <div class="campo prog-dias-campo"><span>Dias</span>${diasHtml(p.dias, pode)}</div>
+                ${turnosCal.length ? `<div class="campo prog-turnos-campo"><span>Quando vale</span><div class="rotina-turnos">${turnosCal.map((t, k) =>
+                    `<label class="rotina-turno ${p.turnos.includes(t.id) ? "ativo" : ""}" style="--cor:${Calendario.CORES_TURNO[k % Calendario.CORES_TURNO.length]}"><input type="checkbox" data-prog-campo="turno" value="${esc(t.id)}" ${p.turnos.includes(t.id) ? "checked" : ""} ${pode ? "" : "disabled"}> ${esc(t.nome)} <small>${esc(t.inicio)}–${esc(t.fim)}</small></label>`).join("")}</div>
+                    ${p.turnos.length ? "" : `<small class="suave">Nenhum turno marcado: vale o horário abaixo.</small>`}</div>` : ""}
+                ${p.modo !== "horarios" && !p.turnos.length ? `<label class="campo"><span>Das</span><input type="time" data-prog-campo="inicio" value="${esc(p.inicio)}" ${pode ? "" : "disabled"}></label><label class="campo"><span>Às</span><input type="time" data-prog-campo="fim" value="${esc(p.fim)}" ${pode ? "" : "disabled"}></label>` : ""}
+                ${!p.turnos.length ? `<div class="campo prog-dias-campo"><span>Dias</span>${diasHtml(p.dias, pode)}</div>` : ""}
+                ${temIntervalos ? `<label class="campo rotina-check"><input type="checkbox" data-prog-campo="pausar_intervalos" ${p.pausar_intervalos ? "checked" : ""} ${pode ? "" : "disabled"}><span>Pausar nos intervalos do calendário</span></label>
+                    ${p.pausar_intervalos ? campo("abastecer_min", "Abastecer antes da volta (min)", p.abastecer_min || "", 'min="0" max="60" step="1" placeholder="não"') : ""}` : ""}
                 ${p.modo !== "horarios" ? `<label class="campo"><span>Primeiro pedido do dia</span><select data-prog-campo="primeiro" ${pode ? "" : "disabled"}><option value="janela" ${p.primeiro === "janela" ? "selected" : ""}>Assim que o horário começa</option><option value="manual" ${p.primeiro === "manual" ? "selected" : ""}>Só depois que alguém pedir à mão</option></select></label>` : ""}
             </div>
             <p class="prog-previa" id="progPrevia">${esc(previa(posto, b))}</p>
@@ -663,7 +716,7 @@
     // "Com a viagem de hoje (~2 min), pede 2 min depois de cada entrega: ~12 viagens/h. A frota fica em 85%."
     function previa(posto, b) {
         const p = normalizar(rascunho);
-        const viagem = viagemEstimada(pedidosDoBotao(posto.id, b.missao), viagemPadrao(b.missao));
+        const viagem = viagemEstimada(pedidosDoBotao(posto.id, b.missao), viagemPadrao(b.missao, posto.id));
         const vh = viagensPorHora(p);
         let txt = "";
         if (p.modo === "consumo") {
@@ -693,11 +746,15 @@
         el.querySelectorAll("[data-prog-campo]").forEach(c => {
             const k = c.dataset.progCampo;
             if (k === "modo") { if (c.checked) r.modo = c.value; return; }
-            if (k === "dia" || k === "novaHora") return;
-            if (["dura_min", "folga_min", "intervalo_min"].includes(k)) r[k] = c.value === "" ? null : Number(c.value);
+            if (k === "dia" || k === "novaHora" || k === "turno") return;
+            if (k === "pausar_intervalos") { r[k] = c.checked; return; }
+            if (["dura_min", "folga_min", "intervalo_min", "abastecer_min"].includes(k)) r[k] = c.value === "" ? null : Number(c.value);
             else r[k] = c.value;
         });
-        r.dias = [...el.querySelectorAll('[data-prog-campo="dia"]')].filter(c => c.checked).map(c => Number(c.value));
+        const caixasDias = [...el.querySelectorAll('[data-prog-campo="dia"]')];
+        if (caixasDias.length) r.dias = caixasDias.filter(c => c.checked).map(c => Number(c.value));
+        const caixasTurnos = [...el.querySelectorAll('[data-prog-campo="turno"]')];
+        if (caixasTurnos.length) r.turnos = caixasTurnos.filter(c => c.checked).map(c => c.value);
         return r;
     }
 
@@ -763,14 +820,18 @@
 
     function iniciarRascunho(posto, missao) {
         const p = programa(posto, missao);
-        rascunho = p ? { modo: p.modo, dura_min: p.dura_min ?? 5, folga_min: p.folga_min ?? 1, intervalo_min: p.intervalo_min ?? 30, horarios: p.horarios.slice(), inicio: p.inicio, fim: p.fim, dias: p.dias.slice(), primeiro: p.primeiro }
-            : { modo: "consumo", dura_min: 5, folga_min: 1, intervalo_min: 30, horarios: ["07:30"], inicio: "07:00", fim: "17:00", dias: [1, 2, 3, 4, 5], primeiro: "janela" };
+        const cal = typeof Calendario !== "undefined" ? Calendario.atual().turnos.map(t => t.id) : [];
+        rascunho = p ? { modo: p.modo, dura_min: p.dura_min ?? 5, folga_min: p.folga_min ?? 1, intervalo_min: p.intervalo_min ?? 30, horarios: p.horarios.slice(), inicio: p.inicio, fim: p.fim, dias: p.dias.slice(), primeiro: p.primeiro,
+                turnos: (p.turnos || []).slice(), pausar_intervalos: p.pausar_intervalos !== false, abastecer_min: p.abastecer_min || 0 }
+            : { modo: "consumo", dura_min: 5, folga_min: 1, intervalo_min: 30, horarios: ["07:30"], inicio: "07:00", fim: "17:00", dias: [1, 2, 3, 4, 5], primeiro: "janela",
+                turnos: cal, pausar_intervalos: true, abastecer_min: 0 };
     }
 
     function cfgParaSalvar(r, ativo = true) {
         return { ativo, modo: r.modo, dura_min: r.modo === "consumo" ? r.dura_min : null, folga_min: r.folga_min ?? 1,
             intervalo_min: r.modo === "intervalo" ? r.intervalo_min : null, horarios: r.modo === "horarios" ? r.horarios : [],
-            inicio: r.inicio || "07:00", fim: r.fim || "17:00", dias: r.dias, primeiro: r.primeiro || "janela", fuso: FUSO };
+            inicio: r.inicio || "07:00", fim: r.fim || "17:00", dias: r.dias, primeiro: r.primeiro || "janela", fuso: FUSO,
+            turnos: r.turnos || [], pausar_intervalos: r.pausar_intervalos !== false, abastecer_min: Number(r.abastecer_min) || 0 };
     }
 
     document.addEventListener("click", async e => {
@@ -831,7 +892,7 @@
         const ed = e.target.closest("#programacao .prog-editor");
         if (!ed) return;
         rascunho = lerEditor(ed);
-        if (e.target.dataset.progCampo === "modo") { redesenharEditor(); return; }
+        if (["modo", "turno", "pausar_intervalos"].includes(e.target.dataset.progCampo)) return;
         const [postoId, missao] = ed.dataset.progEditor.split("|");
         const posto = Despacho.postos().find(p => p.id === postoId);
         const b = posto?.botoes.find(x => x.missao === missao);
@@ -840,7 +901,7 @@
     });
     document.addEventListener("change", e => {
         const ed = e.target.closest("#programacao .prog-editor");
-        if (ed && e.target.dataset.progCampo === "modo") { rascunho = lerEditor(ed); redesenharEditor(); }
+        if (ed && ["modo", "turno", "pausar_intervalos"].includes(e.target.dataset.progCampo)) { rascunho = lerEditor(ed); redesenharEditor(); }
     });
 
     function iniciar() {

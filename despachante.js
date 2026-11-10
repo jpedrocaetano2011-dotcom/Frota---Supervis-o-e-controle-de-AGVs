@@ -63,8 +63,11 @@
     }
 
     // Tempo estimado (s) de um pacote compilado: igual à estimativa da tela de missões
-    function tempoEtapa(etapa) {
+    // 0.20: vel = Modelos.velocidades() do AGV (m/s); sem ela, o firmware do protótipo
+    const VEL_PROTOTIPO = { maxima: 0.10, cruzeiro: 0.06, aproximacao: 0.035, aceleracao: 0.20, lateral: 0.03 };
+    function tempoEtapa(etapa, vel) {
         if (!etapa) return 0;
+        const V = vel && vel.cruzeiro > 0 ? vel : VEL_PROTOTIPO;
         if (etapa.tipo === "MOVIMENTO") {
             let t = 0, frente = etapa.orientacaoInicial;
             (etapa.trechos || []).forEach(tr => {
@@ -73,8 +76,13 @@
                 const giro = Math.abs(Planta.calcularGiro(frente, alvo));
                 if (giro > 1) t += giro / 30;
                 frente = alvo;
-                const v = lateral ? 0.03 : (tr.velocidade || 0.06);
-                t += (Number(tr.comprimento) || 0) / v + 2;
+                // como o firmware: cruzeiro, limitado pelo trecho (zona lenta) e, na curva, a 70% da máxima
+                let v = lateral ? V.lateral : Math.min(Number(tr.velocidade) > 0 ? Number(tr.velocidade) : V.cruzeiro, V.cruzeiro);
+                if (tr.tipo === "CURVA") v = Math.min(v, V.maxima * 0.7);
+                const L = Number(tr.comprimento) || 0;
+                // acelerar e frear custam ~v/a; a faixa de pedestre: 1 s parado e devagar ao atravessar
+                t += L / v + v / (V.aceleracao || 0.2) + 2;
+                if (tr.faixa) t += 1 + Math.max(0, (Number(tr.faixa.ate) - Number(tr.faixa.parar)) || 0) * (1 / Math.max(0.01, V.aproximacao) - 1 / v);
             });
             if (etapa.orientacaoChegada >= 0) {
                 const g = Math.abs(Planta.calcularGiro(frente, etapa.orientacaoChegada));
@@ -87,7 +95,7 @@
         if (etapa.tipo === "AGUARDAR_CONFIRMACAO") return 15;
         return 0;
     }
-    const tempoPacote = pacote => (pacote?.etapas || []).reduce((s, e) => s + tempoEtapa(e), 0);
+    const tempoPacote = (pacote, vel) => (pacote?.etapas || []).reduce((s, e) => s + tempoEtapa(e, vel), 0);
     const metrosEtapa = etapa => (etapa?.trechos || []).reduce((s, t) => s + (Number(t.comprimento) || 0), 0);
 
     function pontoFinal(pacote) {
@@ -109,7 +117,8 @@
         const primeira = r.pacote.etapas.find(e => e.tipo === "MOVIMENTO");
         // 0.16: a ida até o início pode ter virado várias etapas (rota longa)
         const ida = primeira ? r.pacote.etapas.filter(e => e.tipo === "MOVIMENTO" && e.passo !== undefined && e.passo === primeira.passo) : [];
-        const somar = f => (ida.length > 1 ? ida : [primeira]).reduce((t, e) => t + (e ? f(e) : 0), 0);
+        const vel = agv?.perfil?.vazio?.velocidade || null;
+        const somar = f => (ida.length > 1 ? ida : [primeira]).reduce((t, e) => t + (e ? f(e, vel) : 0), 0);
         const ultimaIda = ida.length > 1 ? ida[ida.length - 1] : primeira;
         return {
             ok: true,
@@ -119,7 +128,7 @@
             vazia: !primeira || !(primeira.trechos || []).length,   // a missão começa onde o AGV está
             inicio: ultimaIda ? ultimaIda.destino : ponto,
             fim: pontoFinal(r.pacote) || ponto,
-            tempo: tempoPacote(r.pacote)
+            tempo: tempoPacote(r.pacote, vel)
         };
     }
 

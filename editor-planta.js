@@ -479,7 +479,7 @@
         if (tipo.regra === "LIVRE") return "Área livre obrigatória (frente de quadro elétrico, hidrante, saída de emergência): nenhum ponto de parada pode ficar aqui.";
         if (tipo.regra === "PORTA") return "Porta automática: ligada a um Eciton I/O, o Atta pede para abrir, espera o sensor confirmar e só então passa. Nenhum ponto pode ficar embaixo dela.";
         if (o.tipo === "ZONA_PROIBIDA") return o.horario ? "Nenhuma linha passa por aqui no horário abaixo: os Atta desviam ou esperam." : "Nenhuma linha pode passar por aqui.";
-        if (o.tipo === "ZONA_LENTA") return "Linhas que cruzam a zona ficam limitadas a esta velocidade.";
+        if (o.tipo === "ZONA_LENTA") return "Linhas que cruzam a zona ficam limitadas a esta velocidade. Use para corredor com pessoas (0,8 m/s é o padrão dos Atta de produção). Cada Atta respeita também o teto da placa dele (o protótipo anda a até 0,10 m/s).";
         if (tipo.solido) return "Objeto sólido: as linhas não podem atravessá-lo e o AGV virtual o enxerga nos sensores de distância.";
         return "Referência visual.";
     }
@@ -738,6 +738,13 @@
         const sel = estado.selecao;
         const planta = p();
 
+        // 0.20: corrida das tags (o painel vira o painel da corrida)
+        if (raiz.CorridaTags && CorridaTags.ativa()) {
+            titulo.textContent = "Corrida das tags";
+            painel.innerHTML = CorridaTags.html(planta, sel);
+            return;
+        }
+
         if (estado.ferramenta === "ESCALA") {
             titulo.textContent = "Corrigir escala";
             const [a, b] = estado.escala;
@@ -823,16 +830,7 @@
                     ${campoNumero("Y", "noY", no.y, 0.01, "m")}
                 </div>
                 ${campo("Tag RFID no centro", "noRfid", no.rfid, 'placeholder="ex.: 0A0000001C" maxlength="14" spellcheck="false" title="10 caracteres hexadecimais, como o AGV lê"')}
-                ${rfids.length ? (() => {
-                    const porTag = new Map();
-                    rfids.forEach(r => { const c = Planta.normalizarRfid(r.codigo); porTag.set(c, (porTag.get(c) || []).concat(r.agv)); });
-                    return `<div class="editor-rfids">
-                        <small class="suave">Tags que os AGVs estão lendo agora. Pare um AGV em cima deste ponto e clique na tag dele para gravar aqui (sem digitar).</small>
-                        ${[...porTag].map(([c, quem]) => c === no.rfid
-                            ? `<span class="editor-rfid-atual">${esc(c)} · lida por ${esc(quem.join(", "))} · já é a tag deste ponto</span>`
-                            : `<button class="btn btn-mini" data-acao="usarRfid" data-rfid="${esc(c)}">Usar ${esc(c)} <em>lida agora por ${esc(quem.join(", "))}</em></button>`).join("")}
-                    </div>`;
-                })() : ""}
+                ${raiz.CorridaTags ? CorridaTags.htmlEscanear(no) : ""}
                 ${no.tipo === "BERCO" ? `
                     <div class="editor-bloco destaque">
                         <span class="editor-subtitulo">Casa de</span>
@@ -1961,7 +1959,7 @@
                 id: Planta.proximoId(p().layout, "L"), tipo, nome: "",
                 x: Planta.arred(cx), y: Planta.arred(cy), largura: Planta.arred(largura), profundidade: Planta.arred(profundidade), rotacao: 0
             };
-            if (tipo === "ZONA_LENTA") o.velocidadeMaxima = 0.04;
+            if (tipo === "ZONA_LENTA") o.velocidadeMaxima = 0.8;   // 0.20: corredor com pessoas (o protótipo já anda abaixo disso)
             p().layout.push(o);
             estado.selecao = { tipo: "layout", id: o.id };
             alterado();
@@ -2175,6 +2173,9 @@
         publicar,
         // seleciona um ponto, segmento ou objeto (como o clique no mapa)
         selecionar: (tipo, id) => { estado.selecao = tipo ? { tipo, id } : null; desenharMapa(); renderizarPropriedades(); },
+        // 0.20: a corrida das tags muda o rascunho com desfazer
+        alterarComDesfazer: fn => { registrarDesfazer(); fn(estado.rascunho); alterado(); },
+        renderizarPropriedades: () => renderizarPropriedades(),
         redesenhar: () => { if (estado.mapa) desenharMapa(); },
         _estado: estado
     };

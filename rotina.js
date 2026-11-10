@@ -1,5 +1,5 @@
 /* ============================================================
-   ROTINA DA FROTA: BERÇOS E TURNOS (Frota › Rotina e berços)
+   ROTINA DA FROTA: BERÇOS E TURNOS (Frota › Turnos e berços)
    ============================================================
    Cada AGV tem um berço (casa e carregador; vários AGVs podem
    dividir o mesmo) e um turno (início, fim, dias da semana).
@@ -17,6 +17,9 @@ const FUSO_PADRAO = "<-03>3";   // Brasília (POSIX)
 
 const ESTADOS_ROTINA = {
     TRABALHANDO: ["Trabalhando", "verde"],
+    INTERVALO: ["Intervalo · no berço", "roxo"],
+    INTERVALO_FORA_DO_BERCO: ["Intervalo · fora do berço", "ambar"],
+    PARADA: ["Parada planejada · no berço", "roxo"],
     FINALIZANDO_MISSAO: ["Finalizando a missão para encerrar o turno", "ambar"],
     INDO_PARA_BERCO: ["Indo para o berço", "roxo"],
     ENCERRADO: ["Turno encerrado · no berço", "roxo"],
@@ -24,13 +27,25 @@ const ESTADOS_ROTINA = {
     SEM_BERCO: ["Turno encerrado · sem berço", "vermelho"]
 };
 
+// 0.20: fora do turno por intervalo ou parada planejada (o AGV diz o motivo)
+function chaveEstadoRotina(st) {
+    if (!st) return "";
+    if (st.motivo === "INTERVALO" && st.estado === "ENCERRADO") return "INTERVALO";
+    if (st.motivo === "INTERVALO" && st.estado === "ENCERRADO_FORA_DO_BERCO") return "INTERVALO_FORA_DO_BERCO";
+    if (st.motivo === "PARADA" && st.estado === "ENCERRADO") return "PARADA";
+    return st.estado;
+}
+
 function rotinaPadrao() {
-    return { berco: "", turno: { ativo: false, inicio: "07:00", fim: "17:00", dias: [1, 2, 3, 4, 5] }, voltarApos: 60, fuso: FUSO_PADRAO };
+    // 0.20: turnos = os turnos do calendário da fábrica em que o AGV trabalha;
+    // "turno" (início, fim, dias) é o horário próprio, só para caso especial
+    return { berco: "", turnos: [], turno: { ativo: false, inicio: "07:00", fim: "17:00", dias: [1, 2, 3, 4, 5] }, voltarApos: 60, fuso: FUSO_PADRAO };
 }
 
 function rotinaDoAGV(agv) {
     const r = Object.assign(rotinaPadrao(), agv?.rotina || {});
     r.turno = Object.assign(rotinaPadrao().turno, agv?.rotina?.turno || {});
+    r.turnos = Array.isArray(r.turnos) ? r.turnos.slice() : [];
     return r;
 }
 
@@ -59,6 +74,14 @@ function pacoteRotina(agv) {
         voltarApos: Number(r.voltarApos) || 0,
         fuso: r.fuso || FUSO_PADRAO
     };
+    // 0.20: o calendário da fábrica (turnos que ele trabalha, intervalos no berço, paradas)
+    if (typeof Calendario !== "undefined") {
+        const c = Calendario.pacoteDoAgv(r.turno.ativo ? [] : r.turnos);
+        if (c.janelas.length) { p.janelas = c.janelas; p.turno.ativo = false; }
+        else if (p.turno.ativo) p.janelas = [{ inicio: p.turno.inicio, fim: p.turno.fim, dias: p.turno.dias }];
+        if (c.pausas.length) p.pausas = c.pausas;
+        if (c.paradas.length) p.paradas = c.paradas;
+    }
     p.rev = hashTexto(JSON.stringify(p)).slice(0, 10);
     return p;
 }
@@ -71,6 +94,7 @@ function podeMexerNaRotina() {
 function sincronizarRotina(agv, forcar = false) {
     if (!agv?.online || !agv.rotinaStatus || !podeMexerNaRotina()) return;
     if (!agv.rotina) return;   // nunca configurada neste site: não apaga a do AGV
+    if (typeof Calendario !== "undefined" && !Calendario.carregado()) return;   // 0.20: espera o calendário chegar
     const p = pacoteRotina(agv);
     const agora = Date.now();
     if (agv.rotinaStatus.rev !== p.rev) {
@@ -111,6 +135,13 @@ function comandoTurno(agvId, acao) {
     }
 }
 
+// 0.20: "1º e 2º turno" (os turnos do calendário que ele trabalha)
+function textoTurnosDoAgv(r) {
+    const cal = typeof Calendario !== "undefined" ? Calendario.atual().turnos : [];
+    const nomes = cal.filter(t => (r.turnos || []).includes(t.id)).map(t => t.nome);
+    return nomes.length ? nomes.join(" e ") : "trabalhando";
+}
+
 // Linha do cartão do AGV na Frota
 function linhaRotinaCard(agv) {
     const st = agv.rotinaStatus;
@@ -118,9 +149,9 @@ function linhaRotinaCard(agv) {
     if (!agv.online || !st) {
         return r.berco ? `<dt>Berço</dt><dd>${escaparHtml(r.berco)}</dd>` : `<dt>Berço</dt><dd class="suave">sem berço</dd>`;
     }
-    const [texto, cor] = ESTADOS_ROTINA[st.estado] || [st.estado, "cinza"];
+    const [texto, cor] = ESTADOS_ROTINA[chaveEstadoRotina(st)] || [st.estado, "cinza"];
     const mostrar = st.estado !== "TRABALHANDO" || st.noBerco;
-    return `<dt>Turno</dt><dd>${mostrar ? `<span class="pilula ${cor === "roxo" ? "roxo" : cor}">${escaparHtml(st.estado === "TRABALHANDO" ? "No berço" : texto)}</span>` : (r.turno.ativo ? `${escaparHtml(r.turno.inicio)}–${escaparHtml(r.turno.fim)}` : "trabalhando")}</dd>`;
+    return `<dt>Turno</dt><dd>${mostrar ? `<span class="pilula ${cor === "roxo" ? "roxo" : cor}">${escaparHtml(st.estado === "TRABALHANDO" ? "No berço" : texto)}</span>` : (r.turno.ativo ? `${escaparHtml(r.turno.inicio)}–${escaparHtml(r.turno.fim)}` : textoTurnosDoAgv(r))}</dd>`;
 }
 
 /* ---------------- conflito de berço compartilhado ---------------- */
@@ -130,17 +161,22 @@ function minutos(hhmm) {
     return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : null;
 }
 
-// O AGV está fora do turno nesse dia/minuto? null = sem horário (não dá para saber)
-function foraDoTurno(rotina, dia, minuto) {
-    const t = rotina.turno;
-    if (!t.ativo) return null;
+function dentroDaJanelaMin(t, dia, minuto) {
     const ini = minutos(t.inicio), fim = minutos(t.fim);
     const dias = new Set(t.dias || []);
-    if (ini === null || fim === null || ini === fim) return true;
-    let dentro;
-    if (ini < fim) dentro = dias.has(dia) && minuto >= ini && minuto < fim;
-    else dentro = (dias.has(dia) && minuto >= ini) || (dias.has((dia + 6) % 7) && minuto < fim);
-    return !dentro;
+    if (ini === null || fim === null || ini === fim) return false;
+    if (ini < fim) return dias.has(dia) && minuto >= ini && minuto < fim;
+    return (dias.has(dia) && minuto >= ini) || (dias.has((dia + 6) % 7) && minuto < fim);
+}
+
+// O AGV está fora do turno nesse dia/minuto? null = sem horário (não dá para saber)
+// 0.20: os turnos do calendário que ele trabalha e os intervalos em que a frota vai para o berço
+function foraDoTurno(rotina, dia, minuto) {
+    const p = typeof Calendario !== "undefined" ? Calendario.pacoteDoAgv(rotina.turno.ativo ? [] : (rotina.turnos || [])) : { janelas: [], pausas: [] };
+    const janelas = p.janelas.length ? p.janelas : (rotina.turno.ativo ? [rotina.turno] : null);
+    if (!janelas && !p.pausas.length) return null;
+    const trabalha = janelas ? janelas.some(j => dentroDaJanelaMin(j, dia, minuto)) : true;
+    return !trabalha || p.pausas.some(j => dentroDaJanelaMin(j, dia, minuto));
 }
 
 // Dois AGVs do mesmo berço fora do turno ao mesmo tempo: um deles vai esperar num ponto de espera.
@@ -170,7 +206,7 @@ function estadoRotinaHtml(agv) {
     if (!agv.online) return `<span class="pilula">offline</span>`;
     const st = agv.rotinaStatus;
     if (!st) return `<span class="pilula cinza" title="Firmware antigo (sem rotina) ou ainda sem resposta">sem rotina no AGV</span>`;
-    const [texto, cor] = ESTADOS_ROTINA[st.estado] || [st.estado, "cinza"];
+    const [texto, cor] = ESTADOS_ROTINA[chaveEstadoRotina(st)] || [st.estado, "cinza"];
     const sincronizado = agv.rotina ? st.rev === pacoteRotina(agv).rev : true;
     return `<span class="pilula ${cor}">${escaparHtml(texto)}</span>` +
         (st.hora ? ` <span class="suave mono" title="Hora no relógio do AGV">${escaparHtml(st.hora)}</span>` : ` <span class="pilula ambar" title="O AGV ainda não acertou o relógio (NTP); o site manda a hora">sem relógio</span>`) +
@@ -185,18 +221,25 @@ function htmlCartaoRotina(agv, bercos) {
     const fimDeTurno = st?.fimDeTurno;
     const opcoes = [["", "— sem berço —"]].concat(bercos.map(b => [b.id, `${b.id}${b.nome ? " · " + b.nome : ""}`]));
     const bercoInexistente = r.berco && !bercos.some(b => b.id === r.berco);
+    const turnosCal = typeof Calendario !== "undefined" ? Calendario.atual().turnos : [];
     return `
             <div class="rotina-campos">
                 <label class="campo"><span>Berço</span>
                     <select data-rotina="berco" ${pode ? "" : "disabled"}>${opcoes.map(([v, t]) => `<option value="${escaparHtml(v)}" ${v === r.berco ? "selected" : ""}>${escaparHtml(t)}</option>`).join("")}${bercoInexistente ? `<option value="${escaparHtml(r.berco)}" selected>${escaparHtml(r.berco)} (não existe na planta)</option>` : ""}</select>
                 </label>
-                <label class="campo rotina-check"><input type="checkbox" data-rotina="ativo" ${r.turno.ativo ? "checked" : ""} ${pode ? "" : "disabled"}><span>Turno por horário</span></label>
+                ${turnosCal.length ? `<div class="campo rotina-turnos-campo"><span>Trabalha nos turnos</span>
+                    <div class="rotina-turnos" role="group" aria-label="Turnos do calendário">${turnosCal.map((t, k) =>
+                        `<button type="button" class="rotina-turno ${r.turnos.includes(t.id) ? "ativo" : ""}" data-rotina-turno-cal="${escaparHtml(t.id)}" aria-pressed="${r.turnos.includes(t.id)}" ${pode ? "" : "disabled"} style="--cor:${Calendario.CORES_TURNO[k % Calendario.CORES_TURNO.length]}">${escaparHtml(t.nome)} <small>${escaparHtml(t.inicio)}–${escaparHtml(t.fim)}</small></button>`).join("")}</div>
+                    ${!r.turnos.length && !r.turno.ativo ? `<small class="suave">Nenhum marcado: trabalha o tempo todo (menos nos intervalos em que a frota vai para o berço).</small>` : ""}</div>` : ""}
+                <${turnosCal.length ? `details class="rotina-proprio"${r.turno.ativo ? " open" : ""}><summary>Horário próprio (caso especial)</summary` : "div class=\"rotina-proprio\""}>
+                <label class="campo rotina-check"><input type="checkbox" data-rotina="ativo" ${r.turno.ativo ? "checked" : ""} ${pode ? "" : "disabled"}><span>${turnosCal.length ? "Usar um horário só deste AGV" : "Turno por horário"}</span></label>
                 <label class="campo"><span>Início</span><input type="time" data-rotina="inicio" value="${escaparHtml(r.turno.inicio)}" ${pode && r.turno.ativo ? "" : "disabled"}></label>
                 <label class="campo"><span>Fim</span><input type="time" data-rotina="fim" value="${escaparHtml(r.turno.fim)}" ${pode && r.turno.ativo ? "" : "disabled"}></label>
                 <div class="campo rotina-dias-campo"><span>Dias</span>
                     <div class="rotina-dias" role="group" aria-label="Dias do turno">${DIAS_SEMANA.map(([letra, nome], i) =>
                         `<button type="button" class="rotina-dia ${r.turno.dias.includes(i) ? "ativo" : ""}" data-rotina-dia="${i}" title="${nome}" aria-pressed="${r.turno.dias.includes(i)}" ${pode && r.turno.ativo ? "" : "disabled"}>${letra}</button>`).join("")}</div>
                 </div>
+                ${turnosCal.length ? `<small class="suave">Com horário próprio, os turnos marcados acima não valem para este AGV.</small></details>` : "</div>"}
                 <label class="campo"><span>Parado sem missão, volta ao berço em</span>
                     <span class="rotina-unidade"><input type="number" min="0" max="3600" step="10" data-rotina="voltarApos" value="${Number(r.voltarApos) || 0}" ${pode ? "" : "disabled"}><em>s</em></span>
                 </label>
@@ -214,6 +257,7 @@ function htmlCartaoRotina(agv, bercos) {
 }
 
 function renderizarRotina(abrindo = false) {
+    if (typeof Calendario !== "undefined") Calendario.renderizar(abrindo);
     const caixa = document.getElementById("rotinaAgvs");
     const caixaBercos = document.getElementById("rotinaBercos");
     if (!caixa || !caixaBercos) return;
@@ -315,6 +359,7 @@ function editarRascunho(agvId, mudar) {
     const r = JSON.parse(JSON.stringify(rascunhosRotina[agvId] || rotinaDoAGV(agv)));
     mudar(r);
     r.turno.dias = [...new Set(r.turno.dias)].sort();
+    r.turnos = [...new Set(r.turnos || [])].sort();
     if (JSON.stringify(r) === JSON.stringify(rotinaDoAGV(agv))) delete rascunhosRotina[agvId];
     else rascunhosRotina[agvId] = r;
 }
@@ -340,7 +385,11 @@ document.getElementById("rotina")?.addEventListener("click", async evento => {
     if (!alvo) return;
     const id = cartaoDe(alvo);
     if (!id) return;
-    if (alvo.dataset.rotinaDia !== undefined) {
+    if (alvo.dataset.rotinaTurnoCal !== undefined) {
+        const t = alvo.dataset.rotinaTurnoCal;
+        editarRascunho(id, r => { r.turnos = r.turnos.includes(t) ? r.turnos.filter(x => x !== t) : r.turnos.concat([t]); });
+        renderizarRotina(true);
+    } else if (alvo.dataset.rotinaDia !== undefined) {
         const dia = Number(alvo.dataset.rotinaDia);
         editarRascunho(id, r => { r.turno.dias = r.turno.dias.includes(dia) ? r.turno.dias.filter(d => d !== dia) : r.turno.dias.concat([dia]); });
         renderizarRotina(true);
@@ -348,6 +397,7 @@ document.getElementById("rotina")?.addEventListener("click", async evento => {
         const r = rascunhosRotina[id];
         if (!r) return;
         if (r.turno.ativo && !r.turno.dias.length) { ui.aviso("Marque pelo menos um dia do turno.", "aviso"); return; }
+        if (typeof Calendario !== "undefined") r.turnos = r.turnos.filter(t => Calendario.atual().turnos.some(x => x.id === t));
         delete rascunhosRotina[id];
         salvarRotinaAGV(id, r);
         ui.aviso(agvs[id].online ? `Rotina do AGV ${id} salva e enviada.` : `Rotina do AGV ${id} salva. Vai para o AGV quando ele conectar (com o site aberto).`, "sucesso");
@@ -365,3 +415,6 @@ document.getElementById("rotina")?.addEventListener("click", async evento => {
         comandoTurno(id, acao);
     }
 });
+
+// 0.20: os horários que já estavam nos AGVs viram turnos do calendário (uma vez)
+if (typeof Calendario !== "undefined" && Calendario.carregado()) Calendario.migrarSeVazio();

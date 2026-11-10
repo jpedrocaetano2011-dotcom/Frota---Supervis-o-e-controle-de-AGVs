@@ -54,7 +54,9 @@
         checkpointsPorTrecho: 4,  // MAX_CHECKPOINTS_TRECHO
         etapasPorMissao: 20,      // MAX_ETAPAS_MISSAO
         barreiraMinima: 150,
-        velocidadeMaxima: 0.10,
+        // 0.20: o teto é da placa de cada Atta (o protótipo para em 0,10 m/s sozinho);
+        // a planta aceita até 2 m/s para os modelos de produção
+        velocidadeMaxima: 2.0,
         lateralMinima: 0.05,
         lateralMaxima: 2.0
     };

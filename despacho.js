@@ -460,17 +460,28 @@ const Despacho = (function () {
         return -1;
     }
 
+    // 0.20: intervalo do calendário com "só pedidos urgentes" para o posto do pedido
+    function bloqueioCalendario(p) {
+        if (p.estado !== "pendente" || p.urgente || typeof Calendario === "undefined" || !Calendario.carregado || !Calendario.carregado()) return null;
+        const it = Calendario.intervaloDoPosto(p.posto, agora());
+        if (!it || it.acao !== "URGENTES") return null;
+        const l = Calendario.local(it.fimMs);
+        return `${it.nome}: só pedidos urgentes até ${Calendario.hhmm(l.min)}`;
+    }
+
     async function despachar() {
         const pendentes = lista.filter(p => p.estado === "pendente");
         if (!pendentes.length) { espera = {}; return; }
         const planta = plantaPublicada();
+        const bloqueados = {};
+        pendentes.forEach(p => { const b = bloqueioCalendario(p); if (b) bloqueados[p.id] = b; });
         const r = Despachante.decidir({
-            pedidos: lista.filter(p => ESTADOS_ATIVOS.includes(p.estado)).map(p => Object.assign({}, p)),
+            pedidos: lista.filter(p => ESTADOS_ATIVOS.includes(p.estado) && !bloqueados[p.id]).map(p => Object.assign({}, p)),
             agvs: Object.values(agvs).map(agvParaDespacho),
             planta, missoes: Array.isArray(missoes) ? missoes : [], agora: agora(),
             config: configuracao(), postos: postosAtuais()
         });
-        espera = r.espera;
+        espera = Object.assign({}, r.espera, bloqueados);
         situacaoAgvs = r.agvs;
         for (const a of r.atribuicoes) {
             const p = lista.find(x => x.id === a.pedido.id);
