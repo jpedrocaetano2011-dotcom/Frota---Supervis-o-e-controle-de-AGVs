@@ -2206,3 +2206,7 @@ details.rotina-proprio > summary { cursor: pointer; color: var(--muted); font-si
 .estudo-pontos { margin: 0 0 12px; padding-left: 20px; display: grid; gap: 4px; max-width: 900px; }
 .sin-mostrar { display: flex; align-items: center; gap: 6px; font-size: 13px; }
 .sin-mostrar select { width: auto; }
+/* 0.21.1: na Visão geral, o "Mapa de calor" fica no cabeçalho, ao lado de Camadas */
+.camadas-ui.no-cabecalho { position: relative; top: auto; left: auto; z-index: 20; }
+.camadas-ui.no-cabecalho .camadas-painel { left: auto; right: 0; top: calc(100% + 6px); z-index: 30; text-align: left; }
+.camadas-botao .icone-p { margin-right: 4px; }

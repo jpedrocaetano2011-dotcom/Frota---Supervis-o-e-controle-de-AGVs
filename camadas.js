@@ -22,7 +22,9 @@
    1 m, guardados por 30 dias.
 */
 const CamadasMapa = (function () {
-    const CHAVE = "camadasMapa", CELULA = 1, DIAS = 30;
+    // 0.21.1: chave própria. Antes era "camadasMapa", a mesma das caixinhas de
+    // Camadas da Visão geral: uma apagava a outra.
+    const CHAVE = "camadasCalor", CHAVE_VELHA = "camadasMapa", CELULA = 1, DIAS = 30;
     const TIPOS = {
         wifi: ["Wi-Fi", "sinal medido pelos Atta"],
         espera: ["Espera no tráfego", "onde esperam passagem"],
@@ -44,7 +46,21 @@ const CamadasMapa = (function () {
     let dados = ler(), ativo = { tipo: "", periodo: "hoje" }, sujo = false;
     const agora10 = {};   // wifi "agora": últimas amostras por célula (10 min)
     const esc = t => String(t ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
-    function ler() { try { return JSON.parse(localStorage.getItem(CHAVE) || "null") || { dias: {} }; } catch (e) { return { dias: {} }; } }
+    function ler() {
+        try {
+            const novo = JSON.parse(localStorage.getItem(CHAVE) || "null");
+            if (novo?.dias) return novo;
+            // muda os dados do lugar antigo para o novo e devolve as caixinhas da Visão geral limpas
+            const velho = JSON.parse(localStorage.getItem(CHAVE_VELHA) || "null");
+            if (velho?.dias) {
+                const { dias, ...caixinhas } = velho;
+                localStorage.setItem(CHAVE, JSON.stringify({ dias }));
+                localStorage.setItem(CHAVE_VELHA, JSON.stringify(caixinhas));
+                return { dias };
+            }
+        } catch (e) { /* sem armazenamento */ }
+        return { dias: {} };
+    }
     function gravar() {
         const ds = Object.keys(dados.dias).sort();
         while (ds.length > DIAS) delete dados.dias[ds.shift()];
@@ -181,15 +197,28 @@ const CamadasMapa = (function () {
 
     // o botão e o painel, dentro do contêiner do mapa
     const mapas = new Set();
+    const ICONE = `<svg class="icone icone-p" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3c3 4 6 6.5 6 10a6 6 0 0 1-12 0c0-2.4 1.4-3.8 2.2-5.6.8 1.4 1.6 2.1 2.6 2.1 0-2.4.4-4.4 1.2-6.5z"/></svg>`;
     function ligar(mapa) {
         if (!mapa || mapas.has(mapa)) return;
         mapas.add(mapa);
         const anterior = mapa.sobreposicao;
         mapa.sobreposicao = (m, g, u) => { if (typeof anterior === "function") anterior(m, g, u); desenhar(m, g, u); };
         const host = mapa.container;
-        if (!host || host.querySelector(".camadas-botao")) return;
+        if (!host) return;
+        // Visão geral: no cabeçalho do mapa, ao lado de "Camadas" (não cobre o mapa nem o 2D/3D)
+        const ferramentas = host.closest("#visaoGeral")?.querySelector(".mapa-ferramentas");
+        if (ferramentas) {
+            if (ferramentas.querySelector(".camadas-botao")) return;
+            ferramentas.insertAdjacentHTML("beforeend", `<div class="camadas-ui no-cabecalho"><button type="button" class="btn btn-mini camadas-botao" data-camadas="abrir" aria-expanded="false">${ICONE}Mapa de calor</button><div class="camadas-painel" hidden></div></div>`);
+            return;
+        }
+        if (host.querySelector(".camadas-botao")) return;
         if (getComputedStyle(host).position === "static") host.style.position = "relative";
-        host.insertAdjacentHTML("beforeend", `<div class="camadas-ui"><button type="button" class="btn btn-mini camadas-botao" data-camadas="abrir" aria-expanded="false">Camadas</button><div class="camadas-painel" hidden></div></div>`);
+        host.insertAdjacentHTML("beforeend", `<div class="camadas-ui"><button type="button" class="btn btn-mini camadas-botao" data-camadas="abrir" aria-expanded="false">${ICONE}Mapa de calor</button><div class="camadas-painel" hidden></div></div>`);
+    }
+    // o mapa de calor só é desenhado na planta 2D: ao escolher uma camada, sai do 3D
+    function para2D() {
+        mapas.forEach(m => { const b = m.container?.querySelector('.mapa-modo [data-modo="2d"]'); if (b && !b.classList.contains("ativo")) b.click(); });
     }
     function htmlPainel() {
         return `<div class="camadas-titulo">Mapa de calor</div>
@@ -197,7 +226,7 @@ const CamadasMapa = (function () {
             ${ativo.tipo === "estudo" ? `<div class="camadas-legenda"><span><i style="background:#A98BE0"></i>pouco</span><span><i style="background:#6A3FB5"></i></span><span><i style="background:#3B1F8C"></i>muito usado</span></div>` : ""}
             <label class="camadas-periodo" ${["estudo", "entrega"].includes(ativo.tipo) ? "hidden" : ""}><span>Período</span><select data-camadas="periodo">${[["agora", "Agora (10 min)"], ["hoje", "Hoje"], ["7", "7 dias"], ["30", "30 dias"]].map(([v, t]) => `<option value="${v}" ${ativo.periodo === v ? "selected" : ""}>${t}</option>`).join("")}</select></label>
             ${ativo.tipo === "wifi" ? `<div class="camadas-legenda">${[[-55, "bom"], [-64, ""], [-71, ""], [-77, ""], [-85, "fraco"]].map(([v, t]) => `<span><i style="background:${corWifi(v)}"></i>${t}</span>`).join("")}</div>` : ""}
-            <small class="suave">Juntado por este navegador com o site aberto. Paradas por causa: Indicadores › Paradas.</small>`;
+            <small class="suave">${naNuvem() ? "Juntado pela aba que despacha e guardado na nuvem." : "Juntado por este navegador com o site aberto."} Aparece na planta 2D. Paradas por causa: Indicadores › Paradas.</small>`;
     }
     function redesenharMapas() { mapas.forEach(m => { try { m.desenhar(); } catch (e) { /* mapa fora da tela */ } }); }
 
@@ -215,7 +244,7 @@ const CamadasMapa = (function () {
         if (!e.target.closest(".camadas-ui")) document.querySelectorAll(".camadas-painel").forEach(p => { p.hidden = true; });
     });
     document.addEventListener("change", e => {
-        if (e.target.name === "camadaTipo") ativo.tipo = e.target.value;
+        if (e.target.name === "camadaTipo") { ativo.tipo = e.target.value; if (ativo.tipo) para2D(); }
         else if (e.target.dataset?.camadas === "periodo") ativo.periodo = e.target.value;
         else return;
         if (ativo.tipo === "wifi" && !["agora", "hoje", "7", "30"].includes(ativo.periodo)) ativo.periodo = "hoje";
@@ -268,6 +297,6 @@ const CamadasMapa = (function () {
     }, 1500);
 
     return { ligar, coletar, evento, agregado, definirEstudo, estudo: () => estudoDados, juntarDia, lerNuvem, gravarNuvem,
-        ativar: (tipo, periodo) => { ativo.tipo = tipo || ""; if (periodo) ativo.periodo = periodo; document.querySelectorAll(".camadas-botao").forEach(btn => btn.classList.toggle("ativo", Boolean(ativo.tipo))); redesenharMapas(); }, dados: () => dados, TIPOS };
+        ativar: (tipo, periodo) => { ativo.tipo = tipo || ""; if (periodo) ativo.periodo = periodo; if (ativo.tipo) para2D(); document.querySelectorAll(".camadas-botao").forEach(btn => btn.classList.toggle("ativo", Boolean(ativo.tipo))); redesenharMapas(); }, dados: () => dados, TIPOS };
 })();
 if (typeof window !== "undefined") window.CamadasMapa = CamadasMapa;
