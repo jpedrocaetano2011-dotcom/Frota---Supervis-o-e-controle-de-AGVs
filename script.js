@@ -2345,6 +2345,7 @@ const informacoesTelas = {
     dispositivos: ["Dispositivos", "Eciton I/O: portas automáticas, semáforos e alarme de incêndio"],
     sinalizacao: ["Sinalização", "O que cada luz do Atta quer dizer, e as cores da empresa"],
     indicadores: ["Indicadores", "O que a frota fez: entregas, disponibilidade, paradas, tráfego e ganhos"],
+    estudo: ["Estudo de frota", "Quantos Atta a operação precisa: simulação do turno na sua planta, com relatório"],
     programacao: ["Programação", "Botões dos postos que pedem sozinhos: pelo consumo, a cada X minutos ou em horários fixos"]
 };
 
@@ -2373,7 +2374,7 @@ function mudarTela(nomeTela) {
     // o tablet do posto só tem a tela do posto
     if (document.body.classList.contains("papel-posto")) nomeTela = "posto";
     // papel Manutenção: sem planta, missões, despacho, postos, rotina e usuários
-    if (document.body.classList.contains("papel-manutencao") && ["despacho", "programacao", "missoes", "controlePlanta", "postos", "rotina", "usuarios", "posto"].includes(nomeTela)) nomeTela = "frota";
+    if (document.body.classList.contains("papel-manutencao") && ["despacho", "programacao", "missoes", "controlePlanta", "postos", "rotina", "usuarios", "posto", "estudo"].includes(nomeTela)) nomeTela = "frota";
     if (nomeTela !== "posto") document.body.classList.remove("tela-posto");
     if (TELAS_DO_AGV.includes(nomeTela) && !agvSelecionado) {
         ui.aviso("Escolha um AGV na frota primeiro.", "aviso");
@@ -2407,6 +2408,7 @@ function mudarTela(nomeTela) {
     if (nomeTela === "modelos" && typeof Modelos !== "undefined") Modelos.abrir();
     if (nomeTela === "manutencao" && typeof Manutencao !== "undefined") Manutencao.abrir();
     if (nomeTela === "indicadores" && typeof Indicadores !== "undefined") Indicadores.abrir();
+    if (nomeTela === "estudo" && typeof EstudoTela !== "undefined") EstudoTela.abrir();
     if (nomeTela === "programacao" && typeof Programacao !== "undefined") Programacao.abrir();
     if (nomeTela === "configuracoes" && typeof Copias !== "undefined") Copias.abrir();
     renderizarAlertaGlobal();
@@ -3514,20 +3516,21 @@ document.getElementById("novoAgvModeloResumo")?.addEventListener("click", e => {
     mudarTela("modelos");
     Modelos.abrir(b.dataset.cadFicha);
 });
-// Busca da frota: o navegador costuma colar o e-mail do login no primeiro
-// campo de texto da página. Fica travada até alguém clicar nela e nunca
-// começa preenchida.
-(function () {
-    const b = document.getElementById("buscaFrota");
+// Buscas (Frota e Histórico): o navegador costuma colar o e-mail do login no
+// primeiro campo de texto da página e a lista some. Ficam travadas até alguém
+// clicar nelas e nunca começam preenchidas. (A da Sinalização se protege sozinha.)
+[["buscaFrota", () => { if (typeof renderizarFrota === "function") renderizarFrota(); }],
+ ["historicoBusca", () => { if (typeof renderizarHistorico === "function") renderizarHistorico(); }]].forEach(([id, redesenhar]) => {
+    const b = document.getElementById(id);
     if (!b) return;
     const liberar = () => b.removeAttribute("readonly");
     b.addEventListener("focus", liberar);
     b.addEventListener("pointerdown", liberar);
-    const limpar = () => { if (b.value && document.activeElement !== b) { b.value = ""; if (typeof renderizarFrota === "function") renderizarFrota(); } };
+    const limpar = () => { if (b.value && document.activeElement !== b) { b.value = ""; redesenhar(); } };
     b.value = "";
     setTimeout(limpar, 300); setTimeout(limpar, 1500);
     window.addEventListener("pageshow", limpar);
-})();
+});
 
 function fecharCadastroAGV() {
     agvEmEdicao = null;

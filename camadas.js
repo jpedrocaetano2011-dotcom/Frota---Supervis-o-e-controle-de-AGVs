@@ -8,7 +8,15 @@
    - Espera no tráfego: onde os Atta esperam passagem (cruzamento cheio);
    - Obstáculos: onde eles param por algo ou alguém na frente;
    - Tags com problema: tags que o Atta deveria ler e não leu.
+   - (0.21) Fita e piso: onde o Atta perdeu a fita (fita gasta, suja, emenda,
+     piso molhado): manutenção da fita antes de parar a linha;
+   - (0.21) Entrega por posto: tempo médio do pedido à entrega de cada posto
+     hoje, no ponto do posto (verde até 10 min, âmbar até 20, vermelho acima).
    As paradas por causa e por ponto continuam em Indicadores › Paradas.
+   (0.21) Na nuvem, a aba que despacha grava o dia a cada 5 min
+   (public.camadas_mapa) e todas leem: não depende mais de um navegador só.
+   (0.21) Fluxo do estudo: os trechos mais usados na simulação do Estudo
+   de frota (quanto mais grosso e escuro, mais passagens no dia).
    Os dados são juntados por este navegador enquanto o site está aberto
    (a aba que despacha costuma ficar aberta o dia todo), em quadrados de
    1 m, guardados por 30 dias.
@@ -19,8 +27,20 @@ const CamadasMapa = (function () {
         wifi: ["Wi-Fi", "sinal medido pelos Atta"],
         espera: ["Espera no tráfego", "onde esperam passagem"],
         obst: ["Obstáculos", "onde param por algo na frente"],
-        tags: ["Tags com problema", "tag que deveria ler e não leu"]
+        tags: ["Tags com problema", "tag que deveria ler e não leu"],
+        fita: ["Fita e piso", "onde o Atta perdeu a fita (fita gasta, suja, piso)"],
+        entrega: ["Entrega por posto", "tempo médio do pedido à entrega, hoje"],
+        estudo: ["Fluxo do estudo", "trechos mais usados na simulação"]
     };
+    // 0.21: o resultado do Estudo de frota (passagens por trecho num dia típico)
+    let estudoDados = (() => { try { return JSON.parse(localStorage.getItem("camadaEstudo") || "null"); } catch (e) { return null; } })();
+    function definirEstudo(R, nome) {
+        const c = R?.recomendado || R?.cenarios?.[R.cenarios.length - 1];
+        if (!c?.r) return;
+        estudoDados = { nome: nome || "", frota: c.nome, passagens: c.r.passagens || {}, em: R.em };
+        try { localStorage.setItem("camadaEstudo", JSON.stringify(estudoDados)); } catch (e) { /* ignora */ }
+        if (ativo.tipo === "estudo") redesenharMapas();
+    }
     let dados = ler(), ativo = { tipo: "", periodo: "hoje" }, sujo = false;
     const agora10 = {};   // wifi "agora": últimas amostras por célula (10 min)
     const esc = t => String(t ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
@@ -32,7 +52,7 @@ const CamadasMapa = (function () {
         sujo = false;
     }
     const hoje = () => (typeof Calendario !== "undefined" ? Calendario.local(Date.now()).data : new Date().toISOString().slice(0, 10));
-    const dia = () => (dados.dias[hoje()] = dados.dias[hoje()] || { wifi: {}, espera: {}, obst: {}, tags: {} });
+    const dia = () => { const d = (dados.dias[hoje()] = dados.dias[hoje()] || { wifi: {}, espera: {}, obst: {}, tags: {}, fita: {} }); if (!d.fita) d.fita = {}; return d; };
     const celula = (x, y) => `${Math.floor(x / CELULA)},${Math.floor(y / CELULA)}`;
 
     // amostra a cada 5 s
@@ -57,8 +77,17 @@ const CamadasMapa = (function () {
         });
         if (ativo.tipo) redesenharMapas();
     }
-    // evento do Atta (script.js chama): tag não lida
+    // evento do Atta (script.js chama): tag não lida, fita perdida
     function evento(agvId, nome, mensagem) {
+        if (nome === "MISSAO_ERRO" && /linha perdida/i.test(mensagem || "")) {
+            const a = typeof agvs !== "undefined" ? agvs[agvId] : null;
+            const pose = a && typeof poseEstimadaAGV === "function" ? poseEstimadaAGV(a) : null;
+            if (!pose || typeof pose.x !== "number") return;
+            const d = dia(), c = celula(pose.x, pose.y);
+            d.fita[c] = (d.fita[c] || 0) + 1;
+            sujo = true;
+            return;
+        }
         if (nome !== "TAG_NAO_LIDA") return;
         const m = /Tag\s+([0-9A-F]{10})/i.exec(mensagem || "");
         const pl = typeof plantaPublicada === "function" ? plantaPublicada() : null;
@@ -92,8 +121,41 @@ const CamadasMapa = (function () {
     function desenhar(mapa, grupo, util) {
         if (!ativo.tipo) return;
         const { Y, px } = util;
-        const agg = agregado(ativo.tipo, ativo.periodo);
         const el = MapaSVG.el;
+        if (ativo.tipo === "estudo") {
+            const pl = mapa.planta;
+            const pass = estudoDados?.passagens || {};
+            const max = Math.max(1, ...Object.values(pass));
+            Object.entries(pass).sort((a, b) => a[1] - b[1]).forEach(([id, n]) => {
+                const sg = pl && Planta.segmentoPorId(pl, id);
+                if (!sg) return;
+                const pts = Planta.pontosSegmento(pl, sg);
+                if (pts.length < 2) return;
+                const f = n / max;
+                el("polyline", { points: pts.map(q => `${q.x},${Y(q.y)}`).join(" "), fill: "none", stroke: f > 0.66 ? "#3B1F8C" : f > 0.33 ? "#6A3FB5" : "#A98BE0", "stroke-opacity": 0.35 + 0.5 * f,
+                    "stroke-width": px(3 + 11 * f), "stroke-linecap": "round", class: "camada-calor" }, grupo)
+                    .appendChild(Object.assign(document.createElementNS("http://www.w3.org/2000/svg", "title"), { textContent: `${id}: ${Math.round(n)} passagens no dia` }));
+            });
+            return;
+        }
+        if (ativo.tipo === "entrega") {
+            const pl = mapa.planta;
+            const postos = typeof Despacho !== "undefined" && Despacho.postos ? Despacho.postos() : [];
+            const inicio = new Date(); inicio.setHours(0, 0, 0, 0);
+            const conc = (typeof Despacho !== "undefined" ? Despacho.lista() : []).filter(x => x.estado === "concluido" && x.concluidoEm && x.criadoEm && x.concluidoEm >= inicio.getTime() && x.posto);
+            postos.forEach(po => {
+                const no = pl && Planta.noPorId(pl, po.ponto);
+                const l = conc.filter(x => x.posto === po.id);
+                if (!no || !l.length) return;
+                const m = l.reduce((s2, x) => s2 + (x.concluidoEm - x.criadoEm), 0) / l.length / 60000;
+                const cor = m <= 10 ? "#16A34A" : m <= 20 ? "#D97706" : "#DC2626";
+                el("circle", { cx: no.x, cy: Y(no.y), r: px(16), fill: cor, "fill-opacity": 0.22, stroke: cor, "stroke-width": px(2), class: "camada-calor" }, grupo);
+                const t = el("text", { x: no.x, y: Y(no.y) - px(20), "text-anchor": "middle", "font-size": px(11), "font-weight": 700, fill: cor, "paint-order": "stroke", stroke: "#fff", "stroke-width": px(3) }, grupo);
+                t.textContent = `${po.nome || po.id}: ${m < 10 ? m.toFixed(1).replace(".", ",") : Math.round(m)} min · ${l.length}`;
+            });
+            return;
+        }
+        const agg = agregado(ativo.tipo, ativo.periodo);
         if (ativo.tipo === "tags") {
             const pl = mapa.planta;
             Object.entries(agg).forEach(([id, n]) => {
@@ -111,9 +173,9 @@ const CamadasMapa = (function () {
             const x = cx * CELULA, y = cy * CELULA;
             let fill, op;
             if (ativo.tipo === "wifi") { fill = corWifi(v[1] / v[0]); op = 0.5; }
-            else { const f = Math.min(1, v / max); fill = ativo.tipo === "espera" ? "#7C3AED" : "#EA580C"; op = 0.15 + 0.6 * f; }
+            else { const f = Math.min(1, v / max); fill = ativo.tipo === "espera" ? "#7C3AED" : ativo.tipo === "fita" ? "#B45309" : "#EA580C"; op = 0.15 + 0.6 * f; }
             el("rect", { x, y: Y(y + CELULA), width: CELULA, height: CELULA, fill, "fill-opacity": op, class: "camada-calor" }, grupo)
-                .appendChild(Object.assign(document.createElementNS("http://www.w3.org/2000/svg", "title"), { textContent: ativo.tipo === "wifi" ? `${Math.round(v[1] / v[0])} dBm (pior ${v[2]}) · ${v[0]} amostras` : `${Math.round(v / 60)} min` }));
+                .appendChild(Object.assign(document.createElementNS("http://www.w3.org/2000/svg", "title"), { textContent: ativo.tipo === "wifi" ? `${Math.round(v[1] / v[0])} dBm (pior ${v[2]}) · ${v[0]} amostras` : ativo.tipo === "fita" ? `${v}× perdeu a fita` : `${Math.round(v / 60)} min` }));
         });
     }
 
@@ -131,8 +193,9 @@ const CamadasMapa = (function () {
     }
     function htmlPainel() {
         return `<div class="camadas-titulo">Mapa de calor</div>
-            ${[["", "Nenhum", ""]].concat(Object.entries(TIPOS).map(([k, [n, d]]) => [k, n, d])).map(([k, n, d]) => `<label class="camadas-op"><input type="radio" name="camadaTipo" value="${k}" ${ativo.tipo === k ? "checked" : ""}><span>${esc(n)}${d ? `<small>${esc(d)}</small>` : ""}</span></label>`).join("")}
-            <label class="camadas-periodo"><span>Período</span><select data-camadas="periodo">${[["agora", "Agora (10 min)"], ["hoje", "Hoje"], ["7", "7 dias"], ["30", "30 dias"]].map(([v, t]) => `<option value="${v}" ${ativo.periodo === v ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+            ${[["", "Nenhum", ""]].concat(Object.entries(TIPOS).filter(([k]) => k !== "estudo" || estudoDados).map(([k, [n, d]]) => [k, n, k === "estudo" && estudoDados ? `${d}: ${estudoDados.nome} (${estudoDados.frota})` : d])).map(([k, n, d]) => `<label class="camadas-op"><input type="radio" name="camadaTipo" value="${k}" ${ativo.tipo === k ? "checked" : ""}><span>${esc(n)}${d ? `<small>${esc(d)}</small>` : ""}</span></label>`).join("")}
+            ${ativo.tipo === "estudo" ? `<div class="camadas-legenda"><span><i style="background:#A98BE0"></i>pouco</span><span><i style="background:#6A3FB5"></i></span><span><i style="background:#3B1F8C"></i>muito usado</span></div>` : ""}
+            <label class="camadas-periodo" ${["estudo", "entrega"].includes(ativo.tipo) ? "hidden" : ""}><span>Período</span><select data-camadas="periodo">${[["agora", "Agora (10 min)"], ["hoje", "Hoje"], ["7", "7 dias"], ["30", "30 dias"]].map(([v, t]) => `<option value="${v}" ${ativo.periodo === v ? "selected" : ""}>${t}</option>`).join("")}</select></label>
             ${ativo.tipo === "wifi" ? `<div class="camadas-legenda">${[[-55, "bom"], [-64, ""], [-71, ""], [-77, ""], [-85, "fraco"]].map(([v, t]) => `<span><i style="background:${corWifi(v)}"></i>${t}</span>`).join("")}</div>` : ""}
             <small class="suave">Juntado por este navegador com o site aberto. Paradas por causa: Indicadores › Paradas.</small>`;
     }
@@ -161,6 +224,40 @@ const CamadasMapa = (function () {
         redesenharMapas();
     });
 
+    /* ---------------- nuvem ---------------- */
+    const naNuvem = () => Boolean(window.Nuvem && Nuvem.emNuvem && Nuvem.emNuvem());
+    // junta um dia da nuvem com o deste navegador (fica o maior de cada quadrado)
+    function juntarDia(local, nuvem) {
+        const r = local || { wifi: {}, espera: {}, obst: {}, tags: {}, fita: {} };
+        Object.keys(TIPOS).filter(t => !["estudo", "entrega"].includes(t)).forEach(t => {
+            r[t] = r[t] || {};
+            Object.entries(nuvem?.[t] || {}).forEach(([c, v]) => {
+                const atual = r[t][c];
+                if (t === "wifi") { if (!atual || (Array.isArray(v) && v[0] > atual[0])) r[t][c] = v; }
+                else if (!(atual >= v)) r[t][c] = v;
+            });
+        });
+        return r;
+    }
+    async function lerNuvem() {
+        if (!naNuvem()) return;
+        try {
+            const desde = new Date(Date.now() - DIAS * 86400000).toISOString().slice(0, 10);
+            const r = await Nuvem.cliente().from("camadas_mapa").select("dia, dados").eq("empresa_id", Nuvem.empresa().id).gte("dia", desde);
+            if (r.error) return;
+            (r.data || []).forEach(x => { dados.dias[x.dia] = juntarDia(dados.dias[x.dia], x.dados); });
+            if (ativo.tipo) redesenharMapas();
+        } catch (e) { /* sem nuvem agora */ }
+    }
+    async function gravarNuvem() {
+        // só a aba que despacha (a líder) grava: é a que fica aberta o dia todo
+        if (!naNuvem() || typeof Despacho === "undefined" || !Despacho.lider?.().eu || !Nuvem.pode("despachar")) return;
+        try { await Nuvem.cliente().rpc("salvar_camadas_dia", { p_empresa: Nuvem.empresa().id, p_dia: hoje(), p_dados: dia() }); } catch (e) { /* tenta de novo */ }
+    }
+    setTimeout(lerNuvem, 4000);
+    setInterval(() => { if (document.visibilityState === "visible") lerNuvem(); }, 10 * 60000);
+    setInterval(gravarNuvem, 5 * 60000);
+
     setInterval(coletar, 5000);
     setInterval(() => { if (sujo) gravar(); }, 30000);
     window.addEventListener("beforeunload", () => { if (sujo) gravar(); });
@@ -170,6 +267,7 @@ const CamadasMapa = (function () {
         if (window.EditorPlanta?._estado?.mapa) ligar(EditorPlanta._estado.mapa);
     }, 1500);
 
-    return { ligar, coletar, evento, agregado, ativar: (tipo, periodo) => { ativo.tipo = tipo || ""; if (periodo) ativo.periodo = periodo; redesenharMapas(); }, dados: () => dados, TIPOS };
+    return { ligar, coletar, evento, agregado, definirEstudo, estudo: () => estudoDados, juntarDia, lerNuvem, gravarNuvem,
+        ativar: (tipo, periodo) => { ativo.tipo = tipo || ""; if (periodo) ativo.periodo = periodo; document.querySelectorAll(".camadas-botao").forEach(btn => btn.classList.toggle("ativo", Boolean(ativo.tipo))); redesenharMapas(); }, dados: () => dados, TIPOS };
 })();
 if (typeof window !== "undefined") window.CamadasMapa = CamadasMapa;

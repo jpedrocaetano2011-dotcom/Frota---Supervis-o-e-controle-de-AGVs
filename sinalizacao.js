@@ -117,7 +117,7 @@ const Sinalizacao = (function () {
        NO SITE
        ======================================================== */
     const CHAVE = "sinalizacaoFrota";
-    let atual = vazio(), rascunho = null, carregado = false, porNome = "", busca = "", soAcao = false;
+    let atual = vazio(), rascunho = null, carregado = false, porNome = "", busca = "", soAcao = false, mostrarEm = "";
     const esc = t => String(t ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
     const naNuvem = () => Boolean(window.Nuvem && Nuvem.emNuvem && Nuvem.emNuvem());
     const podeEditar = () => !naNuvem() || Nuvem.pode("administrar");
@@ -218,7 +218,7 @@ const Sinalizacao = (function () {
                     ${fita(k, s)}
                     <div class="sin-texto"><b>${esc(texto(k))}</b><small>${esc(nomeCor(s.cor))} ${esc(EFEITOS_TODOS[s.efeito])}${mudou ? " · mudado pela empresa" : ""}</small></div>
                     <div class="sin-fazer">${esc(m.fazer)}${m.quem && m.quem !== "—" ? `<small>Quem resolve: ${esc(m.quem)}</small>` : ""}</div>
-                    <div class="sin-editar">${m.trava ? `<span class="sin-cadeado" title="${esc(m.trava)}">🔒 ${esc(m.trava)}</span>`
+                    <div class="sin-editar">${mostrarEm && k !== "TESTE_LEDS" ? `<button type="button" class="btn btn-mini" data-sin-mostrar="${k}" title="O Atta ${esc(mostrarEm)} mostra este sinal por 5 s">Mostrar</button>` : ""}${m.trava ? `<span class="sin-cadeado" title="${esc(m.trava)}">🔒 ${esc(m.trava)}</span>`
                         : editavel ? `<select data-sin-cor="${k}" aria-label="Cor de ${esc(texto(k))}">${CORES.map(([fw, , nome]) => `<option value="${fw}" ${fw === s.cor ? "selected" : ""}>${nome}</option>`).join("")}</select>
                           <select data-sin-efeito="${k}" aria-label="Efeito de ${esc(texto(k))}">${Object.entries(EFEITOS).map(([e, nome]) => `<option value="${e}" ${e === s.efeito ? "selected" : ""}>${nome}</option>`).join("")}</select>
                           ${mudou ? `<button type="button" class="btn btn-mini" data-sin-padrao="${k}" title="Voltar ao padrão E4M">↺</button>` : ""}` : ""}</div>
@@ -234,13 +234,15 @@ const Sinalizacao = (function () {
                     </div>
                 </div>
                 <div class="sin-filtros">
-                    <input type="search" id="sinBusca" placeholder="Buscar por cor ou situação (ex.: azul, piscando, obstáculo)" value="${esc(busca)}" aria-label="Buscar sinal">
+                    <input type="search" id="sinBusca" name="sinal-busca-eciton" autocomplete="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-form-type="other" readonly placeholder="Buscar por cor ou situação (ex.: azul, piscando, obstáculo)" value="${esc(busca)}" aria-label="Buscar sinal">
                     <label class="rotina-check"><input type="checkbox" id="sinSoAcao" ${soAcao ? "checked" : ""}><span>Só os que pedem ação</span></label>
+                    <label class="sin-mostrar"><span>Mostrar no Atta</span><select id="sinMostrarAgv" aria-label="Atta que mostra o sinal"><option value="">—</option>${(typeof agvs !== "undefined" ? Object.values(agvs) : []).filter(a => a.online).sort((a, b) => String(a.id).localeCompare(String(b.id), "pt-BR", { numeric: true })).map(a => `<option value="${esc(a.id)}" ${a.id === mostrarEm ? "selected" : ""}>${esc(a.id)}${a.nome ? " · " + esc(a.nome) : ""}</option>`).join("")}</select></label>
                     <span class="suave sin-rev">${atual.rev ? `rev ${atual.rev}${porNome ? " · " + esc(porNome) : ""}` : "padrão E4M"}${fr.total ? ` · ${fr.com} de ${fr.total} Atta com esta revisão` : ""}</span>
                 </div>
                 ${fr.antigos.length ? `<div class="missao-dica ambar">${esc(fr.antigos.join(", "))}: firmware sem sinalização configurável (antes da 0.20). Ele continua com o padrão E4M.</div>` : ""}
             </section>
-            ${linhas || `<p class="suave">Nenhum sinal com esse filtro.</p>`}
+            ${linhas || `<section class="card sin-vazio"><b>Nenhum sinal aparece com este filtro${q ? `: “${esc(busca)}”` : ""}${soAcao ? " (só os que pedem ação)" : ""}.</b>
+                <button type="button" class="btn btn-primario" data-sin="limpar">Mostrar todos os sinais</button></section>`}
             ${pode ? `<section class="card sin-rodape">
                 ${v.erros.length ? `<div class="missao-dica vermelho">${v.erros.map(esc).join("<br>")}</div>` : ""}
                 <div class="rotina-acoes">
@@ -260,6 +262,15 @@ const Sinalizacao = (function () {
         if (!forcar && caixa.contains(document.activeElement) && /INPUT|SELECT/.test(document.activeElement.tagName)) return;
         const html = htmlTela();
         if (caixa.__html !== html) { caixa.__html = html; caixa.innerHTML = html; }
+    }
+
+    // 0.21: o Atta escolhido mostra o sinal por 5 s (só parado), para a equipe ver de perto
+    function mostrarNoAtta(k) {
+        const a = typeof agvs !== "undefined" ? agvs[mostrarEm] : null;
+        if (!a?.online) { ui.aviso("Esse Atta está offline.", "aviso"); return; }
+        if (a.estadoMissao === "EM_EXECUCAO" || (Number(a.velocidade) || 0) > 0.01) { ui.aviso(`O ${a.id} está andando: o sinal só aparece com ele parado.`, "aviso"); return; }
+        const ok = typeof publicar === "function" && publicar(TOPICOS.comando.autoteste, JSON.stringify({ acao: "MOSTRAR", sinal: k }), a.id);
+        if (ok) ui.aviso(`O ${a.id} mostra "${texto(k)}" por 5 s${rascunho ? " (com as cores salvas; salve para ver as novas)" : ""}.`, "info");
     }
 
     function editar(mudar) {
@@ -298,12 +309,14 @@ const Sinalizacao = (function () {
             const b = e.target.closest("button");
             if (!b) return;
             if (b.dataset.sinPadrao) editar(c => { delete c.sinais[b.dataset.sinPadrao]; });
+            if (b.dataset.sinMostrar) mostrarNoAtta(b.dataset.sinMostrar);
             const a = b.dataset.sin;
             if (a === "salvar" && rascunho) await salvar(rascunho);
             if (a === "descartar") { rascunho = null; renderizar(true); }
             if (a === "padrao") editar(c => { c.sinais = {}; });
             if (a === "reenviar") ui.aviso(enviarParaFrota() ? "Sinalização reenviada para a frota." : "Sem conexão com o broker agora.", "info");
             if (a === "imprimir") cartaz();
+            if (a === "limpar") { busca = ""; soAcao = false; renderizar(true); }
             return;
         }
         // balão do cartão do Atta
@@ -316,6 +329,7 @@ const Sinalizacao = (function () {
         if (!caixa || !caixa.contains(e.target)) return;
         const t = e.target;
         if (t.id === "sinSoAcao") { soAcao = t.checked; renderizar(true); return; }
+        if (t.id === "sinMostrarAgv") { mostrarEm = t.value; renderizar(true); return; }
         const k = t.dataset.sinCor || t.dataset.sinEfeito;
         if (!k) return;
         editar(c => {
@@ -327,8 +341,12 @@ const Sinalizacao = (function () {
             if (novo.cor === pc && novo.efeito === pe) delete c.sinais[k]; else c.sinais[k] = novo;
         });
     });
+    // o navegador às vezes preenche a busca sozinho (e-mail salvo do login) e
+    // escondia todos os sinais: só vale o que a pessoa digitou com a busca em foco
+    document.addEventListener("focusin", e => { if (e.target.id === "sinBusca") e.target.removeAttribute("readonly"); });
     document.addEventListener("input", e => {
         if (e.target.id !== "sinBusca") return;
+        if (document.activeElement !== e.target || e.target.hasAttribute("readonly")) { e.target.value = busca; return; }
         busca = e.target.value;
         const pos = e.target.selectionStart;
         renderizar(true);
@@ -373,7 +391,7 @@ const Sinalizacao = (function () {
     setInterval(() => { if (naNuvem() && !rascunho && document.visibilityState === "visible") carregar(); }, 120000);
 
     return Object.assign({}, Nucleo, { carregar, salvar, renderizar, linhaCartao, enviarParaFrota, atual: () => atual, rascunho: () => rascunho,
-        abrir: () => { renderizar(true); }, carregado: () => carregado });
+        abrir: () => { busca = ""; soAcao = false; if (mostrarEm && !(typeof agvs !== "undefined" && agvs[mostrarEm]?.online)) mostrarEm = ""; renderizar(true); }, carregado: () => carregado });
 })();
 if (typeof module !== "undefined") module.exports = Sinalizacao;
 if (typeof window !== "undefined") window.Sinalizacao = Sinalizacao;

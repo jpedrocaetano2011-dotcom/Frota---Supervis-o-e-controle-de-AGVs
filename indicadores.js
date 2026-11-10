@@ -257,6 +257,11 @@ const Indicadores = (function () {
                 cancelados: d.pedidos.filter(p => p.estado === "cancelado").length, abertos: d.pedidos.filter(p => ["pendente", "atribuido", "em_execucao"].includes(p.estado)).length,
                 atendimentoMedio: media(atendimento), atendimentoP90: p90(atendimento), esperaMedia: media(espera),
                 porHora: Array.from({ length: 24 }, (_, h) => conc.filter(p => new Date(p.concluidoEm).getHours() === h).length),
+                // 0.21: quando os pedidos nascem (a demanda), por hora do dia, média por dia do período
+                pedidosPorHora: (() => {
+                    const dias = Math.max(1, new Set(d.pedidos.map(p => new Date(p.criadoEm).toDateString())).size);
+                    return Array.from({ length: 24 }, (_, h) => d.pedidos.filter(p => p.criadoEm && new Date(p.criadoEm).getHours() === h).length / dias);
+                })(),
                 porDia: porDia(conc, d), porMissao: agrupar(conc, p => p.missao), porPosto: agrupar(conc.filter(p => p.posto), p => p.posto),
                 porAgv: agrupar(conc.filter(p => p.agv), p => p.agv), urgentes: d.pedidos.filter(p => p.urgente).length,
                 // 0.15: programação
@@ -475,7 +480,11 @@ const Indicadores = (function () {
                 ${tile("Pedidos à mão", ui.milhar(e.pedidos - e.programados), `${e.adiantados} adiantaram o automático`)}
                 ${tile("Faltou material", ui.milhar(e.faltou.length), e.comPrazo ? `${pct(e.faltou.length / e.comPrazo)} dos programados chegaram depois de acabar` : "kit que chegou depois de o anterior acabar")}
             </div>` : ""}
-            <section class="card ind-card"><h3>Concluídas por hora do dia</h3>${barras(e.porHora.map((n, h) => ({ rotulo: String(h), valor: n, dica: `${h}h: ${n}` })), { passo: 2 })}</section>
+            <div class="ind-duas">
+                <section class="card ind-card"><h3>Pedidos por hora do dia</h3>${barras(e.pedidosPorHora.map((n, h) => ({ rotulo: String(h), valor: Math.round(n * 10) / 10, dica: `${h}h: ${ui.numero(n, 1)} pedido(s) por dia, em média` })), { passo: 2, formato: v => ui.numero(v, 1) })}
+                    <p class="suave">Média por dia do período: mostra os picos (começo de turno, volta do almoço). Para saber se a frota dá conta, use o <a href="#" data-ind-estudo>Estudo de frota</a>.</p></section>
+                <section class="card ind-card"><h3>Concluídas por hora do dia</h3>${barras(e.porHora.map((n, h) => ({ rotulo: String(h), valor: n, dica: `${h}h: ${n}` })), { passo: 2 })}</section>
+            </div>
             <div class="ind-duas">
                 <section class="card ind-card"><h3>Por missão</h3>${tabela(["Missão", "Entregas", "Atendimento médio"], e.porMissao.slice(0, 12).map(x => [esc(x.chave) + (typeof Despacho !== "undefined" ? ` <span class="suave">${esc(Despacho.nomeMissao(x.chave) !== x.chave ? Despacho.nomeMissao(x.chave) : "")}</span>` : ""), ui.milhar(x.n), durS(x.s / x.n)]))}</section>
                 <section class="card ind-card"><h3>Por posto</h3>${tabela(["Posto", "Entregas", "Atendimento médio"], e.porPosto.slice(0, 12).map(x => [esc(x.chave), ui.milhar(x.n), durS(x.s / x.n)]), "Nenhum pedido de posto no período.")}</section>
@@ -653,6 +662,7 @@ const Indicadores = (function () {
     document.addEventListener("click", evento => {
         const caixa = evento.target.closest("#indicadoresConteudo");
         if (!caixa) return;
+        if (evento.target.closest("[data-ind-estudo]")) { evento.preventDefault(); if (typeof mudarTela === "function") mudarTela("estudo"); return; }
         const b = evento.target.closest("[data-ind-aba],[data-ind-periodo],[data-ind-acao]");
         if (!b) return;
         if (b.dataset.indAba) { aba = b.dataset.indAba; desenharMoldura(caixa, dados); }

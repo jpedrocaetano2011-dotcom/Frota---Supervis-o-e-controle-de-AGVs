@@ -107,7 +107,7 @@
         let r;
         try {
             const { data, error } = await Nuvem.cliente().functions.invoke("mira", {
-                body: { modo, tarefa, pergunta: texto, tela: TITULO_TELA(), contexto: contexto(), historico: hist, alerta: opcoes.alerta || null }
+                body: { modo, tarefa, pergunta: texto, tela: TITULO_TELA(), contexto: opcoes.contexto || contexto(), historico: opcoes.semHistorico ? [] : hist, alerta: opcoes.alerta || null }
             });
             if (error) {
                 let msg = error.message || "erro";
