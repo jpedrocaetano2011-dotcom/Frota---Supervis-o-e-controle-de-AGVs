@@ -249,6 +249,8 @@
 
     function rodada(ctx, frota, pr, semente) {
         const { planta, missoes, fluxos, dt, viagem, bercos } = ctx;
+        // 0.22: quantos Atta cabem na zona ao mesmo tempo (1 = como o firmware; 2 = segundo acesso no gargalo)
+        const cabe = z => Math.max(1, Number(ctx.capacidade?.[z]) || 1);
         const rnd = aleatorio(semente);
         const fatorRodada = 1 + (rnd() - 0.5) * 2 * pr.variacao;
         // os Atta (os indisponíveis saem da conta)
@@ -296,19 +298,19 @@
                 const quando = v.base + ps.t;
                 if (quando > agora + 1e-6) { agendar(v, quando); return; }
                 if (ps.soltar) {
-                    ps.soltar.forEach(z => { if (dono[z] === v) delete dono[z]; });
+                    ps.soltar.forEach(z => { const d = dono[z]; const i = d ? d.indexOf(v) : -1; if (i >= 0) d.splice(i, 1); });
                     acordar(ps.soltar, agora);
                     v.cursor++;
                     continue;
                 }
-                const ocupadas = ps.pedir.filter(z => dono[z] && dono[z] !== v);
+                const ocupadas = ps.pedir.filter(z => { const d = dono[z] || []; return !d.includes(v) && d.length >= cabe(z); });
                 if (ocupadas.length && !forcar) {
                     if (!v.aguardando) { v.aguardando = { desde: agora, zonas: ps.pedir, zona: ocupadas[0] }; esperando.push(v); }
                     agendar(v, Math.max(agora, v.aguardando.desde + DESTRAVAR_S), true);
                     return;
                 }
                 if (ocupadas.length && forcar) travamentos++;
-                ps.pedir.forEach(z => { if (!dono[z]) dono[z] = v; });
+                ps.pedir.forEach(z => { const d = dono[z] = dono[z] || []; if (!d.includes(v) && d.length < cabe(z)) d.push(v); });
                 if (v.aguardando) {
                     const w = agora - v.aguardando.desde;
                     v.base += w; v.espera += w;
@@ -438,7 +440,7 @@
         const planta = base.planta;
         const dt = diaDeTrabalho(cenario.calendario, Number(cenario.premissas?.dia ?? 1));
         const bercos = planta.nos.filter(n => n.tipo === "BERCO").map(n => n.id);
-        return { planta, missoes: base.missoes || [], fluxos: (cenario.fluxos || []).filter(f => f.ativo !== false), dt, viagem: criarRotas(planta, base.missoes || []), bercos };
+        return { planta, missoes: base.missoes || [], fluxos: (cenario.fluxos || []).filter(f => f.ativo !== false), dt, viagem: criarRotas(planta, base.missoes || []), bercos, capacidade: cenario.capacidadeZonas || {} };
     }
 
     function rodarFrota(ctx, frota, pr) {
@@ -586,5 +588,5 @@
         return Object.keys(horas).map(Number).sort((a, b) => a - b).map(h => ({ h, pedidos: horas[h] }));
     }
 
-    return { PREMISSAS_PADRAO, DEMANDAS, MAX_FROTAS, rodar, rodada, contexto, rodarFrota, frotasDoCenario, nomeFrota, fluxosDaPlanta, fluxosDoDia, missaoDoFluxo, diaDeTrabalho, demandaPorHora, taxaBase, quantil, faixa, aleatorio, criarRotas };
+    return { PREMISSAS_PADRAO, DEMANDAS, MAX_FROTAS, rodar, rodada, contexto, rodarFrota, acharFrota, frotasDoCenario, nomeFrota, fluxosDaPlanta, fluxosDoDia, missaoDoFluxo, diaDeTrabalho, demandaPorHora, taxaBase, quantil, faixa, aleatorio, criarRotas };
 });

@@ -15,7 +15,7 @@
    Atta parado). Os números vêm sempre da simulação; a Mira Pro só monta
    o rascunho dos fluxos e escreve o resumo.
 
-   Quem usa: administrador e líder (o fornecedor também). Na nuvem fica em
+   Quem usa: a E4M (o fornecedor), para estudar a ampliação de uma empresa que já usa o Eciton (0.22: saiu do Eciton do cliente; prospects ficam em Estudos de frota). Na nuvem fica em
    public.estudos; sem nuvem, neste navegador (estudosFrota).
 */
 const EstudoTela = (function () {
@@ -59,7 +59,7 @@ const EstudoTela = (function () {
         desenhar();
     }
     async function salvar(silencioso) {
-        if (!pode()) { ui.aviso("Só o administrador e o líder salvam estudos.", "aviso"); return false; }
+        if (!pode()) { ui.aviso("Só a E4M salva estudos de frota.", "aviso"); return false; }
         const e = atual;
         if (naNuvem()) {
             const r = await Nuvem.cliente().rpc("salvar_estudo", { p_empresa: Nuvem.empresa().id, p_id: e.id, p_nome: e.nome, p_dados: e.dados, p_resultado: e.resultado });
@@ -448,7 +448,7 @@ const EstudoTela = (function () {
     function desenhar() {
         const caixa = document.getElementById("estudoConteudo");
         if (!caixa || !document.getElementById("estudo")?.classList.contains("ativa")) return;
-        if (!pode()) { caixa.innerHTML = `<div class="empty-state">O estudo de frota é do administrador e do líder.</div>`; return; }
+        if (!pode()) { caixa.innerHTML = `<div class="empty-state">O estudo de frota é da E4M.</div>`; return; }
         if (!carregado || !atual) { caixa.innerHTML = `<div class="empty-state">Carregando…</div>`; return; }
         caixa.innerHTML = htmlTopo() + (aba === "resultado" ? htmlResultado() : htmlCenario());
     }

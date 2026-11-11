@@ -114,6 +114,13 @@
     }
 
     function salvarAgora(soNoNavegador) {
+        // 0.22: no modo estudo a planta é a do prospect (não vai para a empresa nem para o navegador)
+        if (estado.estudo) {
+            clearTimeout(estado.estudo.timer);
+            const copia = Planta.clonar(estado.rascunho);
+            estado.estudo.timer = setTimeout(() => { try { estado.estudo?.aoSalvar(copia, false); } catch (e) { console.error(e); } }, soNoNavegador ? 0 : 300);
+            return true;
+        }
         if (!soNoNavegador && typeof Nuvem !== "undefined") Nuvem.salvarPlanta(estado.rascunho, estado.publicada);
         try {
             localStorage.setItem(CHAVE_RASCUNHO, JSON.stringify(estado.rascunho));
@@ -423,7 +430,10 @@
         const status = document.getElementById("editorStatus");
         if (!status) return;
         const rev = estado.publicada.revisao || 0;
-        if (semPublicar()) {
+        if (estado.estudo) {
+            status.textContent = semPublicar() ? "Planta do estudo · salvando no estudo" : "Planta do estudo";
+            status.className = "editor-status pendente";
+        } else if (semPublicar()) {
             status.textContent = rev ? `Alterações não publicadas · em uso: rev ${rev}` : "Rascunho ainda não publicado";
             status.className = "editor-status pendente";
         } else {
@@ -1570,6 +1580,7 @@
        ======================================================== */
 
     async function publicar() {
+        if (estado.estudo) return usarNoEstudo();
         if (typeof Nuvem !== "undefined" && !Nuvem.exigir("administrar", "publicar a planta")) return;
         estado.validacao = Planta.validar(p(), { perfis: perfisDaFrota() });
         renderizarValidacao();
@@ -2164,11 +2175,62 @@
         requestAnimationFrame(() => estado.mapa.ajustado ? desenharMapa() : estado.mapa.ajustar());
     }
 
+    /* ========================================================
+       MODO ESTUDO (0.22): editar a planta de um prospect
+       ========================================================
+       O editor de sempre, com a planta do estudo no lugar da da empresa.
+       A da empresa fica guardada: o resto do site (publicada(), o despacho,
+       o Atta virtual) continua usando ela. "Publicar" vira "usar no estudo". */
+    function modoEstudo(planta, opcoes = {}) {
+        if (!estado.estudo) estado.estudo = { guardado: { rascunho: estado.rascunho, publicada: estado.publicada, desfazer: estado.desfazer, refazer: estado.refazer } };
+        Object.assign(estado.estudo, { aoSalvar: opcoes.aoSalvar || (() => {}), aoSair: opcoes.aoSair || null, titulo: opcoes.titulo || "Planta do estudo" });
+        estado.rascunho = Planta.normalizar(Planta.clonar(planta));
+        estado.publicada = Planta.clonar(estado.rascunho);
+        estado.desfazer = []; estado.refazer = []; estado.selecao = null; estado.inicioSegmento = null;
+        estado.validacao = Planta.validar(estado.rascunho, { perfis: perfisDaFrota() });
+        faixaEstudo();
+        if (estado.mapa) { estado.mapa.definirPlanta(p()); estado.mapa.ajustar(); renderizarPropriedades(); renderizarValidacao(); atualizarStatus(); }
+    }
+    function sairModoEstudo() {
+        if (!estado.estudo) return;
+        // o que ainda não foi para o estudo vai agora
+        clearTimeout(estado.timerSalvar); clearTimeout(estado.estudo.timer);
+        try { estado.estudo.aoSalvar(Planta.clonar(estado.rascunho), false); } catch (e) { console.error(e); }
+        const g = estado.estudo.guardado, depois = estado.estudo.aoSair;
+        estado.estudo = null;
+        estado.rascunho = g.rascunho; estado.publicada = g.publicada; estado.desfazer = g.desfazer; estado.refazer = g.refazer; estado.selecao = null;
+        estado.validacao = Planta.validar(estado.rascunho, { perfis: perfisDaFrota() });
+        faixaEstudo();
+        if (estado.mapa) { estado.mapa.definirPlanta(p()); estado.mapa.ajustar(); renderizarPropriedades(); renderizarValidacao(); atualizarStatus(); }
+        if (depois) depois();
+    }
+    function usarNoEstudo() {
+        estado.validacao = Planta.validar(p(), { perfis: perfisDaFrota() });
+        renderizarValidacao();
+        desenharMapa();
+        const copia = Planta.clonar(p());
+        estado.publicada = Planta.clonar(copia);
+        try { estado.estudo.aoSalvar(copia, true); } catch (e) { console.error(e); }
+        atualizarStatus();
+        ui.aviso(estado.validacao.erros.length ? `Planta do estudo salva, com ${estado.validacao.erros.length} erro(s) de validação (a simulação roda; a implantação revisa).` : "Planta do estudo salva.", estado.validacao.erros.length ? "aviso" : "sucesso");
+    }
+    function faixaEstudo() {
+        const tela = typeof document !== "undefined" ? document.getElementById("controlePlanta") : null;
+        if (!tela) return;
+        let f = document.getElementById("editorFaixaEstudo");
+        if (!estado.estudo) { if (f) f.remove(); return; }
+        if (!f) { f = document.createElement("div"); f.id = "editorFaixaEstudo"; f.className = "missao-dica ambar editor-faixa-estudo"; tela.prepend(f); }
+        f.innerHTML = `<span><b>${String(estado.estudo.titulo).replace(/[&<>"']/g, "")}</b>: você está editando a planta do estudo, não a da empresa. "Publicar" guarda no estudo.</span> <button type="button" class="btn btn-mini" id="editorSairEstudo">Voltar ao estudo</button>`;
+        document.getElementById("editorSairEstudo").onclick = () => sairModoEstudo();
+    }
+
     raiz.EditorPlanta = {
         iniciar,
         abrir,
-        publicada: () => estado.publicada,
-        rascunho: () => estado.rascunho,
+        // no modo estudo, o resto do site continua vendo a planta da empresa
+        publicada: () => (estado.estudo ? estado.estudo.guardado.publicada : estado.publicada),
+        rascunho: () => (estado.estudo ? estado.estudo.guardado.rascunho : estado.rascunho),
+        modoEstudo, sairModoEstudo, emModoEstudo: () => Boolean(estado.estudo),
         importarTexto,
         publicar,
         // seleciona um ponto, segmento ou objeto (como o clique no mapa)

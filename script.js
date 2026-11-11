@@ -2345,7 +2345,8 @@ const informacoesTelas = {
     dispositivos: ["Dispositivos", "Eciton I/O: portas automáticas, semáforos e alarme de incêndio"],
     sinalizacao: ["Sinalização", "O que cada luz do Atta quer dizer, e as cores da empresa"],
     indicadores: ["Indicadores", "O que a frota fez: entregas, disponibilidade, paradas, tráfego e ganhos"],
-    estudo: ["Estudo de frota", "Quantos Atta a operação precisa: simulação do turno na sua planta, com relatório"],
+    estudo: ["Estudo desta planta", "Quantos Atta esta empresa precisa: simulação do turno na planta publicada, com relatório (só a E4M)"],
+    estudos: ["Estudos de frota", "Prospects: questionário, planta de estudo, simulação, ações, dinheiro e relatório (só a E4M)"],
     programacao: ["Programação", "Botões dos postos que pedem sozinhos: pelo consumo, a cada X minutos ou em horários fixos"]
 };
 
@@ -2375,6 +2376,8 @@ function mudarTela(nomeTela) {
     if (document.body.classList.contains("papel-posto")) nomeTela = "posto";
     // papel Manutenção: sem planta, missões, despacho, postos, rotina e usuários
     if (document.body.classList.contains("papel-manutencao") && ["despacho", "programacao", "missoes", "controlePlanta", "postos", "rotina", "usuarios", "posto", "estudo"].includes(nomeTela)) nomeTela = "frota";
+    // 0.22: os estudos de frota são só da E4M (o fornecedor; sem nuvem, a bancada)
+    if (["estudo", "estudos"].includes(nomeTela) && typeof Nuvem !== "undefined" && Nuvem.emNuvem && (Nuvem.emNuvem() || document.body.classList.contains("modo-demo")) && Nuvem.papel() !== "fornecedor") nomeTela = "frota";
     if (nomeTela !== "posto") document.body.classList.remove("tela-posto");
     if (TELAS_DO_AGV.includes(nomeTela) && !agvSelecionado) {
         ui.aviso("Escolha um AGV na frota primeiro.", "aviso");
@@ -2409,6 +2412,7 @@ function mudarTela(nomeTela) {
     if (nomeTela === "manutencao" && typeof Manutencao !== "undefined") Manutencao.abrir();
     if (nomeTela === "indicadores" && typeof Indicadores !== "undefined") Indicadores.abrir();
     if (nomeTela === "estudo" && typeof EstudoTela !== "undefined") EstudoTela.abrir();
+    if (nomeTela === "estudos" && typeof EstudosTela !== "undefined") EstudosTela.abrir();
     if (nomeTela === "programacao" && typeof Programacao !== "undefined") Programacao.abrir();
     if (nomeTela === "configuracoes" && typeof Copias !== "undefined") Copias.abrir();
     renderizarAlertaGlobal();

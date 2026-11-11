@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>E4M · Estudo de frota</title>
+<link rel="icon" type="image/png" href="img/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+    @media print {
+        .cliente-topo, .cliente-intro, .cliente-acoes, #avisos { display: none !important; }
+        body.pagina-cliente { background: #fff; }
+        .cliente-conteudo { padding: 0; max-width: none; }
+        .rv2 { max-width: none; padding: 0; font-size: 10pt; }
+    }
+</style>
+</head>
+<!-- ============================================================
+     A página do cliente (0.22), sem login, pelo link que a E4M manda:
+       cliente.html?pesquisa=<código>   o questionário do estudo de frota
+       cliente.html?diario=<código>     o diário de viagens (no celular)
+       cliente.html?relatorio=<código>  o relatório (ler e baixar em PDF)
+     O banco confere o código e o prazo em cada chamada (funções
+     ler_*_prospect e salvar_*/registrar_*). Aqui só a chave pública
+     (config.js); nada do estudo do fornecedor passa por esta página.
+     ============================================================ -->
+<body class="pagina-cliente">
+<header class="cliente-topo">
+    <img src="img/e4m-marca-claro.webp" alt="E4M" width="101" height="32">
+    <strong id="clienteTitulo">Estudo de frota</strong>
+    <span class="suave" id="clienteNome"></span>
+</header>
+<main class="cliente-conteudo" id="clienteConteudo"><div class="empty-state">Carregando…</div></main>
+
+<script src="ui.js"></script>
+<script src="config.js"></script>
+<script src="importar-dxf.js"></script>
+<script src="pesquisa.js"></script>
+<script src="relatorio-estudo.js"></script>
+<script>
+(async function () {
+    const esc = t => String(t ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+    const caixa = document.getElementById("clienteConteudo");
+    const erro = t => { caixa.innerHTML = `<div class="cliente-erro">${esc(t)}</div>`; };
+    const q = new URLSearchParams(location.search);
+    const tipo = ["pesquisa", "diario", "relatorio"].find(k => q.get(k));
+    const codigo = tipo ? q.get(tipo) : "";
+    if (!tipo || !/^[A-Za-z0-9]{20,64}$/.test(codigo)) { erro("Link incompleto. Abra o endereço exatamente como a E4M mandou."); return; }
+    // tira o código da barra de endereço depois de ler (não fica no histórico de quem olhar a tela)
+    try { history.replaceState(null, "", location.pathname + "?" + tipo + "=" + codigo); } catch (e) { /* segue */ }
+
+    const cfg = window.CONFIG_NUVEM || {};
+    const url = String(cfg.url || "").trim().replace(/\/+$/, "").replace(/\/rest\/v1$/, "")
+        .replace(/^https?:\/\/(?:app\.)?supabase\.com\/dashboard\/project\/([a-z0-9]+).*$/i, "https://$1.supabase.co");
+    if (!url || !cfg.chave) { erro("Esta página ainda não está ligada ao banco (config.js). Avise a E4M."); return; }
+    const carregar = src => new Promise((ok, falha) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = () => falha(new Error("Sem internet ou bloqueado: " + src)); document.head.appendChild(s); });
+    try { if (!window.supabase) await carregar(cfg.biblioteca || "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js"); }
+    catch (e) { erro(e.message); return; }
+    const db = window.supabase.createClient(url, cfg.chave, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
+    const rpc = async (nome, args) => { const r = await db.rpc(nome, args); if (r.error) throw new Error(r.error.message || "Erro no banco."); return r.data; };
+    const aviso = (t, k) => (window.ui && ui.aviso ? ui.aviso(t, k) : alert(t));
+    const dataTxt = s => (s ? new Date(s).toLocaleDateString("pt-BR") : "");
+
+    /* ---------------- o questionário ---------------- */
+    if (tipo === "pesquisa") {
+        let d;
+        try { d = await rpc("ler_pesquisa_prospect", { p_codigo: codigo }); } catch (e) { erro(e.message); return; }
+        document.getElementById("clienteNome").textContent = d.nome || "";
+        document.title = `E4M · Estudo de frota · ${d.nome || ""}`;
+        let salvoEm = null, enviado = Boolean(d.respondido_em), gravando = false, pendente = null;
+        caixa.innerHTML = `<section class="cliente-intro">
+                <h1>Questionário do estudo de frota${d.nome ? " · " + esc(d.nome) : ""}</h1>
+                <p>Com estas respostas a E4M simula a sua operação com a frota de Atta: quantos são precisos, o que muda no dia a dia e quanto isso vale. Leva uns 20 minutos; o que você não souber, marque <b>não sei</b> (usamos uma referência e deixamos isso claro no relatório).</p>
+                <p class="suave">Tudo é salvo sozinho enquanto você responde: pode parar e voltar por este mesmo link${d.expira_em ? ` até ${dataTxt(d.expira_em)}` : ""}. ${enviado ? "<b>Você já enviou; pode corrigir e enviar de novo.</b>" : ""}</p>
+            </section><div id="pesquisaCaixa"></div>`;
+        const gravar = async (resp, final) => {
+            if (gravando) { pendente = [resp, final]; return; }
+            gravando = true;
+            try {
+                await rpc("salvar_pesquisa_prospect", { p_codigo: codigo, p_respostas: resp, p_final: Boolean(final) });
+                salvoEm = new Date();
+                if (final) { enviado = true; aviso("Enviado. Obrigado! A E4M entra em contato com o estudo.", "sucesso"); }
+            } catch (e) { aviso("Não foi possível salvar: " + e.message, "erro"); }
+            gravando = false;
+            const s = document.querySelector(".pq-salvo"); if (s) s.textContent = textoSalvo();
+            if (pendente) { const [r, f] = pendente; pendente = null; gravar(r, f); }
+        };
+        const textoSalvo = () => (salvoEm ? `Salvo às ${salvoEm.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}` : "");
+        const form = Pesquisa.criar(document.getElementById("pesquisaCaixa"), d.respostas || {}, {
+            aoMudar: resp => gravar(resp, false),
+            aoEnviar: resp => gravar(resp, true),
+            textoEnviar: enviado ? "Enviar de novo" : "Enviar para a E4M",
+            textoSalvo, aviso
+        });
+        window.addEventListener("beforeunload", () => form.salvarJa());
+        return;
+    }
+
+    /* ---------------- o diário de viagens ---------------- */
+    if (tipo === "diario") {
+        let d;
+        try { d = await rpc("ler_diario_prospect", { p_codigo: codigo }); } catch (e) { erro(e.message); return; }
+        document.getElementById("clienteTitulo").textContent = "Diário de viagens";
+        document.getElementById("clienteNome").textContent = d.nome || "";
+        const pontos = d.pontos || [];
+        const CHAVE = "diarioE4M:" + codigo.slice(0, 12);
+        const ler = () => { try { return JSON.parse(localStorage.getItem(CHAVE) || "{}"); } catch (e) { return {}; } };
+        const guardar = x => { try { localStorage.setItem(CHAVE, JSON.stringify(x)); } catch (e) { /* sem espaço: segue */ } };
+        let est = Object.assign({ quem: "", feitas: [], emCurso: null }, ler());
+        let hoje = Number(d.hoje) || 0;
+        const nomeDe = id => pontos.find(p => p.id === id)?.nome || id;
+        const ops = sel => pontos.map(p => `<option value="${esc(p.id)}" ${p.id === sel ? "selected" : ""}>${esc(p.nome)}</option>`).join("");
+        const hora = ms => new Date(ms).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+        function desenhar() {
+            const c = est.emCurso;
+            caixa.innerHTML = `<section class="cliente-intro"><h1>Diário de viagens</h1>
+                <p>Cada vez que alguém leva material de um ponto a outro, toque <b>Saí</b> ao sair e <b>Cheguei</b> ao chegar. Três a cinco dias de diário deixam o estudo muito mais preciso.</p>
+                <p class="suave">${hoje} viagem(ns) registrada(s) hoje${d.nome ? " em " + esc(d.nome) : ""}.</p></section>
+            <section class="diario">
+                ${pontos.length < 2 ? `<div class="cliente-erro">O questionário ainda não tem os pontos. Avise a E4M.</div>` : c ? `
+                <div class="diario-em-curso"><span>Saiu de <b>${esc(nomeDe(c.de))}</b> às ${hora(c.saiu)} para</span><b>${esc(nomeDe(c.para))}</b>
+                    <div class="diario-botoes"><button type="button" class="btn btn-primario" data-d="chegou">Cheguei</button><button type="button" class="btn" data-d="cancelar">Cancelar</button></div></div>` : `
+                <label>De<select id="dDe">${ops(est.ultimoDe)}</select></label>
+                <label>Para<select id="dPara">${ops(est.ultimoPara || pontos[1]?.id)}</select></label>
+                <label>O que vai (opcional)<input type="text" id="dCarga" maxlength="60" value="${esc(est.carga || "")}" placeholder="ex.: kit, carrinho, palete"></label>
+                <label>Seu nome (opcional)<input type="text" id="dQuem" maxlength="40" value="${esc(est.quem || "")}" autocomplete="name"></label>
+                <button type="button" class="btn btn-primario btn-grande" data-d="saiu">Saí</button>`}
+                ${est.feitas.length ? `<h3>Suas últimas viagens</h3><ul class="diario-lista">${est.feitas.slice(-8).reverse().map(v => `<li><span>${esc(nomeDe(v.de))} → ${esc(nomeDe(v.para))}</span><span>${hora(v.saiu)} · ${Math.max(1, Math.round((v.chegou - v.saiu) / 60000))} min</span></li>`).join("")}</ul>` : ""}
+            </section>`;
+        }
+        caixa.addEventListener("click", async ev => {
+            const b = ev.target.closest("[data-d]");
+            if (!b) return;
+            if (b.dataset.d === "saiu") {
+                const de = document.getElementById("dDe").value, para = document.getElementById("dPara").value;
+                if (!de || !para || de === para) { aviso("Escolha de onde sai e para onde vai (pontos diferentes).", "aviso"); return; }
+                est.quem = document.getElementById("dQuem").value.trim(); est.carga = document.getElementById("dCarga").value.trim();
+                est.ultimoDe = de; est.ultimoPara = para;
+                est.emCurso = { de, para, saiu: Date.now() };
+                guardar(est); desenhar();
+            } else if (b.dataset.d === "cancelar") { est.emCurso = null; guardar(est); desenhar(); }
+            else if (b.dataset.d === "chegou") {
+                const c = est.emCurso; if (!c) return;
+                const chegou = Date.now();
+                b.disabled = true;
+                try {
+                    await rpc("registrar_viagem_prospect", { p_codigo: codigo, p_de: c.de, p_para: c.para, p_saiu: new Date(c.saiu).toISOString(), p_chegou: new Date(Math.max(chegou, c.saiu + 1000)).toISOString(), p_carga: est.carga || "", p_quem: est.quem || "" });
+                    est.feitas.push({ de: c.de, para: c.para, saiu: c.saiu, chegou }); est.feitas = est.feitas.slice(-50);
+                    est.emCurso = null; hoje++;
+                    // volta: o próximo sai de onde chegou
+                    est.ultimoDe = c.para; est.ultimoPara = c.de;
+                    guardar(est); desenhar();
+                    aviso("Viagem registrada.", "sucesso");
+                } catch (e) { b.disabled = false; aviso("Não foi possível registrar: " + e.message, "erro"); }
+            }
+        });
+        desenhar();
+        return;
+    }
+
+    /* ---------------- o relatório ---------------- */
+    let d;
+    try { d = await rpc("ler_relatorio_prospect", { p_codigo: codigo }); } catch (e) { erro(e.message); return; }
+    document.getElementById("clienteTitulo").textContent = "Relatório do estudo de frota";
+    document.getElementById("clienteNome").textContent = d.nome || "";
+    document.title = `E4M · Estudo de frota · ${d.nome || ""}`;
+    const R = Object.assign({}, d.resultado, { cliente: Object.assign({ nome: d.nome, setor: d.setor, cidade: d.cidade }, d.resultado?.cliente || {}) });
+    caixa.innerHTML = `<div class="cliente-acoes grupo"><button type="button" class="btn btn-primario" id="baixarPdf">Baixar em PDF</button><span class="suave">No diálogo de impressão, escolha "Salvar como PDF".</span></div>${RelatorioEstudo.html(R, { paraCliente: true })}`;
+    document.getElementById("baixarPdf").addEventListener("click", () => window.print());
+})();
+</script>
+</body>
+</html>

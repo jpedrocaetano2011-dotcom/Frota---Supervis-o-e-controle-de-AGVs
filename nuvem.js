@@ -49,7 +49,8 @@
         // 0.20: calendário da fábrica (turnos, intervalos, paradas)
         calendario: ["fornecedor", "admin", "lider"],
         // 0.21: estudo de frota
-        estudo: ["fornecedor", "admin", "lider"]
+        // 0.22: só a E4M (o cliente vê o relatório pelo link)
+        estudo: ["fornecedor"]
     };
     // Comandos que o despachante manda (o tablet do posto também despacha)
     const TOPICOS_DESPACHO = /^comando\/(fila|fila\/adicionar|saidas)$/;

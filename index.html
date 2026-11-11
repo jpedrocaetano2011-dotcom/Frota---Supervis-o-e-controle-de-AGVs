@@ -56,11 +56,16 @@
         <a href="#" class="menu-item" data-tela="despacho"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M4 12h7M4 18h10M17 9l4 3-4 3"/></svg><span>Despacho</span><b class="menu-badge" id="menuBadgeDespacho" hidden>0</b></a>
         <a href="#" class="menu-item" data-tela="programacao"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2M9 3h6M18.5 6.5l1.5-1.5"/></svg><span>Programação</span></a>
         <a href="#" class="menu-item" data-tela="indicadores"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V4M4 20h16M8 16v-5M12 16V8M16 16v-3M20 16V6"/></svg><span>Indicadores</span></a>
-        <a href="#" class="menu-item" data-tela="estudo"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16M6 16l4-5 3 3 5-7M18 7h-3M18 7v3"/></svg><span>Estudo de frota</span></a>
         <a href="#" class="menu-item" data-tela="missoes"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4h11l-2 4 2 4H5"/></svg><span>Missões</span></a>
         <a href="#" class="menu-item" data-tela="controlePlanta"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h18v18H3zM3 9h8v12M11 14h10"/></svg><span>Planta</span></a>
         <a href="#" class="menu-item so-nuvem" data-tela="usuarios" hidden><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11a4 4 0 1 0 0-8a4 4 0 1 0 0 8zM2 21v-1a6 6 0 0 1 6-6h2a6 6 0 0 1 6 6v1M16 3.5a4 4 0 0 1 0 7.5M22 21v-1a6 6 0 0 0-4-5.6"/></svg><span>Usuários</span></a>
         <a href="#" class="menu-item" data-tela="agvVirtual"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l9 5v10l-9 5-9-5V7zM12 22V12M21 7l-9 5-9-5"/></svg><span>AGV virtual</span></a>
+
+        <!-- 0.22: o estudo de frota é da E4M (o fornecedor); o cliente vê o relatório pelo link -->
+        <div class="menu-divider so-fornecedor"></div>
+        <div class="menu-titulo so-fornecedor">E4M</div>
+        <a href="#" class="menu-item so-fornecedor" data-tela="estudos"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16M6 16l4-5 3 3 5-7M18 7h-3M18 7v3"/></svg><span>Estudos de frota</span></a>
+        <a href="#" class="menu-item menu-sub so-fornecedor" data-tela="estudo"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h18v18H3zM8 15l3-4 2 2 3-4"/></svg><span>Estudo desta planta</span></a>
     </nav>
 
     <div class="sidebar-footer">
@@ -202,6 +207,10 @@
          ======================================================== -->
     <section id="estudo" class="tela">
         <div id="estudoConteudo" class="estudo-tela"></div>
+    </section>
+
+    <section id="estudos" class="tela">
+        <div id="estudosConteudo" class="estudo-tela"></div>
     </section>
 
     <section id="indicadores" class="tela">
@@ -1030,7 +1039,8 @@
                    "configuracoes.js", "agv-virtual.js", "script.js", "calendario.js", "rotina.js", "usuarios.js",
                    "despachante.js", "despacho.js", "postos.js", "programacao.js",
                    "modelos.js", "manutencao.js", "copias.js", "indicadores.js", "mira.js",
-                   "dispositivos.js", "io-virtual.js", "corredores.js", "sinalizacao.js", "frota-controle.js", "camadas.js", "estudo.js", "estudo-tela.js"]);
+                   "dispositivos.js", "io-virtual.js", "corredores.js", "sinalizacao.js", "frota-controle.js", "camadas.js", "estudo.js", "estudo-tela.js",
+                   "pesquisa.js", "estudo-negocio.js", "relatorio-estudo.js", "estudos-tela.js"]);
 </script>
 </body>
 </html>
