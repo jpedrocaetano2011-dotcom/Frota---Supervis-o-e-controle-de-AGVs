@@ -1,5 +1,5 @@
 /* ============================================================
-   POSTOS — cadastro (Frota › Postos) e a tela do posto (tablet)
+   POSTOS — cadastro (Operação › Postos) e a tela do posto (tablet)
    ============================================================
    Posto = um lugar que pede missões: nome, ponto da planta, botões
    (cada botão aponta para uma missão), se aceita pedido urgente
@@ -442,7 +442,7 @@ const TelaPosto = (function () {
         }).join("");
         return `<section class="posto-painel" data-painel="${esc(posto.id)}" aria-label="Posto ${esc(posto.nome)}">
             <header class="posto-cabecalho"><h2>${esc(posto.nome)}</h2><span class="posto-id">${esc(posto.id)}</span></header>
-            <div class="posto-botoes-grade">${botoes || `<p class="suave">Este posto não tem botões. Configure em Frota › Postos.</p>`}</div>
+            <div class="posto-botoes-grade">${botoes || `<p class="suave">Este posto não tem botões. Configure em Operação › Postos.</p>`}</div>
         </section>`;
     }
 
@@ -466,7 +466,7 @@ const TelaPosto = (function () {
             aviso.hidden = !semDespachante;
         }
         if (!lista.length) {
-            ui.trocarHtml(caixa, `<div class="posto-vazio"><h2>Nenhum posto para este usuário</h2><p>Peça ao administrador para vincular este usuário a um posto em Frota › Postos.</p></div>`);
+            ui.trocarHtml(caixa, `<div class="posto-vazio"><h2>Nenhum posto para este usuário</h2><p>Peça ao administrador para vincular este usuário a um posto em Operação › Postos.</p></div>`);
             return;
         }
         if (aba && !lista.some(p => p.id === aba)) aba = null;

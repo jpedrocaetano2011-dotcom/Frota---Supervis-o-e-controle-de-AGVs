@@ -477,7 +477,7 @@
         return { ok: true };
     }
 
-    // Parte do cartão do posto (Frota › Postos): ligar o PIN pessoal e as pessoas
+    // Parte do cartão do posto (Operação › Postos): ligar o PIN pessoal e as pessoas
     function htmlPessoas(posto, podeEditar) {
         if (!posto || !posto.id) return "";
         const delas = pessoas.filter(p => p.posto === posto.id);
@@ -801,7 +801,7 @@
         if (!caixa || !document.getElementById("programacao")?.classList.contains("ativa")) return;
         const postos = Despacho.postos();
         const corpo = postos.map(htmlPosto).filter(Boolean).join("");
-        const html = htmlCapacidade() + (corpo || `<p class="suave rotina-vazio">Nenhum posto com botões. Cadastre os postos e os botões em Frota › Postos.</p>`) +
+        const html = htmlCapacidade() + (corpo || `<p class="suave rotina-vazio">Nenhum posto com botões. Cadastre os postos e os botões em Operação › Postos.</p>`) +
             (Despacho.lider().eu || Despacho.lider().nome ? "" : `<p class="alerta-faixa">Ninguém está despachando agora: a programação só cria pedidos enquanto alguma tela ou tablet estiver despachando.</p>`) + htmlRegistro();
         // não redesenha por cima de quem está digitando no editor
         const foco = document.activeElement;

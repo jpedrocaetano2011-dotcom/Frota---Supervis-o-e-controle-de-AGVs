@@ -89,7 +89,7 @@ const Usuarios = (() => {
                     : selectPapel(u.papel, `data-papel="${esc(u.usuario_id)}" aria-label="Papel de ${esc(u.email)}"`)}</td>
                 <td>${TEM_PIN.includes(u.papel)
                     ? `<button type="button" class="btn btn-mini" data-pin-usuario="${esc(u.usuario_id)}" data-email="${esc(u.email)}">${comPin.has(u.usuario_id) ? "Trocar PIN" : "Definir PIN"}</button>${comPin.has(u.usuario_id) ? "" : `<div class="suave">sem PIN</div>`}`
-                    : u.papel === "posto" ? `<span class="suave">vincule em Frota › Postos</span>` : ""}</td>
+                    : u.papel === "posto" ? `<span class="suave">vincule em Operação › Postos</span>` : ""}</td>
                 <td class="usuarios-acao">${u.usuario_id === eu ? "" : `<button type="button" class="btn btn-mini btn-perigo" data-remover="${esc(u.usuario_id)}" data-email="${esc(u.email)}">Remover</button>`}</td>
             </tr>`).join("");
         const pendentes = convites.map(c => `

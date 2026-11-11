@@ -114,7 +114,7 @@ const EstudoTela = (function () {
     const idFluxo = () => "F" + Math.random().toString(36).slice(2, 8);
     function importarDaPlanta() {
         const lista = Estudo.fluxosDaPlanta(listaPostos(), listaProgramacoes(), listaMissoes());
-        if (!lista.length) { ui.aviso("Nenhum posto com botão de missão. Cadastre os postos (Frota › Postos) ou monte os fluxos à mão.", "aviso"); return; }
+        if (!lista.length) { ui.aviso("Nenhum posto com botão de missão. Cadastre os postos (Operação › Postos) ou monte os fluxos à mão.", "aviso"); return; }
         const ja = new Set(atual.dados.fluxos.map(f => f.id));
         const novos = lista.filter(f => !ja.has(f.id));
         atual.dados.fluxos.push(...novos);
@@ -210,7 +210,7 @@ const EstudoTela = (function () {
     /* ---------------- rodar ---------------- */
     async function rodar() {
         const pl = planta();
-        if (!pl?.nos?.length) { ui.aviso("Publique a planta primeiro (Operação › Planta): o estudo usa as rotas dela.", "aviso"); return; }
+        if (!pl?.nos?.length) { ui.aviso("Publique a planta primeiro (Fábrica › Planta): o estudo usa as rotas dela.", "aviso"); return; }
         const fl = atual.dados.fluxos.filter(f => f.ativo !== false);
         if (!fl.length) { ui.aviso("Coloque pelo menos um fluxo.", "aviso"); return; }
         sincronizarFrotas();

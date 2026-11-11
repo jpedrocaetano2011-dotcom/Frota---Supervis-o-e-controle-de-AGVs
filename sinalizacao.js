@@ -1,5 +1,5 @@
 /* ============================================================
-   SINALIZAÇÃO DO ATTA (0.20) — Frota › Sinalização
+   SINALIZAÇÃO DO ATTA (0.20) — Fábrica › Sinalização
    ============================================================
    A legenda das luzes (todo mundo vê) e a configuração da empresa
    (só o administrador muda). Uma tabela só para a planta inteira:

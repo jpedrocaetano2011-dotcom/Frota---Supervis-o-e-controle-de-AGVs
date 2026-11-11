@@ -108,7 +108,7 @@
         ];
     }
 
-    // Postos da planta pequena (Frota › Postos): cada um com os seus botões
+    // Postos da planta pequena (Operação › Postos): cada um com os seus botões
     function postosPequenos() {
         return [
             { id: "P1", nome: "Prensa 1", ponto: "E01", permiteUrgente: true, usuarios: [],

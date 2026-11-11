@@ -331,6 +331,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 .menu { display: flex; flex-direction: column; gap: 2px; }
 .menu-titulo { font-size: 11px; font-weight: 600; color: var(--muted); padding: 6px 10px 4px; text-transform: uppercase; letter-spacing: .8px; }
 .menu-divider { height: 1px; background: var(--border); margin: 10px 6px; }
+/* 0.24.2: o seletor do Atta é o cabeçalho das páginas de um Atta só */
+.menu .agv-atual { margin: 0 0 4px; padding: 8px 10px; }
+.menu .agv-atual-id { width: 26px; height: 26px; }
 
 .menu-item {
     display: flex; align-items: center; gap: 10px;
@@ -1511,7 +1514,7 @@ body.entrando > :not(.tela-entrada):not(.toasts):not(script) { visibility: hidde
 .fila-pedido-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; flex-wrap: wrap; }
 .fila-pedido-acoes { display: flex; gap: 4px; }
 
-/* Frota › Postos */
+/* Operação › Postos */
 .postos-intro { max-width: 70ch; font-size: 13.5px; }
 .postos-pin { display: flex; gap: 16px; align-items: end; flex-wrap: wrap; }
 .postos-pin .campo { max-width: 260px; }
@@ -1834,7 +1837,7 @@ circle.calor { stroke: #fff; stroke-width: 1px; vector-effect: non-scaling-strok
 .posto-auto-acoes .btn-mini { min-height: 36px; padding: 0 12px; font-size: 14px; }
 .posto-tag-auto { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; background: var(--green-soft); color: var(--green); font-size: 12px; font-weight: 600; vertical-align: middle; }
 
-/* Frota › Postos: pessoas do posto (PIN pessoal) */
+/* Operação › Postos: pessoas do posto (PIN pessoal) */
 .posto-pessoas .pessoas-lista { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
 .pessoa-linha { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
 .pessoa-linha .btn-mini:first-of-type { margin-left: auto; }
