@@ -17,6 +17,14 @@
    - o despacho: o pedido vai para o Atta livre, do modelo certo, que
      chega antes; prioridade primeiro;
    - um Atta em manutenção (premissa "indisponíveis").
+   - (0.24) o Atta de produção passa pelos pontos do caminho sem parar
+     quando a rota segue reto (premissa passarSemParar);
+   - (0.24) o pré-abastecimento: parte dos pedidos do pico do começo do
+     turno e da volta do intervalo sai antes (premissa preparo), com o
+     Atta trabalhando nos 30 min antes do turno e no intervalo; o prazo
+     conta da hora em que a linha precisa;
+   - (0.24) os modos de entrega: chamada (de → para), troca (leva o cheio,
+     traz o vazio) e milk run (rota com várias paradas, de tempo em tempo).
    O que ela NÃO faz: rodar o firmware (isso é o Atta virtual, para
    conferir o cenário escolhido), bateria, falhas e gente no caminho.
 */
@@ -32,10 +40,18 @@
 
     const PREMISSAS_PADRAO = {
         crescimento: 0, variacao: 0.15, picoInicio: 0.5, picoVolta: 0.3, indisponiveis: 0,
-        ocupacaoMax: 0.75, prazoAlvo: 0.95, rodadas: 8, dia: 1, semente: 7
+        ocupacaoMax: 0.75, prazoAlvo: 0.95, rodadas: 8, dia: 1, semente: 7,
+        // 0.24: o Atta de produção passa pelos pontos sem parar (1) ou para em cada tag, como o protótipo (0)
+        passarSemParar: 1,
+        // 0.24: pré-abastecimento: a parte do pico que sai antes (0 = nada; 1 = o pico inteiro) e com quanta antecedência
+        preparo: 0.7, antecedenciaMin: 30
     };
+    // 0.24: a menor frota que atende: no prazo (P50) ≥ alvo, ocupação (P50) ≤ máximo e quase nenhum pedido
+    // sobrando no fim do dia (até 0,5% dos pedidos, no mínimo meio pedido)
+    const atendeR = (r, pr) => Boolean(r) && r.noPrazo[1] >= pr.prazoAlvo && r.ocupacao[1] <= pr.ocupacaoMax && r.naoAtendidos[1] <= Math.max(0.5, 0.005 * (r.pedidos?.[1] || 0));
     const MAX_FROTAS = 30;
-    const DEMANDAS = { porHora: "pedidos por hora", consumo: "pelo consumo", horarios: "horários fixos" };
+    const DEMANDAS = { porHora: "pedidos por hora", consumo: "pelo consumo", horarios: "horários fixos", ciclo: "de tempo em tempo (milk run)" };
+    const ENTREGAS = { chamada: "quando a linha pede", troca: "troca (leva o cheio, traz o vazio)", milkrun: "milk run (rota com paradas, de tempo em tempo)" };
 
     // números aleatórios repetíveis (a mesma semente dá o mesmo estudo)
     function aleatorio(semente) {
@@ -61,6 +77,7 @@
             return Math.max(0, (Number(d.pecasHora) || 0) * (Number(d.consumoPeca) || 1) / pv);
         }
         if (d.tipo === "horarios") return (d.horarios || []).length / 16;
+        if (d.tipo === "ciclo") return 60 / Math.max(5, Number(d.cicloMin) || 20);
         return Math.max(0, Number(d.porHora) || 0);
     }
 
@@ -70,8 +87,19 @@
             const m = (missoes || []).find(x => x.id === f.missao);
             if (m) return m;
         }
-        if (f.de && f.para) return { id: "__F_" + f.id, nome: f.nome, etapas: [{ tipo: "IR_PARA", destino: f.de }, { tipo: "CARREGAR" }, { tipo: "IR_PARA", destino: f.para }, { tipo: "DESCARREGAR" }] };
+        if (f.de && f.para) return { id: "__F_" + f.id, nome: f.nome, etapas: etapasDaEntrega(f) };
         return null;
+    }
+    // 0.24: as etapas de uma viagem conforme o modo de entrega
+    function etapasDaEntrega(f) {
+        const ir = d => ({ tipo: "IR_PARA", destino: d });
+        if (f.entrega === "milkrun") {
+            const paradas = [f.para].concat(f.paradas || []).filter((x, i, a) => x && x !== f.de && a.indexOf(x) === i);
+            // sai do supermercado com o comboio, deixa o cheio e pega o vazio em cada parada, volta e descarrega os vazios
+            return [ir(f.de), { tipo: "CARREGAR" }].concat(...paradas.map(p => [ir(p), { tipo: "DESCARREGAR" }, { tipo: "CARREGAR" }]), [ir(f.de), { tipo: "DESCARREGAR" }]);
+        }
+        if (f.entrega === "troca") return [ir(f.de), { tipo: "CARREGAR" }, ir(f.para), { tipo: "DESCARREGAR" }, { tipo: "CARREGAR" }, ir(f.de), { tipo: "DESCARREGAR" }];
+        return [ir(f.de), { tipo: "CARREGAR" }, ir(f.para), { tipo: "DESCARREGAR" }];
     }
 
     // "Importar da planta": um fluxo por botão de posto (e a programação, se houver).
@@ -140,12 +168,52 @@
         if (dt.intervalos.some(i => m >= i.b && m < i.b + 30)) x += pr.picoVolta;
         return x;
     }
+    // 0.24: o começo do pico em que m cai (para o pré-abastecimento): o começo do turno ou o fim do intervalo
+    function inicioDoPico(dt, m) {
+        const t = dt.turnos.find(t => m >= t.a && m < t.a + 60);
+        if (t) return t.a;
+        const i = dt.intervalos.find(i => m >= i.b && m < i.b + 30);
+        return i ? i.b : null;
+    }
+    // 0.24: as janelas do pré-abastecimento: os minutos antes do turno (fora de outro turno) e o fim do intervalo no berço
+    function janelasPreparo(dt, pr) {
+        if (!(pr.preparo > 0)) return [];
+        const ant = Math.max(5, Number(pr.antecedenciaMin) || 30);
+        const j = [];
+        dt.turnos.forEach(t => { const a = t.a - ant; if (!dt.turnos.some(o => o !== t && a < o.b && t.a > o.a)) j.push([a, t.a]); });
+        dt.intervalos.filter(i => !i.postos.length && i.acao === "BERCO").forEach(i => j.push([Math.max(i.a, i.b - ant), i.b]));
+        return j;
+    }
+    const naJanela = (j, m) => j.some(([a, b]) => m >= a && m < b);
 
-    // os pedidos de um fluxo no dia simulado (minutos)
-    function gerarPedidos(f, dt, pr, rnd, fatorRodada) {
+    // os pedidos de um fluxo no dia simulado (minutos). comNecessidade: devolve [{ m, nec }]:
+    // m é quando o pedido sai (no pré-abastecimento, antes do pico) e nec quando a linha precisa
+    function gerarPedidos(f, dt, pr, rnd, fatorRodada, comNecessidade) {
+        const lista = gerarPedidosBase(f, dt, pr, rnd, fatorRodada);
+        if (!comNecessidade) return lista;
+        const ant = Math.max(5, Number(pr.antecedenciaMin) || 30);
+        const prep = Math.max(0, Math.min(1, Number(pr.preparo) || 0));
+        const d = f.demanda || {};
+        return lista.map(m => {
+            if (!prep || d.tipo === "horarios" || d.tipo === "ciclo") return { m, nec: m };
+            const ini = inicioDoPico(dt, m);
+            if (ini == null) return { m, nec: m };
+            const x = pico(dt, m, pr);
+            // só a parte que o pico acrescenta, e dela a fração "preparo", sai antes
+            if (x > 1 && rnd() < prep * (x - 1) / x) return { m: ini - ant * (0.15 + 0.85 * rnd()), nec: m };
+            return { m, nec: m };
+        });
+    }
+    function gerarPedidosBase(f, dt, pr, rnd, fatorRodada) {
         const lista = [];
         const d = f.demanda || {};
         const valendo = m => emTurno(dt, m, f.turnos) && !(f.pausaIntervalo !== false && intervaloEm(dt, m, f.posto) && intervaloEm(dt, m, f.posto).acao !== "TRABALHAR");
+        if (d.tipo === "ciclo") {
+            // milk run: uma volta a cada ciclo, desde o começo de cada turno
+            const ciclo = Math.max(5, Number(d.cicloMin) || 20) / (1 + pr.crescimento);
+            dt.turnos.forEach(t => { for (let m = t.a + rnd() * 2; m < t.b; m += ciclo) if (valendo(m)) lista.push(m); });
+            return lista.sort((a, b) => a - b);
+        }
         if (d.tipo === "horarios") {
             (d.horarios || []).forEach(h => { const m = min(h); if (m !== null && valendo(m)) lista.push(m + rnd() * 0.5); });
             // crescimento: pedidos a mais no meio dos horários
@@ -176,8 +244,24 @@
     // Cada viagem vira uma linha do tempo (s, a partir da saída): quando o Atta pede
     // zonas (todas de uma vez, como o firmware) e quando solta. O tempo de cada trecho
     // é o mesmo que o despacho usa (Despachante.tempoEtapa, na velocidade do modelo).
-    function criarRotas(planta, missoes) {
+    // 0.24: o tempo de um trecho no Atta de produção: passa pelo ponto sem parar quando segue reto;
+    // para (desacelera, gira, acelera) só onde gira, anda de lado ou para na faixa
+    function tempoTrechoProducao(tr, frente, vel) {
+        const V = vel && vel.cruzeiro > 0 ? vel : { cruzeiro: 1.2, maxima: 1.5, aproximacao: 0.45, aceleracao: 0.4, lateral: 0.3 };
+        const lateral = tr.tipo === "LATERAL";
+        const alvo = lateral ? tr.orientacao : tr.angulo;
+        const giro = Math.abs(P().calcularGiro(frente, alvo));
+        let v = lateral ? (V.lateral || 0.3) : Math.min(Number(tr.velocidade) > 0 ? Number(tr.velocidade) : V.cruzeiro, V.cruzeiro);
+        if (tr.tipo === "CURVA") v = Math.min(v, (V.maxima || V.cruzeiro) * 0.7);
+        const L = Number(tr.comprimento) || 0;
+        const para = (giro > 1 && tr.tipo !== "CURVA") || lateral;
+        let t = L / Math.max(0.05, v) + 0.3 + (para ? giro / 60 + 2 * v / (V.aceleracao || 0.4) : 0);
+        if (tr.faixa) t += 1 + Math.max(0, (Number(tr.faixa.ate) - Number(tr.faixa.parar)) || 0) * (1 / Math.max(0.01, V.aproximacao || 0.45) - 1 / Math.max(0.05, v));
+        return t;
+    }
+    function criarRotas(planta, missoes, opcoes0 = {}) {
         const cache = new Map();
+        const producao = opcoes0.passarSemParar !== false && opcoes0.passarSemParar !== 0;
         // { ok, dur, fim, aproximacao, passos: [{t, pedir|soltar: [zona]}], trechos: [seg], metros }
         return function viagem(missao, ponto, modeloId, opcoes = {}) {
             const chave = `${missao.id}|${ponto}|${modeloId}|${opcoes.pegarS ?? ""}|${opcoes.entregarS ?? ""}`;
@@ -202,13 +286,13 @@
                         let frente = e.orientacaoInicial;
                         (e.trechos || []).forEach(tr => {
                             if (tr.pedir) pedir(tr.pedir, t);
-                            t += D().tempoEtapa({ tipo: "MOVIMENTO", orientacaoInicial: frente, trechos: [tr] }, vel);
+                            t += producao ? tempoTrechoProducao(tr, frente, vel) : D().tempoEtapa({ tipo: "MOVIMENTO", orientacaoInicial: frente, trechos: [tr] }, vel);
                             frente = tr.tipo === "LATERAL" ? tr.orientacao : tr.angulo;
                             metros += Number(tr.comprimento) || 0;
                             if (tr.segmento) trechos.push(tr.segmento);
                             if (tr.liberar) soltar(tr.liberar, t);
                         });
-                        if (e.orientacaoChegada >= 0) { const g = Math.abs(P().calcularGiro(frente, e.orientacaoChegada)); if (g > 1) t += g / 30; }
+                        if (e.orientacaoChegada >= 0) { const g = Math.abs(P().calcularGiro(frente, e.orientacaoChegada)); if (g > 1) t += g / (producao ? 60 : 30); }
                     } else if (e.tipo === "CARREGAR") t += Number(opcoes.pegarS ?? 30);
                     else if (e.tipo === "DESCARREGAR") t += Number(opcoes.entregarS ?? 30);
                     else t += D().tempoEtapa(e, vel);
@@ -270,7 +354,7 @@
         fluxos.forEach(f => {
             const missao = missaoDoFluxo(f, missoes);
             if (!missao) return;
-            gerarPedidos(f, dt, pr, rnd, fatorRodada).forEach(m => pedidos.push({ f, missao, criado: m * 60, prioridade: Number(f.prioridade) || 2 }));
+            gerarPedidos(f, dt, pr, rnd, fatorRodada, true).forEach(x => pedidos.push({ f, missao, criado: x.m * 60, necessario: x.nec * 60, antes: x.m < x.nec, prioridade: Number(f.prioridade) || 2 }));
         });
         pedidos.sort((a, b) => a.criado - b.criado);
 
@@ -279,7 +363,9 @@
         const dono = {}, esperando = [];
         const esperaZona = {}, passagens = {}, feitos = [], fila = [];
         let travamentos = 0;
-        const disponivel = t => emTurno(dt, t / 60) && !bercoEm(dt, t / 60);
+        // 0.24: o Atta trabalha também nas janelas do pré-abastecimento (antes do turno e no fim do intervalo)
+        const janelas = janelasPreparo(dt, pr);
+        const disponivel = t => (emTurno(dt, t / 60) && !bercoEm(dt, t / 60)) || (janelas.length > 0 && naJanela(janelas, t / 60));
         const somarHoras = (a, t0, t1) => { for (let x = t0; x < t1;) { const h = Math.floor(x / 3600), y = Math.min(t1, (h + 1) * 3600); a.porHora[h] = (a.porHora[h] || 0) + (y - x); x = y; } };
 
         function agendar(v, t, forcar) {
@@ -328,7 +414,8 @@
             a.livre = true; a.viagens++; a.metros += v.rota.metros; a.ocupado += agora - v.saiu;
             somarHoras(a, v.saiu, agora);
             a.ponto = disponivel(agora) ? (v.rota.fim || a.ponto) : a.berco;
-            feitos.push({ p: v.p, inicio: v.saiu, espera: v.espera, termina: agora, atta: a.id, tempo: agora - v.p.criado });
+            // o tempo conta do pedido ou, no pré-abastecimento, da hora em que a linha precisa (entregar antes = 0)
+            feitos.push({ p: v.p, inicio: v.saiu, espera: v.espera, termina: agora, atta: a.id, tempo: Math.max(0, agora - Math.max(v.p.criado, v.p.necessario ?? v.p.criado)) });
             despachar(agora);
         }
         function despachar(agora) {
@@ -357,6 +444,7 @@
         const viradas = new Set();
         dt.turnos.forEach(t => { viradas.add(t.a * 60); viradas.add(t.b * 60); });
         dt.intervalos.forEach(i => { viradas.add(i.a * 60); viradas.add(i.b * 60); });
+        janelas.forEach(([a, b]) => { viradas.add(a * 60); viradas.add(b * 60); });
         viradas.forEach(t => ev.por(t, agora => {
             // começou o intervalo no berço ou acabou o turno: quem está livre vai para o berço
             if (!disponivel(agora)) atta.forEach(a => { if (a.livre) a.ponto = a.berco; });
@@ -372,7 +460,7 @@
 
         // métricas
         const entregues = feitos.filter(x => x.termina !== undefined);
-        const horasDisp = (() => { let s = 0; for (let m = dt.inicio; m < dt.fim; m++) if (disponivel(m * 60)) s++; return s / 60; })();
+        const horasDisp = (() => { let s = 0; for (let m = dt.inicio - 60; m < dt.fim; m++) if (disponivel(m * 60)) s++; return s / 60; })();
         const tempos = entregues.map(x => x.tempo / 60);
         const prazo = x => Number(x.p.f.prazoMin) || 10;
         const noPrazo = entregues.filter(x => x.tempo / 60 <= prazo(x)).length;
@@ -398,7 +486,7 @@
             esperaTrafegoMin: Object.values(esperaZona).reduce((s, x) => s + x, 0) / 60,
             esperaViagemS: entregues.length ? entregues.reduce((s, x) => s + x.espera, 0) / entregues.length : 0,
             esperaViagemP90: quantil(entregues.map(x => x.espera), 0.9) || 0,
-            esperaZona, passagens, porHora, porFluxo, travamentos,
+            esperaZona, passagens, porHora, porFluxo, travamentos, antecipados: pedidos.filter(p => p.antes).length,
             porAtta: atta.map(a => ({ id: a.id, modelo: a.modelo, viagens: a.viagens, km: a.metros / 1000, ocupacao: horasDisp ? a.ocupado / (horasDisp * 3600) : 0 })),
             horasDisp, falhas: feitos.filter(x => x.falhou).length
         };
@@ -440,7 +528,8 @@
         const planta = base.planta;
         const dt = diaDeTrabalho(cenario.calendario, Number(cenario.premissas?.dia ?? 1));
         const bercos = planta.nos.filter(n => n.tipo === "BERCO").map(n => n.id);
-        return { planta, missoes: base.missoes || [], fluxos: (cenario.fluxos || []).filter(f => f.ativo !== false), dt, viagem: criarRotas(planta, base.missoes || []), bercos, capacidade: cenario.capacidadeZonas || {} };
+        const pr = Object.assign({}, PREMISSAS_PADRAO, cenario.premissas || {});
+        return { planta, missoes: base.missoes || [], fluxos: (cenario.fluxos || []).filter(f => f.ativo !== false), dt, viagem: criarRotas(planta, base.missoes || [], { passarSemParar: Number(pr.passarSemParar) > 0 }), bercos, capacidade: cenario.capacidadeZonas || {} };
     }
 
     function rodarFrota(ctx, frota, pr) {
@@ -521,7 +610,7 @@
         const cenarios = [];
         const t0 = Date.now();
         // a menor frota que atende: no prazo (P50) ≥ alvo, ocupação (P50) ≤ máximo, sem pedido sobrando
-        const atende = c => c.r.noPrazo[1] >= pr.prazoAlvo && c.r.ocupacao[1] <= pr.ocupacaoMax && c.r.naoAtendidos[1] <= 0.5;
+        const atende = c => atendeR(c.r, pr);
         const testar = async (fr, passo) => {
             await respirar();
             const c = { frota: fr.map(g => ({ modelo: g.modelo, n: g.n })), nome: nomeFrota(fr), total: fr.reduce((s, g) => s + g.n, 0), r: rodarFrota(ctx, fr, pr), passo };
@@ -557,7 +646,7 @@
                 await respirar();
                 const p2 = Object.assign({}, pr, { crescimento: (pr.crescimento || 0) + cr, indisponiveis: (pr.indisponiveis || 0) + ind });
                 const r = rodarFrota(ctx, recomendado.frota, p2);
-                const caso = { nome, crescimento: cr, indisponiveis: ind, r, atende: r.noPrazo[1] >= pr.prazoAlvo && r.ocupacao[1] <= pr.ocupacaoMax && r.naoAtendidos[1] <= 0.5 };
+                const caso = { nome, crescimento: cr, indisponiveis: ind, r, atende: atendeR(r, pr) };
                 if (!caso.atende) {
                     // quantos Atta a mais essa situação pede (até 6 a mais por modelo)
                     const limites = recomendado.frota.map(g => ({ modelo: g.modelo, de: g.n, ate: g.n + 6 }));
@@ -565,7 +654,7 @@
                     const precisa = await acharFrota(ctx, p2, recomendado.frota.map(g => ({ modelo: g.modelo, n: g.n })), limites, async fr => {
                         await respirar();
                         const c = { frota: fr.map(g => ({ modelo: g.modelo, n: g.n })), nome: nomeFrota(fr), total: fr.reduce((s, g) => s + g.n, 0), r: rodarFrota(ctx, fr, p2) };
-                        c.atende = c.r.noPrazo[1] >= pr.prazoAlvo && c.r.ocupacao[1] <= pr.ocupacaoMax && c.r.naoAtendidos[1] <= 0.5;
+                        c.atende = atendeR(c.r, pr);
                         return c;
                     }, motivo);
                     caso.precisa = precisa ? { frota: precisa.frota, nome: precisa.nome, total: precisa.total, r: precisa.r } : null;
@@ -588,5 +677,5 @@
         return Object.keys(horas).map(Number).sort((a, b) => a - b).map(h => ({ h, pedidos: horas[h] }));
     }
 
-    return { PREMISSAS_PADRAO, DEMANDAS, MAX_FROTAS, rodar, rodada, contexto, rodarFrota, acharFrota, frotasDoCenario, nomeFrota, fluxosDaPlanta, fluxosDoDia, missaoDoFluxo, diaDeTrabalho, demandaPorHora, taxaBase, quantil, faixa, aleatorio, criarRotas };
+    return { PREMISSAS_PADRAO, DEMANDAS, ENTREGAS, MAX_FROTAS, atendeR, etapasDaEntrega, tempoTrechoProducao, rodar, rodada, contexto, rodarFrota, acharFrota, frotasDoCenario, nomeFrota, fluxosDaPlanta, fluxosDoDia, missaoDoFluxo, diaDeTrabalho, demandaPorHora, taxaBase, quantil, faixa, aleatorio, criarRotas };
 });

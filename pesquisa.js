@@ -18,6 +18,8 @@
     const CARGAS = [["carrinho", "Carrinho com rodas"], ["caixa", "Caixa ou kit (pegar e soltar)"], ["esteira", "De uma esteira"], ["comboio", "Vários carrinhos de uma vez"], ["palete", "Palete"]];
     const HOJE = [["pe", "Pessoa a pé (empurrando)"], ["rebocador", "Rebocador manual"], ["empilhadeira", "Empilhadeira"], ["outro", "Outro"]];
     const UNIDADES = [["hora", "por hora"], ["turno", "por turno"], ["dia", "por dia"]];
+    // 0.24: como o material chega hoje (o modo de entrega muda a viagem e a conta)
+    const ENTREGAS = [["chamada", "Quando a linha pede"], ["troca", "Troca: leva o cheio, traz o vazio"], ["milkrun", "Milk run: rota com várias paradas, de tempo em tempo"]];
 
     // tipo: numero | texto | escolha | sim_nao | hora | longo | layout | pontos | fluxos
     const BLOCOS = [
@@ -51,6 +53,8 @@
         ] },
         { id: "custo", titulo: "Quanto custa hoje", ajuda: "Para comparar com a frota. Não sabe? Marque \"não sei\": usamos uma referência de mercado e deixamos isso claro no relatório.", campos: [
             { id: "pessoas", rotulo: "Pessoas por turno levando material", tipo: "numero", faixa: true },
+            { id: "dedicadas", rotulo: "Dessas, quantas fazem só transporte?", tipo: "numero", ajuda: "abastecedor de linha, motorista do rebocador: quem sai inteiro se a frota assumir o trabalho dele" },
+            { id: "destinoHoras", rotulo: "O que a empresa faria com essas pessoas?", tipo: "escolha", opcoes: [["desligar", "Desligar"], ["realocar", "Realocar em outra atividade"], ["evitar", "Evitar contratação (crescimento, turno novo)"]], ajuda: "muda a conta: realocar vale uma parte do custo, desligar ou evitar contratação vale o custo inteiro" },
             // 0.22.1: o custo da pessoa vem da folha do cliente (o relatório mostra a conta, encargo por encargo)
             { id: "custoPessoa", rotulo: "Custo total por pessoa por mês, se a empresa já tiver", tipo: "numero", unidade: "R$", ajuda: "salário, encargos e benefícios juntos; se preencher este, os quatro abaixo não são precisos" },
             { id: "salario", rotulo: "Salário médio de quem leva material", tipo: "numero", unidade: "R$", faixa: true, ajuda: "o salário na carteira, por mês, sem encargos" },
@@ -100,7 +104,7 @@
         if (!valor(campo(resp, "operacao", "turnos"))) f.push("os turnos por dia");
         const pts = resp?.pontos?.lista || [];
         if (pts.length < 2) f.push("pelo menos dois pontos");
-        const fl = (resp?.fluxos?.lista || []).filter(x => x.de && x.para && Number(x.quantidade) > 0);
+        const fl = (resp?.fluxos?.lista || []).filter(x => x.de && x.para && (Number(x.quantidade) > 0 || (x.entrega === "milkrun" && Number(x.ciclo) > 0)));
         if (!fl.length) f.push("pelo menos um fluxo com quantidade");
         return f;
     }
@@ -114,7 +118,7 @@
                 const x = resp?.[b.id]?.[c.id];
                 if (c.tipo === "layout") { if (x?.tipo) feitos++; }
                 else if (c.tipo === "pontos") { if ((x || []).length >= 2) feitos++; }
-                else if (c.tipo === "fluxos") { if ((x || []).some(f => Number(f.quantidade) > 0)) feitos++; }
+                else if (c.tipo === "fluxos") { if ((x || []).some(f => Number(f.quantidade) > 0 || (f.entrega === "milkrun" && Number(f.ciclo) > 0))) feitos++; }
                 else if (respondido(x)) feitos++;
             });
             r[b.id] = [feitos, total];
@@ -211,10 +215,13 @@
                 <div class="pq-fluxo-rota"><label>De<select data-pq-fluxo="${i}" data-c="de">${opPts(f.de)}</select></label><span>→</span><label>Para<select data-pq-fluxo="${i}" data-c="para">${opPts(f.para)}</select></label>
                     <button type="button" class="btn-remover-fila" data-pq-fluxo-tirar="${i}" aria-label="Tirar o fluxo">×</button></div>
                 <div class="pq-fluxo-dados">
+                    <label>Como entrega${sel(ENTREGAS, f.entrega || "chamada", `data-pq-fluxo="${i}" data-c="entrega"`, "Como entrega")}</label>
+                    ${f.entrega === "milkrun" ? `<label>A rota passa a cada<span class="pq-un"><input type="text" inputmode="decimal" data-pq-fluxo="${i}" data-c="ciclo" value="${esc(f.ciclo ?? "")}" placeholder="20"><i>min</i></span></label>
+                    <fieldset class="pq-paradas"><legend>Outras paradas da rota <small class="suave">(depois de "Para")</small></legend>${pts.filter(p => p.id !== f.de && p.id !== f.para).map(p => `<label class="pq-check"><input type="checkbox" data-pq-parada="${i}" value="${esc(p.id)}" ${(f.paradas || []).includes(p.id) ? "checked" : ""}>${esc(p.nome)}</label>`).join("") || `<span class="suave">marque mais pontos no passo anterior</span>`}</fieldset>` : ""}
                     <label>O que vai<input type="text" maxlength="40" data-pq-fluxo="${i}" data-c="oque" value="${esc(f.oque || "")}" placeholder="ex.: kit de parafusos"></label>
                     <label>Como vai${sel(CARGAS, f.carga || "carrinho", `data-pq-fluxo="${i}" data-c="carga"`, "Tipo de carga")}</label>
                     <label>Peso de cada viagem<span class="pq-un"><input type="text" inputmode="decimal" data-pq-fluxo="${i}" data-c="peso" value="${esc(f.peso ?? "")}"><i>kg</i></span></label>
-                    <label>Quantas viagens<span class="pq-un"><input type="text" inputmode="decimal" data-pq-fluxo="${i}" data-c="quantidade" value="${esc(f.quantidade ?? "")}">${sel(UNIDADES, f.unidade || "hora", `data-pq-fluxo="${i}" data-c="unidade"`, "Por")}</span></label>
+                    ${f.entrega === "milkrun" ? "" : `<label>Quantas viagens<span class="pq-un"><input type="text" inputmode="decimal" data-pq-fluxo="${i}" data-c="quantidade" value="${esc(f.quantidade ?? "")}">${sel(UNIDADES, f.unidade || "hora", `data-pq-fluxo="${i}" data-c="unidade"`, "Por")}</span></label>`}
                     <label>Prazo aceitável<span class="pq-un"><input type="text" inputmode="decimal" data-pq-fluxo="${i}" data-c="prazo" value="${esc(f.prazo ?? "")}" placeholder="15"><i>min</i></span></label>
                     <label>Quem faz hoje${sel(HOJE, f.hoje || "pe", `data-pq-fluxo="${i}" data-c="hoje"`, "Quem faz hoje")}</label>
                     <label>Quanto tempo leva hoje<span class="pq-un"><input type="text" inputmode="decimal" data-pq-fluxo="${i}" data-c="tempoHoje" value="${esc(f.tempoHoje ?? "")}" placeholder="não sei"><i>min</i></span><small class="suave">da saída à volta, contando pegar, esperar e entregar</small></label>
@@ -397,14 +404,24 @@
             if (t.dataset.pqFluxo !== undefined) {
                 const f = resp.fluxos.lista[Number(t.dataset.pqFluxo)], c = t.dataset.c;
                 if (!f) return;
-                f[c] = ["peso", "quantidade", "prazo", "distancia", "tempoHoje"].includes(c) ? numMeio(t.value) : t.value;
+                f[c] = ["peso", "quantidade", "prazo", "distancia", "tempoHoje", "ciclo"].includes(c) ? numMeio(t.value) : t.value;
+                if (c === "entrega" && t.value === "milkrun" && !f.hoje) f.hoje = "rebocador";
                 mudou();
-                if (c === "de" || c === "para") desenhar();
+                if (c === "de" || c === "para" || c === "entrega") desenhar();
+                return;
+            }
+            if (t.dataset.pqParada !== undefined) {
+                const f = resp.fluxos.lista[Number(t.dataset.pqParada)];
+                if (!f) return;
+                const set = new Set(f.paradas || []);
+                if (t.checked) set.add(t.value); else set.delete(t.value);
+                f.paradas = [...set];
+                mudou();
             }
         });
         desenhar();
         return { respostas: () => resp, desenhar, passo: () => passo, irPara: i => { passo = i; desenhar(); }, salvarJa: () => { clearTimeout(timer); if (opcoes.aoMudar) opcoes.aoMudar(resp); } };
     }
 
-    return { BLOCOS, CARGAS, HOJE, UNIDADES, valor, faixa, naoSei, respondido, faltando, progresso, campo, criar, svgPlanta, idPonto };
+    return { BLOCOS, CARGAS, HOJE, UNIDADES, ENTREGAS, valor, faixa, naoSei, respondido, faltando, progresso, campo, criar, svgPlanta, idPonto };
 });

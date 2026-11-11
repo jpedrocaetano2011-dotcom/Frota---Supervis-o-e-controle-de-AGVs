@@ -415,6 +415,8 @@ const Despacho = (function () {
             falha: agv.maquina === "PARADO" || agv.barreira === "FALHA_LEITURA" || agv.estadoMissao === "ERRO" || Boolean(agv.aguardandoRearme),
             turno: st ? (st.fimDeTurno || (st.estado && st.estado !== "TRABALHANDO") ? "fora" : "dentro") : null,
             bateria: agv.bateria ?? null,
+            // 0.23: o perfil de bateria (guia Baterias): a carga, por que não pode e os carregadores
+            energia: typeof BateriaOperacao !== "undefined" ? BateriaOperacao.paraDespacho(agv) : null,
             posicaoConhecida: Boolean(agv.posicaoConhecida),
             pontoAtual: agv.pontoAtual || null,
             orientacao: Number(agv.orientacao) || 0,
@@ -594,6 +596,8 @@ const Despacho = (function () {
                 await acompanhar();
                 if (typeof Programacao !== "undefined") await Programacao.verificar();
                 await despachar();
+                // 0.23: desvio automático (trecho fechado ou Atta parado no caminho de quem já está em missão)
+                if (typeof TrafegoOperacao !== "undefined" && TrafegoOperacao.desviar) TrafegoOperacao.desviar();
             }
         } catch (e) {
             console.error("Despacho:", e);

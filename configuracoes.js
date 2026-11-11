@@ -78,6 +78,7 @@ const PARAMETROS_SITE = {
     LEDS_ORDEM_CORES: { secao: "leds", rotulo: "Ordem das cores da fita", tipo: "opcoes", opcoes: [[0, "RGB"], [1, "GRB (WS2812B comum)"], [2, "BRG"], [3, "RBG"], [4, "GBR"], [5, "BGR"]], ajuda: "Use Diagnóstico › Testar LEDs: as fitas devem mostrar vermelho, verde, azul e branco, nessa ordem." },
     AVISO_PARTIDA_S: { secao: "frota", rotulo: "Aviso antes de partir sozinho", unidade: "s", ajuda: "Ao terminar uma missão com outra na fila (ou ao sair para liberar o ponto), a fita pisca em verde por esse tempo e o AGV parte. START MISSÃO parte na hora." },
     LIBERAR_PONTO: { secao: "frota", rotulo: "Liberar o ponto para outro AGV", tipo: "booleano", ajuda: "Parado sem missão num ponto que outro AGV precisa, vai sozinho para um ponto de espera livre (depois do aviso). Desligado: fica e o site avisa." },
+    PASSAR_SEM_PARAR: { secao: "movimento", rotulo: "Passar pelos pontos sem parar", tipo: "booleano", ajuda: "Nos pontos do caminho em que a rota segue reto, o Atta lê a tag andando e não para. Só para onde gira, troca de faixa, pede zona de cruzamento ou termina a etapa. Desligado (protótipo): para em cada tag." },
     RETOMAR_APOS_OBSTACULO_S: { secao: "frota", rotulo: "Retomar depois de obstáculo", unidade: "s", ajuda: "Obstáculo na frente durante a missão pausa; com o caminho livre por esse tempo, segue sozinho. 0 = interrompe e espera START MISSÃO." },
     LEDS_EFEITOS: { secao: "leds", rotulo: "Animações", tipo: "booleano", ajuda: "Desligado: respirar e correr viram luz fixa (piscar continua)." }
 };

@@ -846,6 +846,12 @@
                         <span class="editor-subtitulo">Casa de</span>
                         <p class="editor-texto">${donos.length ? donos.map(a => `<strong>${esc(a)}</strong>`).join(", ") : "nenhum AGV ainda"}</p>
                         <p class="editor-texto suave">Escolha os AGVs de cada berço em Frota › Rotina. Pode ser o mesmo berço para AGVs de turnos diferentes. A tag RFID do berço faz o AGV se reconhecer ao ser ligado aqui.</p>
+                    </div>
+                    <div class="editor-bloco">
+                        <label class="config-chave"><input type="checkbox" data-campo="noCarregador" ${no.carregador ? "checked" : ""}><span>Tem carregador de bateria</span></label>
+                        ${no.carregador ? `<p class="editor-texto suave">Carrega (vazio = todos os modelos):</p>
+                        <div class="editor-modelos">${(typeof Modelos !== "undefined" ? Modelos.lista().filter(m => m.ativo !== false) : []).map(m => `<label class="config-chave"><input type="checkbox" data-campo="noCarregaModelo" data-modelo="${esc(m.id)}" ${(no.carregaModelos || []).includes(m.id) ? "checked" : ""}><span>${esc(m.nome)}</span></label>`).join("")}</div>
+                        <p class="editor-texto suave">A guia Baterias manda os Atta para cá quando precisam carregar (fila dos carregadores).</p>` : ""}
                     </div>` : ""}
                 ${no.tipo === "ESTACAO" || no.tipo === "BERCO" ? `
                     <div class="editor-bloco">
@@ -1146,6 +1152,13 @@
                 case "noRfid": no.rfid = Planta.normalizarRfid(valor); break;
                 case "noOrientacao": no.orientacaoChegada = valor === "" ? null : Planta.normalizarAngulo(num); break;
                 case "noBarreira": no.barreira = Math.max(0, Math.round(num) || 0); break;
+                case "noCarregador": if (alvo.checked) no.carregador = true; else { delete no.carregador; delete no.carregaModelos; } break;
+                case "noCarregaModelo": {
+                    const l = new Set(no.carregaModelos || []);
+                    if (alvo.checked) l.add(alvo.dataset.modelo); else l.delete(alvo.dataset.modelo);
+                    if (l.size) no.carregaModelos = [...l].sort(); else delete no.carregaModelos;
+                    break;
+                }
             }
         }
         if (sel?.tipo === "segmento") {

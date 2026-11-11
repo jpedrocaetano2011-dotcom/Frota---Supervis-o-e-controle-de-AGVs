@@ -337,6 +337,12 @@ function obterMissaoPorId(id) {
 
     // 0.20: "Ir para o ponto" (missão temporária, não fica na lista)
     if (typeof FrotaControle !== "undefined" && FrotaControle.missaoTemporaria(id)) return FrotaControle.missaoTemporaria(id);
+    // 0.23: ir carregar (a guia Baterias manda o Atta para um carregador)
+    const carga = /^CARGA-(.+)$/.exec(String(id));
+    if (carga) return { id: String(id), nome: `Ir carregar em ${carga[1]}`, prioridade: 2, etapas: [{ tipo: "IR_PARA", destino: carga[1], exato: true }] };
+    // 0.23: sair do carregador e voltar ao berço (alguém precisa do carregador)
+    const casa = /^CASA-(.+)$/.exec(String(id));
+    if (casa) return { id: String(id), nome: `Voltar ao berço ${casa[1]}`, prioridade: 2, etapas: [{ tipo: "IR_PARA", destino: casa[1], exato: true }] };
 
     const missoesSalvas =
         localStorage.getItem("missoesAGV");
@@ -1165,7 +1171,9 @@ const TOPICOS = {
     calibracaoQtr: "comando/calibracao_qtr",
     calibracaoMecanica: "comando/calibracao_mecanica",
     ota: "comando/ota",
-    autoteste: "comando/autoteste"
+    autoteste: "comando/autoteste",
+    bateria: "comando/bateria",   // 0.23
+    desvio: "comando/desvio"      // 0.23
    },
 
 
@@ -1446,11 +1454,18 @@ function processarMensagemMQTT(topico, valor) {
 
 
         case "status/bateria":
-
-            if (!isNaN(Number(valor))) {
+            // 0.23: JSON {nivel, pct, v, a, t, saude, ciclos, carregando, carregador, carga, critica, alarme}; antes, só o número
+            if (/^\s*\{/.test(valor)) {
+                try {
+                    const b = JSON.parse(valor);
+                    agv.bateriaStatus = Object.assign({ em: Date.now() }, b);
+                    agv.bateria = Number.isFinite(Number(b.pct)) && b.pct !== null ? Math.max(0, Math.min(100, Number(b.pct))) : null;
+                } catch (e) { /* ignora */ }
+            } else if (valor !== "" && !isNaN(Number(valor))) {
                 agv.bateria = Math.max(0, Math.min(100, Number(valor)));
+                agv.bateriaStatus = { nivel: 1, pct: agv.bateria, em: Date.now() };
             }
-
+            if (typeof BateriaOperacao !== "undefined") BateriaOperacao.aoReceber(agv);
             break;
 
 
@@ -2058,7 +2073,7 @@ function renderizarTrafegoFrota() {
         </tr>`;
     }).join("");
     ui.trocarHtml(caixa, `
-        <div class="card-barra"><div><h2>Tráfego</h2><div class="card-sub">Zonas de conflito: cruzamentos, corredores de mão dupla com estação, trocas laterais e portas automáticas. Um AGV por zona.</div></div></div>
+        <div class="card-barra"><div><h2>Controle de Tráfego · zonas</h2><div class="card-sub">Zonas de conflito: cruzamentos, corredores de mão dupla com estação, trocas laterais e portas automáticas. Um AGV por zona.</div></div></div>
         ${typeof TrafegoOperacao !== "undefined" ? TrafegoOperacao.htmlImpasses() : ""}
         <div class="tabela-rolagem"><table class="tabela-usuarios">
             <thead><tr><th>AGV</th><th>Ocupa</th><th>Situação</th><th></th></tr></thead>
@@ -2342,6 +2357,7 @@ const informacoesTelas = {
     usuarios: ["Usuários", "Quem acessa o sistema e o que cada um pode fazer"],
     modelos: ["Modelos", "Catálogo do Atta: ficha técnica, foto e documentação de cada modelo"],
     manutencao: ["Manutenção", "AGVs fora da operação, uso da frota, cópias da configuração e documentação"],
+    baterias: ["Baterias", "A carga de cada Atta, a fila dos carregadores, as regras de recarga e os alertas"],
     dispositivos: ["Dispositivos", "Eciton I/O: portas automáticas, semáforos e alarme de incêndio"],
     sinalizacao: ["Sinalização", "O que cada luz do Atta quer dizer, e as cores da empresa"],
     indicadores: ["Indicadores", "O que a frota fez: entregas, disponibilidade, paradas, tráfego e ganhos"],
@@ -2410,6 +2426,7 @@ function mudarTela(nomeTela) {
     if (nomeTela === "sinalizacao" && typeof Sinalizacao !== "undefined") Sinalizacao.abrir();
     if (nomeTela === "modelos" && typeof Modelos !== "undefined") Modelos.abrir();
     if (nomeTela === "manutencao" && typeof Manutencao !== "undefined") Manutencao.abrir();
+    if (nomeTela === "baterias" && typeof BateriaOperacao !== "undefined") BateriaOperacao.abrir();
     if (nomeTela === "indicadores" && typeof Indicadores !== "undefined") Indicadores.abrir();
     if (nomeTela === "estudo" && typeof EstudoTela !== "undefined") EstudoTela.abrir();
     if (nomeTela === "estudos" && typeof EstudosTela !== "undefined") EstudosTela.abrir();
@@ -3030,7 +3047,7 @@ function garantirMissaoCompilada(agv, missaoId) {
     const planta = plantaPublicada();
     let etapas = agv.compiladasFila?.[missaoId] || null;
     if (!etapas) {
-        const saida = /^(?:SAIDA|CASA|IDA)-(.+)$/.exec(missaoId);
+        const saida = /^(?:SAIDA|CASA|IDA|CARGA)-(.+)$/.exec(missaoId);
         const missao = saida ? { id: missaoId, etapas: [{ tipo: "IR_PARA", destino: saida[1], exato: true }] } : obterMissaoPorId(missaoId);
         const origem = agv.fila?.atual?.origem || (agv.posicaoConhecida ? agv.pontoAtual : null);
         if (missao && origem) {
@@ -3144,6 +3161,8 @@ function processarEventoMissao(agvId, evento) {
     } catch (_) {
         return;
     }
+    // 0.23: desvio automático aceito/aplicado/recusado pelo Atta
+    if (/^DESVIO_/.test(dados.evento || dados.tipo || "") && typeof TrafegoOperacao !== "undefined" && TrafegoOperacao.aoEventoDesvio) TrafegoOperacao.aoEventoDesvio(agv, dados);
 
     const tipo = dados?.evento || dados?.tipo;
     const mensagem = dados?.mensagem || "";

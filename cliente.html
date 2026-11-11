@@ -15,6 +15,7 @@
         .cliente-topo, .cliente-intro, .cliente-acoes, #avisos { display: none !important; }
         body.pagina-cliente { background: #fff; }
         .cliente-conteudo { padding: 0; max-width: none; }
+        .pp-aceitar { display: none !important; }
         .rv2 { max-width: none; padding: 0; font-size: 10pt; }
     }
 </style>
@@ -24,6 +25,7 @@
        cliente.html?pesquisa=<código>   o questionário do estudo de frota
        cliente.html?diario=<código>     o diário de viagens (no celular)
        cliente.html?relatorio=<código>  o relatório (ler e baixar em PDF)
+       cliente.html?proposta=<código>   a proposta comercial (ler, aceitar, baixar em PDF)
      O banco confere o código e o prazo em cada chamada (funções
      ler_*_prospect e salvar_*/registrar_*). Aqui só a chave pública
      (config.js); nada do estudo do fornecedor passa por esta página.
@@ -41,13 +43,14 @@
 <script src="importar-dxf.js"></script>
 <script src="pesquisa.js"></script>
 <script src="relatorio-estudo.js"></script>
+<script src="proposta.js"></script>
 <script>
 (async function () {
     const esc = t => String(t ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
     const caixa = document.getElementById("clienteConteudo");
     const erro = t => { caixa.innerHTML = `<div class="cliente-erro">${esc(t)}</div>`; };
     const q = new URLSearchParams(location.search);
-    const tipo = ["pesquisa", "diario", "relatorio"].find(k => q.get(k));
+    const tipo = ["pesquisa", "diario", "relatorio", "proposta"].find(k => q.get(k));
     const codigo = tipo ? q.get(tipo) : "";
     if (!tipo || !/^[A-Za-z0-9]{20,64}$/.test(codigo)) { erro("Link incompleto. Abra o endereço exatamente como a E4M mandou."); return; }
     // tira o código da barra de endereço depois de ler (não fica no histórico de quem olhar a tela)
@@ -158,6 +161,46 @@
                 } catch (e) { b.disabled = false; aviso("Não foi possível registrar: " + e.message, "erro"); }
             }
         });
+        desenhar();
+        return;
+    }
+
+    /* ---------------- a proposta comercial (0.23) ---------------- */
+    if (tipo === "proposta") {
+        let p;
+        try { p = await rpc("ler_proposta_prospect", { p_codigo: codigo }); } catch (e) { erro(e.message); return; }
+        const d = p.dados || {};
+        const num = `${p.numero} rev. ${PropostaDoc.letra(p.revisao)}`;
+        document.getElementById("clienteTitulo").textContent = "Proposta comercial";
+        document.getElementById("clienteNome").textContent = `${d.cliente?.nome || ""} · ${num}`;
+        document.title = `E4M · Proposta ${num}`;
+        const desenhar = () => {
+            const podeAceitar = p.status === "emitida" && !p.vencida && !p.temRevisaoNova;
+            caixa.innerHTML = `<div class="cliente-acoes grupo"><button type="button" class="btn btn-primario" id="baixarPdf">Baixar em PDF</button><span class="suave">No diálogo de impressão, escolha "Salvar como PDF".</span></div>
+                ${PropostaDoc.html(d, { status: p.status, aceite: p.aceite, vencida: p.vencida, temRevisaoNova: p.temRevisaoNova })}
+                ${podeAceitar ? `<section class="card pp-aceitar"><h2>Aceitar a proposta ${esc(num)}</h2>
+                    <p class="suave">O aceite fica registrado com o seu nome, cargo, e-mail e a data, e avisa a E4M. O pedido é confirmado com o contrato de fornecimento.</p>
+                    <div class="pp-aceitar-campos">
+                        <label class="campo"><span>Nome completo</span><input type="text" id="acNome" maxlength="80" autocomplete="name"></label>
+                        <label class="campo"><span>Cargo</span><input type="text" id="acCargo" maxlength="80" autocomplete="organization-title"></label>
+                        <label class="campo"><span>E-mail</span><input type="email" id="acEmail" maxlength="120" autocomplete="email" value="${esc(d.cliente?.contato?.email || "")}"></label>
+                    </div>
+                    <label class="config-chave"><input type="checkbox" id="acLi"><span>Li a proposta ${esc(num)} e aceito as condições dela em nome de ${esc(d.cliente?.nome || "minha empresa")}.</span></label>
+                    <button type="button" class="btn btn-primario" id="acOk" disabled>Aceitar a proposta</button></section>` : ""}`;
+            document.getElementById("baixarPdf").addEventListener("click", () => window.print());
+            const li = document.getElementById("acLi"), ok = document.getElementById("acOk");
+            if (li && ok) {
+                li.addEventListener("change", () => { ok.disabled = !li.checked; });
+                ok.addEventListener("click", async () => {
+                    ok.disabled = true;
+                    try {
+                        const r = await rpc("aceitar_proposta", { p_codigo: codigo, p_nome: document.getElementById("acNome").value, p_cargo: document.getElementById("acCargo").value, p_email: document.getElementById("acEmail").value });
+                        p.status = "aceita"; p.aceite = { nome: r.nome, cargo: document.getElementById("acCargo").value.trim(), em: r.em };
+                        desenhar(); aviso("Proposta aceita. A E4M entra em contato para o contrato.", "sucesso");
+                    } catch (e) { ok.disabled = false; aviso(e.message, "erro"); }
+                });
+            }
+        };
         desenhar();
         return;
     }

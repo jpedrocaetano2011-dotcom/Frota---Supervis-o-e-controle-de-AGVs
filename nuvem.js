@@ -50,10 +50,13 @@
         calendario: ["fornecedor", "admin", "lider"],
         // 0.21: estudo de frota
         // 0.22: só a E4M (o cliente vê o relatório pelo link)
-        estudo: ["fornecedor"]
+        estudo: ["fornecedor"],
+        // 0.23: baterias (carregar agora, liberar o carregador, pular a fila)
+        bateria: ["fornecedor", "admin", "operador", "lider"]
     };
     // Comandos que o despachante manda (o tablet do posto também despacha)
-    const TOPICOS_DESPACHO = /^comando\/(fila|fila\/adicionar|saidas)$/;
+    // 0.23: a aba que despacha também manda a bateria (perfil, carregar) e o desvio automático
+    const TOPICOS_DESPACHO = /^comando\/(fila|fila\/adicionar|saidas|bateria|desvio)$/;
     // Comandos que mudam o AGV em si (parâmetros, firmware, calibração): só admin.
     const TOPICOS_ADMIN = /^comando\/(broker|configuracao|ota|calibracao_qtr|calibracao_mecanica|trafego)$/;
     // Papel Manutenção (0.14): mexe no AGV (manual, calibração, configuração, autoteste), não roda missão

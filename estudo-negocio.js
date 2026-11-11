@@ -37,14 +37,15 @@
     const E = () => raiz.Estudo || (typeof Estudo !== "undefined" ? Estudo : noNode ? require("./estudo.js") : null);
     const Q = () => raiz.Pesquisa || (typeof Pesquisa !== "undefined" ? Pesquisa : noNode ? require("./pesquisa.js") : null);
     const M = () => raiz.Modelos || (typeof Modelos !== "undefined" ? Modelos : null);
-    const VERSAO = "0.22.1";
+    const VERSAO = "0.24.0";
 
     /* ---------------- tabela de preços (exemplo, editável em Estudos) ---------------- */
-    // Médias de mercado para começar (câmbio suposto R$ 5,50/US$): AMR de transporte
-    // US$ 20 a 60 mil, de produção US$ 40 a 100 mil, software US$ 200 a 800 por robô
-    // por mês, integração 20% a 40% do hardware, manutenção 10% a 20% ao ano.
+    // Valores de partida (exemplo até a E4M mudar). 0.24: o Atta na faixa de um AGV guiado por
+    // linha nacional (R$ 150 mil a 220 mil): lá fora, o AGV de fita magnética ou óptica (AGC) sai
+    // por US$ 14 mil a 23 mil e o rebocador por US$ 20 mil a 50 mil; importado, soma o imposto de
+    // importação (20% para bem de capital) e os outros impostos. Manutenção ~5% do hardware por ano.
     const PRECOS_PADRAO = {
-        atta: { "atta-g-o": 220000, "atta-e-o-serie": 280000, "atta-r-o": 300000, "atta-t-o": 350000 },
+        atta: { "atta-g-o": 170000, "atta-e-o-serie": 180000, "atta-r-o": 190000, "atta-t-o": 210000 },
         // 0.22.1: os planos do Eciton são da E4M (cria, renomeia, muda o preço, apaga); o relatório usa o preço do plano escolhido
         planos: [
             { id: "silver", nome: "Eciton Silver", inclui: "Eciton: missões, frota, mapa ao vivo, postos e relatórios. Sem a Mira.", mira: "nao", fixoMes: 0, porAttaMes: 450 },
@@ -52,7 +53,7 @@
             { id: "platinum", nome: "Eciton Platinum", inclui: "Eciton completo, com integrações, mais a Mira Pro.", mira: "pro", fixoMes: 1500, porAttaMes: 850 }
         ],
         planoPadrao: "gold",
-        implantacaoPct: 0.20, moduloIO: 8000, manutencaoPct: 0.10,
+        implantacaoPct: 0.20, moduloIO: 8000, manutencaoPct: 0.05,
         locacaoPctMes: 0.032, locacaoMeses: 48, cambio: 5.5,
         energiaKwh: 0.85, segundoAcesso: 12000, bercoExtra: 6000, expansaoPct: 0.10,
         // 0.22.1: a pessoa de referência (quando o cliente não sabe a folha) e os encargos da lei
@@ -61,11 +62,43 @@
             encargos: { decimo: 0.0833, ferias: 0.1111, inss: 0.20, rat: 0.03, terceiros: 0.058, fgts: 0.08, rescisao: 0.04 }
         },
         // as premissas técnicas que a E4M muda (chave → [valor, mínimo, máximo]); vazio = as de fábrica
-        premissas: {}
+        premissas: {},
+        // 0.23: as condições comerciais da proposta (valores de EXEMPLO até a E4M mudar cada um)
+        comercial: {
+            nomeFantasia: "E4M Engineering for Motion", razaoSocial: "", cnpj: "", endereco: "São Bernardo do Campo, SP", email: "", telefone: "", site: "", responsavel: "",
+            avisoAceite: "",
+            validadeDias: 30, prazoFabricacaoSemanas: 10, garantiaMeses: 12,
+            pagamentoCompra: [{ quando: "no pedido", pct: 40 }, { quando: "na entrega dos Atta", pct: 40 }, { quando: "no aceite da implantação", pct: 20 }],
+            pagamentoMensal: "Implantação: 50% no pedido e 50% no aceite. Mensalidade: todo dia 10, a partir do mês seguinte ao piloto.",
+            garantia: "Defeitos de fabricação dos Atta e dos módulos, com troca de peças e mão de obra, nas instalações do cliente.",
+            suporte: "Atendimento remoto em dias úteis, das 8 h às 18 h, com resposta em até 4 h úteis. Visita preventiva a cada 6 meses.",
+            frete: "Por conta da E4M no estado de São Paulo; fora dele, cotado à parte.",
+            impostos: "Preços sem impostos. Os impostos entram na nota fiscal, conforme a legislação.",
+            reajuste: "Mensalidade reajustada uma vez por ano pelo IPCA.",
+            inclui: ["Visita técnica e projeto da planta", "Fita, tags e marcação no chão nas rotas do projeto", "Berços de espera e de recarga do projeto", "Configuração do Eciton, das missões e dos postos", "Treinamento dos operadores e dos líderes", "Acompanhamento do piloto"],
+            naoInclui: ["Rede Wi-Fi na área de operação", "Pontos de energia para os carregadores", "Piso nivelado e sem buracos nas rotas", "Obras civis e mudanças de layout", "Integração com sistemas do cliente (cotada à parte)"],
+            condicoesGerais: "Modelo: revise com o jurídico e a contabilidade antes de usar. O pedido é confirmado pelo aceite desta proposta e pelo contrato de fornecimento. Cancelamento depois da fabricação: 30% do valor do hardware."
+        },
+        // 0.24: adaptar a planta para outro módulo levar a carga (R$ por posto atendido): "carga:módulo" → [custo, o que é]
+        // (o módulo de origem da carga não precisa de adaptação; sem a chave, o módulo não leva essa carga)
+        adaptacao: {
+            "caixa:E": [2500, "rack ou carrinho que o Atta E ergue, um por posto"],
+            "caixa:T": [3000, "carrinho de comboio com prateleira, um por posto"],
+            "caixa:R": [9000, "transportador de rolos no posto"],
+            "carrinho:T": [800, "engate no carrinho (o Atta T reboca)"],
+            "esteira:E": [4000, "rack no fim da esteira para o Atta E erguer"],
+            "palete:T": [1500, "carrinho de palete para o comboio"]
+        },
+        // os campos que a E4M já mudou (os outros aparecem como exemplo na proposta)
+        confirmados: []
     };
+    // o módulo que leva cada carga sem adaptar nada
+    const NATIVO = { caixa: "G", carrinho: "E", esteira: "R", comboio: "T", palete: "E" };
+    // o prazo de partida por tipo de carga, quando o cliente não diz (min): kit e esteira acabam rápido; carrinho e palete têm mais estoque na linha
+    const PRAZO_CARGA = { caixa: 15, carrinho: 20, esteira: 10, comboio: 30, palete: 30 };
     // as referências de mercado de cada preço (aparecem ao lado do campo na tabela da E4M)
     const REFERENCIAS = {
-        atta: "AMR de US$ 10 mil a 100 mil; AGV de carga unitária a partir de US$ 40 mil; rebocador de US$ 50 mil a 85 mil (Qviro, 2025); Safelog a partir de € 20 mil",
+        atta: "AGV de fita magnética ou óptica (AGC) US$ 14 mil a 23 mil; rebocador US$ 20 mil a 50 mil; AMR de navegação natural US$ 25 mil a 40 mil; paleteira automática ~US$ 55 mil; empilhadeira AGV ~US$ 80 mil (AGV Network). Importado: imposto de importação de 20% para bem de capital (NCM 8427.10.19); empilhadeira AGV com SLAM tem ex-tarifário a 0% até 30/06/2028",
         software: "atualizações de software até ~US$ 1.000 por robô por ano (Qviro); na Safelog, o gerenciador de frota vem no preço",
         manutencao: "exemplo do Qviro: US$ 2 mil por ano num robô de US$ 50 mil (4%)",
         implantacao: "integração de US$ 5 mil a 20 mil, mais US$ 2 mil a 5 mil de treinamento (Qviro)",
@@ -94,6 +127,9 @@
         r.planos = (Array.isArray(r.planos) ? r.planos : []).filter(x => x && x.id).map(x => ({ id: String(x.id), nome: String(x.nome || x.id), inclui: String(x.inclui || ""), mira: ["nao", "mira", "pro"].includes(x.mira) ? x.mira : "nao", fixoMes: Math.max(0, Number(x.fixoMes) || 0), porAttaMes: Math.max(0, Number(x.porAttaMes) || 0) }));
         if (!r.planos.length) r.planos = JSON.parse(JSON.stringify(PRECOS_PADRAO.planos));
         if (!r.planos.some(x => x.id === r.planoPadrao)) r.planoPadrao = r.planos[0].id;
+        if (!Array.isArray(r.confirmados)) r.confirmados = [];
+        if (!Array.isArray(r.comercial.pagamentoCompra) || !r.comercial.pagamentoCompra.length) r.comercial.pagamentoCompra = JSON.parse(JSON.stringify(PRECOS_PADRAO.comercial.pagamentoCompra));
+        ["inclui", "naoInclui"].forEach(k => { if (!Array.isArray(r.comercial[k])) r.comercial[k] = String(r.comercial[k] || "").split(/\n+/).map(x => x.trim()).filter(Boolean); });
         return r;
     }
     // o plano (da tabela) e a mensalidade de uma frota de n Atta
@@ -187,7 +223,9 @@
         co2Kwh: [0.05, 0.04, 0.09, "kg de CO₂ por kWh da rede (varia mês a mês)"],
         glpHora: [2.5, 2, 3, "kg de GLP por hora de empilhadeira a gás"],
         co2Glp: [2.95, 2.9, 3.0, "kg de CO₂ por kg de GLP queimado"],
-        horasMes: [176, 176, 176, "horas trabalhadas por mês (para a hora extra)"]
+        horasMes: [176, 176, 176, "horas trabalhadas por mês (para a hora extra)"],
+        // 0.24: quando a empresa realoca as pessoas em vez de desligar
+        valorRealocacao: [0.5, 0.3, 0.8, "parte do custo da pessoa realocada que vira ganho (ela vai para um trabalho que hoje custa ou não é feito); no conservador, zero"]
     };
     // a premissa de fábrica, ou a da E4M (tabela) ou a do estudo, se mudaram
     const premissa = (k, ov) => {
@@ -247,14 +285,19 @@
     /* ---------------- modelos por carga ---------------- */
     function modeloDoFluxo(f) {
         const peso = Number(f.peso) || PESO_PADRAO[f.carga] || 150;
+        if (f.entrega === "milkrun") return "atta-t-o";   // a rota com paradas vai de comboio
         if (f.carga === "esteira") return peso <= CAPACIDADE.R ? "atta-r-o" : "atta-t-o";
         if (f.carga === "comboio") return "atta-t-o";
         if (f.carga === "caixa") return peso <= CAPACIDADE.G ? "atta-g-o" : peso <= CAPACIDADE.E ? "atta-e-o-serie" : "atta-t-o";
         return peso <= CAPACIDADE.E ? "atta-e-o-serie" : "atta-t-o";
     }
     const MODULO = { "atta-g-o": "G", "atta-e-o-serie": "E", "atta-r-o": "R", "atta-t-o": "T" };
+    const MODELO_DO_MODULO = { G: "atta-g-o", E: "atta-e-o-serie", R: "atta-r-o", T: "atta-t-o" };
+    // 0.23: o motor das baterias (perfil de partida por módulo), no navegador ou no Node
+    const BAT = () => (typeof Bateria !== "undefined" ? Bateria : (() => { try { return typeof require === "function" ? require("./bateria.js") : null; } catch (e) { return null; } })());
     const CARGA_ESTACAO = { G: "KIT", E: "CARRINHO", R: "ESTEIRA", T: "COMBOIO" };
     const TEMPOS_CARGA = { caixa: [20, 20], carrinho: [25, 25], esteira: [20, 20], comboio: [60, 60], palete: [30, 30] };
+    const ENTREGAS_OK = new Set(["chamada", "troca", "milkrun"]);
     const nomeModelo = id => M()?.porId?.(id)?.nome || { "atta-g-o": "Atta G-O", "atta-e-o-serie": "Atta E-O", "atta-r-o": "Atta R-O", "atta-t-o": "Atta T-O" }[id] || id;
 
     /* ---------------- sem desenho: posições pelas distâncias (MDS) ---------------- */
@@ -374,7 +417,7 @@
         const fluxosQ = (resp?.fluxos?.lista || []).filter(f => f && f.de && f.para && f.de !== f.para);
         let pontos = (resp?.pontos?.lista || []).filter(p => p && p.id).map(p => ({ id: String(p.id), nome: String(p.nome || p.id), tipo: p.tipo || "ambos", x: Number(p.x), y: Number(p.y) }));
         // só os pontos que algum fluxo usa (e todos, se não houver fluxo)
-        const usados = new Set(fluxosQ.flatMap(f => [f.de, f.para]));
+        const usados = new Set(fluxosQ.flatMap(f => [f.de, f.para].concat(f.entrega === "milkrun" ? f.paradas || [] : [])));
         if (usados.size) pontos = pontos.filter(p => usados.has(p.id));
         if (pontos.length < 2) return { planta: null, mapa: {}, avisos: ["São precisos pelo menos dois pontos ligados por um fluxo."], semDesenho: true };
         const temCoord = p => Number.isFinite(p.x) && Number.isFinite(p.y);
@@ -401,14 +444,14 @@
         }
         // modelo de cada ponto (pelos fluxos que passam nele)
         const modulosDo = {};
-        fluxosQ.forEach(f => { const m = MODULO[modeloDoFluxo(f)]; [f.de, f.para].forEach(id => { (modulosDo[id] = modulosDo[id] || new Set()).add(m); }); });
+        fluxosQ.forEach(f => { const m = MODULO[modeloDoFluxo(f)]; [f.de, f.para].concat(f.entrega === "milkrun" ? f.paradas || [] : []).forEach(id => { (modulosDo[id] = modulosDo[id] || new Set()).add(m); }); });
 
         // o anel: o retângulo que deixa os ramais curtos onde passa mais viagem
         // (soma de ramal × viagens + um pouco do perímetro, que todo mundo anda)
         const raio = Number(opcoes.raio) || 1.5, margem = raio + 0.6;
         const xs = pontos.map(p => p.x), ys = pontos.map(p => p.y);
         const peso = {};
-        fluxosQ.forEach(f => { const w = Math.max(0.2, Number(f.quantidade) || 1) * (f.unidade === "dia" ? 0.1 : f.unidade === "turno" ? 0.15 : 1); peso[f.de] = (peso[f.de] || 0) + w; peso[f.para] = (peso[f.para] || 0) + w; });
+        fluxosQ.forEach(f => { const w = f.entrega === "milkrun" ? 60 / Math.max(5, Number(f.ciclo) || 20) : Math.max(0.2, Number(f.quantidade) || 1) * (f.unidade === "dia" ? 0.1 : f.unidade === "turno" ? 0.15 : 1); [f.de, f.para].concat(f.entrega === "milkrun" ? f.paradas || [] : []).forEach(id => { peso[id] = (peso[id] || 0) + w; }); });
         const pesoTotal = pontos.reduce((s, p) => s + (peso[p.id] || 0.2), 0);
         const minL = 10, minA = 5;
         const distRet = (p, x0, y0, x1, y1) => {
@@ -459,8 +502,11 @@
         const ligacoes = pontos.map(p => {
             let melhor = null;
             LADOS.forEach(l => { const pr = projetar(l, p); if (!melhor || pr.d < melhor.d) melhor = Object.assign({ lado: l }, pr); });
-            const soT = modulosDo[p.id] && [...modulosDo[p.id]].every(m => m === "T");
-            return { p, ...melhor, emLinha: soT };
+            // 0.24: um ponto em que o comboio para fica no próprio corredor (o rebocador carregado não gira nem entra em ramal);
+            // os outros módulos que usam o mesmo ponto param ali também
+            const temT = modulosDo[p.id] && [...modulosDo[p.id]].some(m => m === "T");
+            const soT = temT && [...modulosDo[p.id]].every(m => m === "T");
+            return { p, ...melhor, emLinha: temT, soT };
         });
         // as junções de cada lado, em ordem; perto demais (1,2 m) viram uma só
         const nos = [], segs = [], estacoes = [];
@@ -501,6 +547,12 @@
         LADOS.forEach((l, i) => {
             const L = Math.hypot(l.b[0] - l.a[0], l.b[1] - l.a[1]), ux = (l.b[0] - l.a[0]) / L, uy = (l.b[1] - l.a[1]) / L;
             const grupos = juncoesDo[l.id].sort((a, b) => a.t - b.t);
+            // 0.24: duas paradas no mesmo ponto do corredor (projetadas no mesmo lugar) ficam a 1,6 m uma da outra
+            const tDe = g => (g.membros.length ? g.membros.reduce((s2, x) => s2 + x.t, 0) / g.membros.length : g.t);
+            for (let k = 1; k < grupos.length; k++) {
+                const a0 = tDe(grupos[k - 1]), a1 = tDe(grupos[k]);
+                if (a1 - a0 < 1.6) { const novo = Math.min(L - 0.4, a0 + 1.6); grupos[k].t = novo; grupos[k].membros.forEach(x => { x.t = novo; }); }
+            }
             let anterior = cantos[l.id].id;
             grupos.forEach(g => {
                 const t = g.membros.length ? g.membros.reduce((s, x) => s + x.t, 0) / g.membros.length : g.t;
@@ -511,9 +563,9 @@
                     const m = g.membros[0];
                     const id = idLivre(m.p.id);
                     j = no(id, x, y, "ESTACAO", { estacao: id, orientacaoChegada: Pl.anguloEntre({ x: l.a[0], y: l.a[1] }, { x: l.b[0], y: l.b[1] }) });
-                    estacoes.push({ id, nome: m.p.nome, carga: "COMBOIO" });
+                    estacoes.push({ id, nome: m.p.nome, carga: m.soT ? "COMBOIO" : "" });
                     mapa[m.p.id] = id;
-                    avisos.push(`${m.p.nome}: parada do comboio no próprio corredor.`);
+                    avisos.push(`${m.p.nome}: parada do comboio no próprio corredor${m.soT ? "" : " (os outros Atta param ali também)"}.`);
                 } else j = no("J" + String(++nj).padStart(2, "0"), x, y);
                 seg(anterior, j.id);
                 anterior = j.id;
@@ -588,24 +640,34 @@
         const nomes = Object.fromEntries((resp?.pontos?.lista || []).map(p => [p.id, p.nome || p.id]));
         const fluxos = [], missoes = [];
         (resp?.fluxos?.lista || []).forEach((f, i) => {
-            if (!f || !f.de || !f.para || f.de === f.para || !(Number(f.quantidade) > 0)) return;
+            if (!f || !f.de || !f.para || f.de === f.para || !(Number(f.quantidade) > 0 || (f.entrega === "milkrun" && Number(f.ciclo) > 0))) return;
             const de = mapa[f.de], para = mapa[f.para];
             if (!de || !para) return;
-            const modelo = modeloDoFluxo(f);
-            const [pg, en] = TEMPOS_CARGA[f.carga] || [25, 25];
+            const entrega = ENTREGAS_OK.has(f.entrega) ? f.entrega : "chamada";
+            const modelo = modeloDoFluxo(Object.assign({}, f, { entrega }));
+            const [pg, en] = entrega === "milkrun" ? TEMPOS_CARGA.comboio : TEMPOS_CARGA[f.carga] || [25, 25];
             const id = "Q" + String(i + 1).padStart(2, "0");
-            const nome = `${nomes[f.de]} → ${nomes[f.para]}${f.oque ? " · " + String(f.oque).slice(0, 30) : ""}`.slice(0, 60);
+            // milk run: as paradas depois da primeira (pontos do questionário que existem na planta)
+            const paradas = entrega === "milkrun" ? (Array.isArray(f.paradas) ? f.paradas : []).map(x => mapa[x]).filter(x => x && x !== de && x !== para) : [];
+            const nomeRota = entrega === "milkrun" ? `Milk run ${nomes[f.de]} → ${[f.para].concat((f.paradas || []).filter(x => mapa[x])).map(x => nomes[x] || x).join(", ")}` : `${nomes[f.de]} → ${nomes[f.para]}`;
+            const nome = `${nomeRota}${f.oque ? " · " + String(f.oque).slice(0, 30) : ""}`.slice(0, 60);
             const mid = "M" + String(i + 1).padStart(2, "0");
-            missoes.push({ id: mid, nome: nome.slice(0, 80), prioridade: 1, etapas: [{ tipo: "IR_PARA", destino: de }, { tipo: "CARREGAR" }, { tipo: "IR_PARA", destino: para }, { tipo: "DESCARREGAR" }] });
+            const fx = { de, para, paradas, entrega };
+            missoes.push({ id: mid, nome: nome.slice(0, 80), prioridade: 1, etapas: E() ? E().etapasDaEntrega(fx) : [{ tipo: "IR_PARA", destino: de }, { tipo: "CARREGAR" }, { tipo: "IR_PARA", destino: para }, { tipo: "DESCARREGAR" }] });
             // a planilha de movimentações traz os horários do dia mais cheio
             const horarios = Array.isArray(f.horarios) ? f.horarios.filter(h => /^\d{2}:\d{2}$/.test(h)) : [];
-            const demanda = horarios.length >= 3 ? { tipo: "horarios", horarios: horarios.slice(0, 2000) } : { tipo: "porHora", porHora: Math.round(porHoraDe(f, op) * 100) / 100 };
+            const ciclo = Number(f.ciclo) > 0 ? Number(f.ciclo) : Number(f.quantidade) > 0 && entrega === "milkrun" ? Math.round(60 / Math.max(0.2, porHoraDe(f, op))) : 20;
+            const demanda = entrega === "milkrun" ? { tipo: "ciclo", cicloMin: ciclo }
+                : horarios.length >= 3 ? { tipo: "horarios", horarios: horarios.slice(0, 2000) } : { tipo: "porHora", porHora: Math.round(porHoraDe(f, op) * 100) / 100 };
             const fonte = ["diario", "planilha", "mira"].includes(f.fonte) ? f.fonte : f.modelo ? "setor" : "cliente";
+            // 0.24: prazo do cliente → (milk run) o ciclo → o de partida da carga (o estoque que costuma ficar na linha)
+            const prazo = Number(f.prazo) > 0 ? Number(f.prazo) : entrega === "milkrun" ? ciclo : PRAZO_CARGA[f.carga] || 15;
             fluxos.push({
-                id, nome, missao: mid, de, para, modelos: [modelo], demanda,
-                pegarS: pg, entregarS: en, prazoMin: Number(f.prazo) > 0 ? Number(f.prazo) : 15, prazoOrigem: Number(f.prazo) > 0 ? "cliente" : "premissa",
+                id, nome, missao: mid, de, para, paradas, entrega, modelos: [modelo], demanda,
+                pegarS: pg, entregarS: en, prazoMin: prazo, prazoOrigem: Number(f.prazo) > 0 ? "cliente" : entrega === "milkrun" ? "cliente" : "premissa",
                 prioridade: 1, ativo: true, origem: { cliente: "questionário", diario: "diário", planilha: "planilha", mira: "Mira Pro", setor: "modelo do setor" }[fonte],
-                q: { de: f.de, para: f.para, carga: f.carga || "carrinho", peso: Number(f.peso) || null, hoje: f.hoje || "pe", distancia: Number(f.distancia) || null, quantidade: Number(f.quantidade), unidade: f.unidade || "hora",
+                q: { de: f.de, para: f.para, carga: entrega === "milkrun" ? (f.carga === "comboio" ? "carrinho" : f.carga || "carrinho") : f.carga || "carrinho", peso: Number(f.peso) || null, hoje: f.hoje || (entrega === "milkrun" ? "rebocador" : "pe"), distancia: Number(f.distancia) || null, quantidade: Number(f.quantidade), unidade: f.unidade || "hora",
+                    entrega, paradas: (f.paradas || []).slice(), ciclo: entrega === "milkrun" ? ciclo : null,
                     tempoHoje: Number(f.tempoHoje) > 0 ? Number(f.tempoHoje) : null, minutosHoje: Number(f.minutosHoje) > 0 ? Number(f.minutosHoje) : null,
                     fonte: { cliente: "cliente", diario: "diario", planilha: "planilha", mira: "estimado", setor: "premissa" }[fonte] }
             });
@@ -716,14 +778,23 @@
     /* ---------------- quando falta resposta ---------------- */
     // o tempo de uma entrega feita por gente hoje (ida e volta, pegar, esperar, entregar), em minutos, nos três lados
     // ordem: o tempo que o cliente informou → o diário (ida × 2) → a conta pela distância
+    const comVeiculo = f => f.q?.hoje === "empilhadeira" || f.q?.hoje === "rebocador";
     function tempoManual(f, R) {
-        const emp = f.q?.hoje === "empilhadeira";
+        const emp = comVeiculo(f);
         if (f.q?.tempoHoje > 0) { const t = f.q.tempoHoje; return { v: t, min: t * 0.9, max: t * 1.1, origem: "cliente", como: "informado pelo cliente" }; }
         if (f.q?.minutosHoje > 0) { const t = f.q.minutosHoje * 2; return { v: t, min: t * 0.9, max: t * 1.1, origem: "diario", como: "diário de viagens (ida × 2)" }; }
         const vel = emp ? R.velocidadeEmp : R.velocidadePe, mao = emp ? R.manuseioEmpS : R.manuseioS;
+        const veic = f.q?.hoje === "rebocador" ? "de rebocador" : emp ? "de empilhadeira" : "a pé";
+        if (f.entrega === "milkrun") {
+            // a volta inteira da rota (o motorista do rebocador hoje): o caminho + deixar e pegar em cada parada
+            const d = f.metros || f.distPessoa || 200, np = 1 + (f.paradas || []).length;
+            const t = (v, m) => (d / v + (2 * np + 2) * m) / 60;
+            return { v: t(vel.v, mao.v), min: t(vel.max, mao.min), max: t(vel.min, mao.max), origem: "estimado", como: `${Math.round(d)} m de rota ${veic}, ${np} parada${np > 1 ? "s" : ""}, ${Math.round(mao.v)} s para deixar e pegar em cada uma` };
+        }
         const d = f.distPessoa || 30;
-        const t = (v, m) => (2 * d / v + 2 * m) / 60;
-        return { v: t(vel.v, mao.v), min: t(vel.max, mao.min), max: t(vel.min, mao.max), origem: "estimado", como: `${Math.round(d)} m ida e volta ${emp ? "de empilhadeira" : "a pé"} + ${Math.round(mao.v)} s em cada ponta` };
+        const pontas = f.entrega === "troca" ? 4 : 2;   // troca: deixa o cheio e traz o vazio
+        const t = (v, m) => (2 * d / v + pontas * m) / 60;
+        return { v: t(vel.v, mao.v), min: t(vel.max, mao.min), max: t(vel.min, mao.max), origem: "estimado", como: `${Math.round(d)} m ida e volta ${veic} + ${Math.round(mao.v)} s em cada ponta${pontas > 2 ? " (leva o cheio e traz o vazio)" : ""}` };
     }
     // ctx: { fluxos (com viagensDia e metros), op, precos, premissasNegocio }
     function resolver(resp, ctx) {
@@ -735,7 +806,7 @@
         R.turnos = num(op.turnos, "cliente");
         R.horasTurno = op.horasTurno; R.diasMes = op.diasMes; R.almoco = op.almoco;
         ["velocidadePe", "velocidadeEmp", "manuseioS", "manuseioEmpS", "pfd", "faltas", "disponibilidadeAtta", "coberturaFrota", "reducaoParadas", "reducaoErros", "reducaoAvarias", "reducaoAcidentes",
-            "margemMinuto", "materialPct", "coberturaHoje", "coberturaE4M", "custoM2", "larguraEmp", "larguraAtta", "kwhHoraAtta", "co2Kwh", "glpHora", "co2Glp", "horasMes"].forEach(k => { R[k] = premissa(k, ov); });
+            "margemMinuto", "materialPct", "coberturaHoje", "coberturaE4M", "custoM2", "larguraEmp", "larguraAtta", "kwhHoraAtta", "co2Kwh", "glpHora", "co2Glp", "horasMes", "valorRealocacao"].forEach(k => { R[k] = premissa(k, ov); });
         // as horas que uma pessoa de fato transporta num turno: tira o intervalo, as pausas e a fadiga (PF&D) e as faltas
         const horasTrab = Math.max(1, op.horasTurno.v - op.almoco.v / 60);
         const prod = (pfd, fal) => horasTrab * (1 - pfd) * (1 - fal);
@@ -751,7 +822,7 @@
             const t = tempoManual(f, R);
             f.tempoManual = t;
             origens.add(t.origem);
-            const w = f.q?.hoje === "empilhadeira" ? trabalho.emp : trabalho.pe;
+            const w = comVeiculo(f) ? trabalho.emp : trabalho.pe;
             w.v += por * t.v / 60; w.min += por * t.min / 60; w.max += por * t.max / 60;
         });
         const oT = origens.size === 1 ? [...origens][0] : "estimado";
@@ -805,6 +876,13 @@
         R.cruzamentos = valorOu(lerNum(resp, "corredores", "cruzamentos"), num(0, "premissa", "não informado"));
         R.portas = valorOu(lerNum(resp, "corredores", "portas"), num(0, "premissa", "não informado"));
         R.turnoNovo = lerTexto(resp, "futuro", "turnoNovo") === "sim";
+        // 0.24: postos dedicados (quem faz só transporte sai inteiro quando a frota assume o trabalho dele) e o destino das horas
+        R.rotasMilkRun = fluxos.filter(f => f.entrega === "milkrun").length;
+        const ded = lerNum(resp, "custo", "dedicadas");
+        R.dedicadas = ded && Number.isFinite(ded.v) ? num(Math.min(ded.v, R.pessoasTurno.v), "cliente", "pessoas por turno que fazem só transporte", Math.min(ded.min, R.pessoasTurno.min), Math.min(ded.max, R.pessoasTurno.max))
+            : R.rotasMilkRun ? num(Math.min(R.rotasMilkRun, R.pessoasTurno.v), "estimado", "um motorista dedicado por rota de milk run") : null;
+        const dest = lerTexto(resp, "custo", "destinoHoras");
+        R.destinoHoras = ["desligar", "realocar", "evitar"].includes(dest) ? dest : "";
         return R;
     }
 
@@ -850,7 +928,7 @@
             const hw = hardware(pr, fr);
             if (m === 0 || (m > 1 && (m - 1) % 12 === 0)) {
                 const novo = m === 0 ? hw : Math.max(0, hw - hardware(pr, frotaAntes));
-                const impl = m === 0 ? hw * pr.implantacaoPct + e.modulosIO * pr.moduloIO : novo * pr.expansaoPct;
+                const impl = m === 0 ? hw * pr.implantacaoPct + e.modulosIO * pr.moduloIO + (Number(e.extraInv) || 0) : novo * pr.expansaoPct;
                 compra[m] -= novo + impl;
                 locacao[m] -= impl;
                 frotaAntes = fr;
@@ -872,7 +950,7 @@
 
     /* ---------------- a análise inteira ---------------- */
     const respirar = () => new Promise(r => setTimeout(r, 0));
-    const atendeCom = pr => r => r.noPrazo[1] >= pr.prazoAlvo && r.ocupacao[1] <= pr.ocupacaoMax && r.naoAtendidos[1] <= 0.5;
+    const atendeCom = pr => r => E().atendeR(r, pr);
 
     // a menor frota para uma situação (começa abaixo e põe um Atta de cada vez)
     async function menorFrota(ctx, pr, inicio, extra = 8) {
@@ -921,6 +999,9 @@
         const res = await Es.rodar(cenario, base, p => aoProgresso(0.02 + p * 0.33, "Simulando o turno com a demanda de hoje"));
         const rec = res.recomendado;
         const r = rec?.r || res.cenarios[res.cenarios.length - 1]?.r;
+        // 0.24: sem frota que atenda, o estudo não inventa payback: avisa e diz o que segura
+        const melhorTestado = res.cenarios.slice().sort((a, b) => (b.r?.noPrazo?.[1] || 0) - (a.r?.noPrazo?.[1] || 0))[0];
+        const semFrota = rec ? null : { motivo: res.limite || "faixa", gargalo: res.gargalo || "", melhor: melhorTestado ? { nome: melhorTestado.nome, total: melhorTestado.total, noPrazo: melhorTestado.r?.noPrazo?.[1], ocupacao: melhorTestado.r?.ocupacao?.[1], naoAtendidos: melhorTestado.r?.naoAtendidos?.[1] } : null };
         const ctx = Es.contexto(cenario, base);
         const prA = Object.assign({}, res.premissas);
 
@@ -930,7 +1011,7 @@
             const v = res.viagens[f.id] || {};
             const a = noPorId(f.de || ""), b = noPorId(f.para || "");
             const reta = a && b ? Math.abs(a.x - b.x) + Math.abs(a.y - b.y) : null;
-            const distPessoa = f.q?.distancia || (reta && v.metros ? Math.min(v.metros, reta * 1.1) : v.metros || reta || 30);
+            const distPessoa = f.entrega === "milkrun" ? (f.q?.distancia || v.metros || 200) : f.q?.distancia || (reta && v.metros ? Math.min(v.metros, reta * 1.1) : v.metros || reta || 30);
             const viagensDia = r?.porFluxo?.[f.id]?.pedidos || Es.taxaBase(f) * op.turnos * (op.horasTurno.v - op.almoco.v / 60);
             return Object.assign({}, f, { metros: v.metros || null, minViagem: v.min || null, distPessoa, viagensDia });
         });
@@ -938,7 +1019,7 @@
         const diasAno = R.diasMes.v * 12;
 
         // 2. hoje
-        const ehPe = f => f.q?.hoje !== "empilhadeira";
+        const ehPe = f => !comVeiculo(f);
         const kmDia = fl.filter(ehPe).reduce((s, f) => s + f.viagensDia * 2 * f.distPessoa, 0) / 1000;
         const kmEmpDia = fl.filter(f => !ehPe(f)).reduce((s, f) => s + f.viagensDia * 2 * f.distPessoa, 0) / 1000;
         const tonDia = fl.filter(ehPe).reduce((s, f) => s + f.viagensDia * (f.q?.peso || PESO_PADRAO[f.q?.carga] || 150), 0) / 1000;
@@ -972,9 +1053,10 @@
         const pr3 = Object.assign({}, prA, { crescimento: (prA.crescimento || 0) + cresc3 });
         const base3 = g > 0 ? await menorFrota(ctx, pr3, baseHoje.frota || frotaRec, 10) : baseHoje;
         const candidatas = [];
-        candidatas.push({ id: "pre", nome: "Pré-abastecer antes da troca de turno e da volta do intervalo", tipo: "operação", esforco: "baixo", custo: 0, origemCusto: "premissa",
-            descricao: "Os pedidos que chegam juntos no começo do turno e na volta do almoço são entregues antes: a frota não precisa ser do tamanho do pico.",
-            mudar: c => { c.premissas = Object.assign({}, c.premissas, { picoInicio: (c.premissas.picoInicio || 0) * 0.3, picoVolta: (c.premissas.picoVolta || 0) * 0.3 }); } });
+        // 0.24: o pré-abastecimento já entra na frota recomendada (premissa preparo); vira ação só se o estudo o desligou
+        if (!(Number(prA.preparo) >= 0.5)) candidatas.push({ id: "pre", nome: "Pré-abastecer antes da troca de turno e da volta do intervalo", tipo: "operação", esforco: "baixo", custo: 0, origemCusto: "premissa",
+            descricao: "O Atta sai antes do turno e antes do fim do intervalo e deixa na linha o que ela vai pedir no pico: a frota não precisa ser do tamanho do pico.",
+            mudar: c => { c.premissas = Object.assign({}, c.premissas, { preparo: 0.7 }); } });
         const apertados = fl.slice().sort((a, b) => (a.prazoMin / (a.minViagem || 1)) - (b.prazoMin / (b.minViagem || 1))).slice(0, Math.max(1, Math.ceil(fl.length / 3))).map(f => f.id);
         candidatas.push({ id: "prioridade", nome: "Prioridade para os fluxos de prazo curto", tipo: "operação", esforco: "baixo", custo: 0, origemCusto: "premissa",
             descricao: `Os pedidos dos fluxos com o prazo mais curto (${fl.filter(f => apertados.includes(f.id)).map(f => f.nome.split(" · ")[0]).slice(0, 3).join("; ")}) passam na frente.`,
@@ -1069,44 +1151,91 @@
         const escolha = (x, lado) => (lado === "min" ? x.min : lado === "max" ? x.max : x.v);
         // as pessoas-equivalentes do lado do cenário (nunca mais do que o cliente tem; o que sobra delas faz outras coisas)
         const pessoasDoLado = lado => Math.min(escolha(R.pessoasTurno, lado), escolha(R.pessoasEquivalentes, lado));
+        const idsTodos = fl.map(f => f.id);
+        // 0.24: o trabalho de transporte (pessoas-equivalentes por turno) de uma parte dos fluxos, nos três lados
+        function eqDe(ids) {
+            const set = new Set(ids);
+            let v = 0, a = 0, b = 0, emp = 0, ent = 0;
+            fl.filter(f => set.has(f.id)).forEach(f => {
+                const por = f.viagensDia / op.turnos, t = f.tempoManual;
+                v += por * t.v / 60; a += por * t.min / 60; b += por * t.max / 60; ent += f.viagensDia;
+                if (comVeiculo(f)) emp += por * t.v / 60;
+            });
+            return { v: v / R.horasPessoa.v, min: a / R.horasPessoa.max, max: b / R.horasPessoa.min, horasEmp: emp, entregas: ent };
+        }
+        // os ganhos potenciais que o cliente informou, pelo lado mínimo (o cenário provável conta só estes)
+        const informado = k => R[k] && R[k].origem === "cliente";
+        const potMinimo = {
+            paradas: informado("paradasMes") && R.custoMinuto.v > 0 ? R.paradasMes.min * R.minutosParada.min * R.custoMinuto.min * 12 * R.reducaoParadas.min : 0,
+            erros: informado("errosMes") && R.custoErro.v > 0 ? R.errosMes.min * R.custoErro.min * 12 * R.reducaoErros.min : 0,
+            avarias: informado("avariasMes") ? R.avariasMes.min * 12 * R.reducaoAvarias.min : 0,
+            acidentes: informado("acidentesAno") ? R.acidentesAno.min * R.custoAcidente.min * R.reducaoAcidentes.min : 0
+        };
         function economia(cen) {
-            // cen: { lado: "min" | "v" | "max", crescimento: bool, potenciais: bool, liberadasTurno (fixo, para as contas de equilíbrio) }
+            // cen: { lado: "min" | "v" | "max", crescimento: bool, potenciais: false | "min" (só os informados, lado mínimo) | "max" (todos),
+            //        turnoNovo: bool, ids (parte dos fluxos; sem: todos), nAtta (energia do turno novo), liberadasTurno (fixo, para as contas de equilíbrio) }
             const lado = cen.lado;
+            const ids = cen.ids || idsTodos;
+            const parte = ids !== idsTodos && ids.length !== idsTodos.length;
+            const eq = parte ? eqDe(ids) : R.pessoasEquivalentes;
             const cob = escolha(R.coberturaFrota, lado);
             const pessoasT = escolha(R.pessoasTurno, lado);
             const custoP = escolha(R.custoPessoa, lado);
-            const base = pessoasDoLado(lado);
+            const base = Math.min(pessoasT, escolha(eq, lado));
             const fr = pessoasT > 0 ? base / pessoasT : 0;
             // conservador: só pessoas inteiras; provável e otimista: o arredondado
             const arred = lado === "min" ? Math.floor : Math.round;
-            const liberadas = cen.liberadasTurno != null ? cen.liberadasTurno : arred(base * cob + 1e-9);
-            const empL = cen.liberadasTurno != null ? 0 : R.empilhadeiras.v > 0 ? arred(escolha(R.empilhadeiras, lado) * fracaoEmp * cob) : 0;
+            // por posto: cada rota de milk run tira o motorista inteiro; quem o cliente diz que faz só transporte sai inteiro
+            const set = new Set(ids);
+            const rotas = fl.filter(f => f.entrega === "milkrun" && set.has(f.id)).length;
+            const parteEq = R.pessoasEquivalentes.v > 0 ? Math.min(1, escolha(eq, "v") / R.pessoasEquivalentes.v) : 0;
+            const ded = R.dedicadas?.origem === "cliente" ? escolha(R.dedicadas, lado) * parteEq : 0;
+            const porPosto = Math.min(pessoasT, rotas + arred(Math.max(0, ded - rotas) * cob + 1e-9));
+            const porHora = arred(base * cob + 1e-9);
+            const liberadas = cen.liberadasTurno != null ? cen.liberadasTurno : Math.max(porHora, porPosto);
+            const contaPorPosto = cen.liberadasTurno == null && porPosto > porHora;
+            const parteEmp = R.horasEmpilhadeiraTurno.v > 0 ? Math.min(1, (parte ? eq.horasEmp : R.horasEmpilhadeiraTurno.v) / R.horasEmpilhadeiraTurno.v) : 0;
+            const empL = cen.liberadasTurno != null ? 0 : R.empilhadeiras.v > 0 ? Math.max(arred(escolha(R.empilhadeiras, lado) * fracaoEmp * parteEmp * cob), Math.min(escolha(R.empilhadeiras, lado), rotas)) : 0;
             const custoE = escolha(R.custoEmpilhadeira, lado);
             const hx = cen.liberadasTurno != null ? 0 : R.horasExtras.v * (custoP / R.horasMes.v) * 1.5 * 12 * fr * cob;
+            // o destino das horas: desligar ou evitar contratação vale o custo inteiro; realocar vale uma parte (zero no conservador)
+            const valorPessoa = cen.liberadasTurno == null && R.destinoHoras === "realocar" ? (lado === "min" ? 0 : escolha(R.valorRealocacao, lado)) : 1;
+            const parteEnt = entregasDia > 0 ? (parte ? eqDe(ids).entregas : entregasDia) / entregasDia : 0;
+            const turnoNovo = Boolean(cen.turnoNovo && R.turnoNovo && op.turnos < 3 && cen.liberadasTurno == null);
             return k => {
                 const fator = cen.crescimento ? Math.pow(1 + escolha(R.crescimento, lado), k) : 1;
                 // com a demanda maior, sem a frota seriam precisas mais pessoas (contratações evitadas)
-                const pessoasAno = liberadas * op.turnos * custoP * 12 + (cen.crescimento ? Math.max(0, Math.floor(base * cob * (fator - 1))) * op.turnos * custoP * 12 : 0);
-                const conf = { pessoas: pessoasAno, empilhadeiras: empL * custoE * 12, horasExtras: hx };
-                const pot = cen.potenciais ? {
-                    paradas: hoje.paradasAno * escolha(R.reducaoParadas, lado), erros: hoje.errosAno * escolha(R.reducaoErros, lado),
-                    avarias: hoje.avariasAno * escolha(R.reducaoAvarias, lado), acidentes: hoje.acidentesCustoAno * escolha(R.reducaoAcidentes, lado)
-                } : {};
+                const pessoasAno = liberadas * op.turnos * custoP * 12 * valorPessoa + (cen.crescimento ? Math.max(0, Math.floor(base * cob * (fator - 1))) * op.turnos * custoP * 12 : 0);
+                // o turno novo (a partir do 2º ano): a frota cobre o transporte dele sem contratar; a energia do turno a mais sai do ganho
+                const tn = turnoNovo && k >= 1 ? liberadas * custoP * 12 - (cen.nAtta || 0) * energiaMes / op.turnos * 12 : 0;
+                const conf = { pessoas: pessoasAno, empilhadeiras: empL * custoE * 12, horasExtras: hx, turnoNovo: Math.max(0, tn) };
+                const pot = cen.potenciais === "min" ? { paradas: potMinimo.paradas * parteEnt, erros: potMinimo.erros * parteEnt, avarias: potMinimo.avarias * parteEnt, acidentes: potMinimo.acidentes * parteEnt }
+                    : cen.potenciais ? {
+                        paradas: hoje.paradasAno * escolha(R.reducaoParadas, lado) * parteEnt, erros: hoje.errosAno * escolha(R.reducaoErros, lado) * parteEnt,
+                        avarias: hoje.avariasAno * escolha(R.reducaoAvarias, lado) * parteEnt, acidentes: hoje.acidentesCustoAno * escolha(R.reducaoAcidentes, lado) * parteEnt
+                    } : {};
                 const confirmados = Object.values(conf).reduce((s, x) => s + x, 0), potenciais = Object.values(pot).reduce((s, x) => s + x, 0);
-                return { conf, pot, confirmados, potenciais, total: confirmados + potenciais, liberadas, empL };
+                return { conf, pot, confirmados, potenciais, total: confirmados + potenciais, liberadas, empL, porPosto: contaPorPosto, valorPessoa };
             };
         }
+        // os três cenários (0.24: o provável conta as perdas que o cliente informou, pela redução mínima, e o turno novo previsto)
+        const nFrotaFin = totalFrota(frotaFin);
+        const CEN = {
+            conservador: { lado: "min", crescimento: false, potenciais: false },
+            provavel: { lado: "v", crescimento: true, potenciais: "min", turnoNovo: true, nAtta: nFrotaFin },
+            otimista: { lado: "max", crescimento: true, potenciais: "max", turnoNovo: true, nAtta: nFrotaFin }
+        };
         const materialHora = R.faturamentoMes.v > 0 ? R.faturamentoMes.v * R.materialPct.v / (R.diasMes.v * op.turnos * horasTrab) : 0;
         const capitalGiro = materialHora * Math.max(0, R.coberturaHoje.v - R.coberturaE4M.v);
         const cenarios = {};
-        [["conservador", { lado: "min", crescimento: false, potenciais: false }, frotaPorAno(forecast.map(() => null), "so")],
-            ["provavel", { lado: "v", crescimento: true, potenciais: false }, frotaPorAno(forecast, "so")],
-            ["otimista", { lado: "max", crescimento: true, potenciais: true }, frotaPorAno(forecast, boas.length ? "plano" : "so")]].forEach(([id, cen, frotaAnos]) => {
+        [["conservador", CEN.conservador, frotaPorAno(forecast.map(() => null), "so")],
+            ["provavel", CEN.provavel, frotaPorAno(forecast, "so")],
+            ["otimista", CEN.otimista, frotaPorAno(forecast, boas.length ? "plano" : "so")]].forEach(([id, cen, frotaAnos]) => {
             const ec = economia(cen);
-            const fc = fluxoCaixa(pr, { frotaAnos, economiaAno: ec, modulosIO, energiaMes, capitalGiro: cen.potenciais ? capitalGiro : 0 });
+            const fc = fluxoCaixa(pr, { frotaAnos, economiaAno: ec, modulosIO, energiaMes, capitalGiro: cen.potenciais === "max" ? capitalGiro : 0 });
             const taxa = escolha(R.custoCapital, id === "conservador" ? "max" : id === "otimista" ? "min" : "v");
             const e0 = ec(0);
-            cenarios[id] = { compra: resumoFluxo(fc.compra, taxa), locacao: resumoFluxo(fc.locacao, taxa), economiaAno1: e0, anos: fc.detalhe, taxa, mensal: fc.compra.map(Math.round), mensalLocacao: fc.locacao.map(Math.round), frota: Es.nomeFrota(frotaAnos[0]), frota5: Es.nomeFrota(frotaAnos[5]) };
+            cenarios[id] = { compra: resumoFluxo(fc.compra, taxa), locacao: resumoFluxo(fc.locacao, taxa), economiaAno1: e0, economiaAno2: ec(1), anos: fc.detalhe, taxa, mensal: fc.compra.map(Math.round), mensalLocacao: fc.locacao.map(Math.round), frota: Es.nomeFrota(frotaAnos[0]), frota5: Es.nomeFrota(frotaAnos[5]) };
         });
         // comparações (5 anos, custo total da logística interna)
         const prov = cenarios.provavel;
@@ -1114,11 +1243,19 @@
         const custoE4M = (fluxoTotalCusto => fluxoTotalCusto)(naoFazer - prov.compra.acumulado);
         let soMaisAtta = null;
         if (boas.length && forecast[3]?.so?.frota && forecast[3]?.plano?.frota) {
-            const ecP = economia({ lado: "v", crescimento: true, potenciais: false });
+            const ecP = economia(CEN.provavel);
             const fcP = fluxoCaixa(pr, { frotaAnos: frotaPorAno(forecast, "plano"), economiaAno: ecP, modulosIO, energiaMes, capitalGiro: 0 });
             soMaisAtta = { comPlano: resumoFluxo(fcP.compra, R.custoCapital.v), soAtta: prov.compra, frotaSo: forecast[3].so.nome, frotaPlano: forecast[3].plano.nome };
         }
         const comparacao = { naoFazer, comE4M: custoE4M, economia5: prov.compra.acumulado, soMaisAtta };
+        // 0.24: o payback provável se as pessoas forem desligadas ou realocadas (o cliente decide)
+        const destinos = {};
+        ["desligar", "realocar"].forEach(d => {
+            const antes = R.destinoHoras;
+            R.destinoHoras = d;
+            destinos[d] = payback(fluxoCaixa(pr, { frotaAnos: frotaPorAno(forecast, "so"), economiaAno: economia(CEN.provavel), modulosIO, energiaMes, capitalGiro: 0 }).compra);
+            R.destinoHoras = antes;
+        });
 
         // 7. sensibilidade (payback do cenário provável)
         aoProgresso(0.94, "Sensibilidade");
@@ -1129,7 +1266,7 @@
             if (mud.__preco) prx.atta = Object.fromEntries(Object.entries(pr.atta).map(([k, v]) => [k, v * mud.__preco]));
             if (mud.__impl) prx.implantacaoPct = mud.__impl;
             if (mud.__assin != null) prx.planos = pr.planos.map(x => Object.assign({}, x, { fixoMes: x.fixoMes * mud.__assin, porAttaMes: x.porAttaMes * mud.__assin }));
-            const ec = economia({ lado: "v", crescimento: true, potenciais: false });
+            const ec = economia(CEN.provavel);
             const fc = fluxoCaixa(prx, { frotaAnos: frotaPorAno(forecast, "so"), economiaAno: ec, modulosIO, energiaMes, capitalGiro: 0 });
             Object.keys(R0).forEach(k => { R[k] = R0[k]; });
             return payback(fc.compra);
@@ -1207,11 +1344,242 @@
                     linhas: [1, 2, 3].map(k => ({ pessoas: k, payback: pbUm(k) })), precisa: Object.fromEntries([24, 36, 48].map(m => [m, minimo(pbUm, m)])) }
             };
         })();
+        // 7c. bateria e recarga (0.23): a energia de cada Atta no dia, quantas recargas, se cabem nas folgas e quantos carregadores
+        const bateria = (() => {
+            const porAtta = rec?.r?.porAtta || [];
+            if (!porAtta.length) return null;
+            const hDisp = r?.horasDisp || op.turnos * horasTrab;
+            const noite = Math.max(0, 24 - op.turnos * op.horasTurno.v);
+            const intervaloH = op.turnos * op.almoco.v / 60;
+            const Bt = BAT();
+            const perfil = modelo => {
+                const mod = MODULO[modelo] || M()?.porId?.(modelo)?.modulo || "E";
+                if (Bt) return Bt.perfilDoModelo(modelo, mod, Bt.configuracao(entrada.bateria || null));
+                return { capacidadeWh: 1280, cargaAlvo: 90, irCarregarAbaixo: 25, potenciaCargaW: 640, consumoParadoW: 15, whKmVazio: 22, whKmCarregado: 38, whCicloCarga: 0.6 };
+            };
+            const linhas = porAtta.map(a => {
+                const p = perfil(a.modelo);
+                const rodandoH = a.ocupacao * hDisp;
+                const whDia = a.km * (p.whKmVazio + p.whKmCarregado) / 2 + a.viagens * 2 * p.whCicloCarga + Math.max(0, hDisp - rodandoH) * p.consumoParadoW;
+                const util = p.capacidadeWh * Math.max(10, p.cargaAlvo - p.irCarregarAbaixo) / 100;
+                const cargaH = whDia / Math.max(1, p.potenciaCargaW);
+                const folgaH = Math.max(0, hDisp - rodandoH);
+                return { id: a.id, modelo: a.modelo, whDia, recargasDia: whDia / Math.max(1, util), cargaH, folgaH, autonomiaH: util / Math.max(1, whDia / Math.max(0.1, hDisp)),
+                    capacidadeWh: p.capacidadeWh, potenciaCargaW: p.potenciaCargaW, cheiaH: util / Math.max(1, p.potenciaCargaW) };
+            });
+            const porModelo = [...new Set(linhas.map(l => l.modelo))].map(modelo => {
+                const ls = linhas.filter(l => l.modelo === modelo);
+                const med = k => ls.reduce((s, l) => s + l[k], 0) / ls.length;
+                return { modelo, n: ls.length, whDia: med("whDia"), recargasDia: med("recargasDia"), cargaH: med("cargaH"), folgaH: med("folgaH"), autonomiaH: med("autonomiaH"),
+                    capacidadeWh: ls[0].capacidadeWh, potenciaCargaW: ls[0].potenciaCargaW };
+            });
+            // onde a carga cabe: na noite (fora dos turnos), nas folgas do turno (recarga de oportunidade) ou tirando Atta da operação
+            const cabeNoite = linhas.every(l => l.recargasDia <= 1 && noite >= l.cheiaH);
+            const cabeFolga = linhas.every(l => l.cargaH * 1.25 <= l.folgaH + (noite > 0 ? Math.min(noite, l.cheiaH) : 0));
+            const totalCargaH = linhas.reduce((s, l) => s + l.cargaH, 0);
+            // carregadores: com a noite livre, cada um atende quantos couberem em sequência; no turno, a carga se espalha pelas folgas
+            const porCarregadorNoite = Math.max(1, Math.floor(noite / Math.max(0.25, Math.max(...linhas.map(l => l.cheiaH)))));
+            const noTurno = Math.max(0, totalCargaH - (noite > 0 ? linhas.length * Math.min(noite, Math.max(...linhas.map(l => l.cheiaH))) : 0));
+            const carregadores = Math.max(1, cabeNoite ? Math.ceil(linhas.length / porCarregadorNoite) : Math.ceil(noTurno / Math.max(1, hDisp * 0.6)));
+            const faltaH = linhas.reduce((s, l) => s + Math.max(0, l.cargaH * 1.25 - l.folgaH - (noite > 0 ? Math.min(noite, l.cheiaH) : 0)), 0);
+            const attaExtra = faltaH > 0.05 ? Math.ceil(faltaH / Math.max(1, hDisp)) : 0;
+            const kwhDia = linhas.reduce((s, l) => s + l.whDia, 0) / 1000;
+            return {
+                porModelo, kwhDia, kwhMes: kwhDia * (Number(op.diasMes?.v ?? op.diasMes) || 22), carregadores, attaExtra, cabeNoite, cabeFolga, noiteH: noite, intervaloH,
+                como: cabeNoite ? "uma carga por dia, fora dos turnos (à noite) basta"
+                    : cabeFolga ? "a carga cabe nas folgas do turno (recarga de oportunidade nos intervalos e quando o Atta fica parado)"
+                    : `a carga não cabe nas folgas: a recarga tira ${(Math.round(faltaH * 10) / 10).toLocaleString("pt-BR")} h de Atta por dia (${attaExtra} Atta a mais para não faltar)`,
+                origem: Bt ? "estimado" : "premissa"
+            };
+        })();
+
+        // 7d. (0.24) o payback de uma frota fixa servindo uma parte dos fluxos, com a demanda de hoje (para comparar cenários e a curva)
+        const pagarCom = (frota, ids, extraInv = 0) => {
+            const n = totalFrota(frota);
+            const ec = economia(Object.assign({}, CEN.provavel, { crescimento: false, ids, nAtta: n }));
+            const fc = fluxoCaixa(pr, { frotaAnos: [0, 1, 2, 3, 4, 5].map(() => frota), economiaAno: ec, modulosIO, energiaMes, capitalGiro: 0, extraInv });
+            const e0 = ec(1);
+            return { payback: payback(fc.compra), investimento: -Math.min(0, fc.compra[0]), ganhoAno: e0.total, pessoas: e0.liberadas * op.turnos, vpl: vpl(fc.compra, R.custoCapital.v) };
+        };
+        // os pontos de um fluxo (de/para do questionário ou os destinos da missão da planta)
+        const pontosDe = f => {
+            if (f.de || f.para) return [f.de, f.para].concat(f.paradas || []).filter(Boolean);
+            const m = Es.missaoDoFluxo(f, base.missoes);
+            return [...new Set((m?.etapas || []).filter(e => e.tipo === "IR_PARA" && e.destino).map(e => e.destino))];
+        };
+        const origemDe = f => f.de || pontosDe(f)[0];
+        const destinoDe = f => f.para || pontosDe(f)[1] || pontosDe(f)[0];
+        const cargaDe = f => f.q?.carga || { G: "caixa", E: "carrinho", R: "esteira", T: "comboio" }[MODULO[(f.modelos || [])[0]]] || "carrinho";
+        const modDe = f => MODULO[(f.modelos || [])[0]] || null;
+        const pesoDe = f => Number(f.q?.peso) || PESO_PADRAO[cargaDe(f)] || 150;
+        // o módulo M leva a carga do fluxo? (null = não; { custo, oque } = sim, com a adaptação por ponto)
+        const podeLevar = (f, mod) => {
+            if (pesoDe(f) > (CAPACIDADE[mod] || 0)) return null;
+            if (f.entrega === "milkrun") return mod === "T" ? { custo: 0, oque: "" } : null;
+            const c = cargaDe(f);
+            if (modDe(f) === mod || NATIVO[c] === mod) return { custo: 0, oque: "" };
+            const k = (pr.adaptacao || {})[c + ":" + mod];
+            return Array.isArray(k) ? { custo: Math.max(0, Number(k[0]) || 0), oque: String(k[1] || "") } : null;
+        };
+        // o custo de adaptar os pontos dos fluxos que mudam de módulo (cada ponto uma vez, pelo maior custo)
+        const adaptar = (lista, mod) => {
+            const porPonto = {}, oques = new Set();
+            lista.forEach(f => { const c = podeLevar(f, mod); if (!c || !c.custo) return; pontosDe(f).forEach(pt => { if (pt) porPonto[pt] = Math.max(porPonto[pt] || 0, c.custo); }); if (c.oque) oques.add(c.oque); });
+            return { custo: Object.values(porPonto).reduce((a, b) => a + b, 0), pontos: Object.keys(porPonto).length, oque: [...oques].join("; ") };
+        };
+        // a planta do cenário: as estações dos pontos que mudam de módulo passam a aceitar o módulo novo (é a adaptação)
+        const plantaAdaptada = (fluxos2, mudam) => {
+            if (!mudam || !mudam.length) return planta;
+            const pl = JSON.parse(JSON.stringify(planta));
+            const pts = new Set(fl.filter(f => mudam.includes(f.id)).flatMap(pontosDe));
+            fluxos2.filter(f => f.entrega === "milkrun").forEach(f => pontosDe(f).forEach(x => pts.add(x)));
+            pts.forEach(id => {
+                const no = pl.nos.find(n => n.id === id);
+                const est = no && (pl.estacoes || []).find(e => e.id === no.estacao);
+                if (!est) return;
+                const mods = new Set(fluxos2.filter(f => pontosDe(f).includes(id)).map(f => MODULO[(f.modelos || [])[0]]).filter(Boolean));
+                if (mods.size === 1 && [...mods][0] !== "T") est.carga = CARGA_ESTACAO[[...mods][0]]; else delete est.carga;
+            });
+            return pl;
+        };
+        const simularFluxos = async (fluxos2, missoes2, inicio, mudam, plantaPronta) => {
+            const c2 = JSON.parse(JSON.stringify({ calendario, fluxos: fluxos2, premissas: prA, frotas: [], capacidadeZonas: cenario.capacidadeZonas }));
+            const ctx2 = Es.contexto(c2, { planta: plantaPronta || plantaAdaptada(fluxos2, mudam), missoes: missoes2 || base.missoes });
+            const mods = [...new Set(fluxos2.flatMap(f => (f.modelos || []).slice(0, 1)))];
+            const ini = inicio || mods.map(m => ({ modelo: m, n: Math.max(1, (frotaFin.find(g => g.modelo === m)?.n || 1) - 1) }));
+            return menorFrota(ctx2, prA, ini, 8);
+        };
+        const cenariosPlanta = [];
+        if (baseHoje.frota && !semFrota && entrada.opcoes?.cenarios !== false) {
+            aoProgresso(0.95, "Testando os cenários da planta");
+            const pAtual = pagarCom(frotaFin, idsTodos);
+            const famHoje = [...new Set(frotaFin.filter(g => g.n).map(g => MODULO[g.modelo] || g.modelo))];
+            cenariosPlanta.push({ id: "atual", tipo: "atual", nome: "Como a planta pede hoje", descricao: `${famHoje.length} modelo${famHoje.length > 1 ? "s" : ""} de Atta (${famHoje.join(", ")}), cada fluxo com o módulo da carga dele.`,
+                modulos: famHoje, frota: Es.nomeFrota(frotaFin), total: totalFrota(frotaFin), adaptacao: 0, pontos: 0, oque: "", viavel: "sim", ...pAtual });
+            const propostas = [];
+            // trocar uma família por outra que já está na frota (menos variantes de Atta)
+            famHoje.forEach(F => famHoje.filter(G => G !== F).forEach(G => {
+                const deF = fl.filter(f => modDe(f) === F);
+                if (!deF.length || !deF.every(f => podeLevar(f, G))) return;
+                propostas.push({ id: `troca-${F}-${G}`, tipo: "troca", nome: `Os fluxos do Atta ${F} feitos pelo Atta ${G}`, de: F, para: G, mudam: deF.map(f => f.id),
+                    fluxos: fl.map(f => (modDe(f) === F ? Object.assign({}, f, { modelos: [MODELO_DO_MODULO[G]] }) : f)), ad: adaptar(deF, G) });
+            }));
+            // um modelo só (quando nenhuma troca de uma família já chega nele)
+            if (famHoje.length > 2) ["E", "T", "G", "R"].forEach(M => {
+                if (propostas.some(x => x.tipo === "unico")) return;
+                const mudam = fl.filter(f => modDe(f) !== M);
+                if (!fl.every(f => podeLevar(f, M))) return;
+                propostas.push({ id: `unico-${M}`, tipo: "unico", nome: `Um modelo só: Atta ${M} em todos os fluxos`, para: M, mudam: mudam.map(f => f.id),
+                    fluxos: fl.map(f => Object.assign({}, f, { modelos: [MODELO_DO_MODULO[M]] })), ad: adaptar(mudam, M) });
+            });
+            // frota mista: a família em que a pessoa é mais rápida fica com as pessoas
+            (attaPessoa.porModelo || []).filter(m => m.potencial != null && m.potencial < 0.8).forEach(m => {
+                const F = MODULO[m.modelo] || m.modelo;
+                const resto = fl.filter(f => modDe(f) !== F);
+                if (!resto.length || resto.length === fl.length) return;
+                propostas.push({ id: `mista-${F}`, tipo: "mista", nome: `Os fluxos do Atta ${F} ficam com as pessoas`, de: F, mudam: fl.filter(f => modDe(f) === F).map(f => f.id),
+                    fluxos: resto, ids: resto.map(f => f.id), ad: { custo: 0, pontos: 0, oque: "" }, nota: `Neles a pessoa é mais rápida (um Atta ${F} cheio faz o trabalho de ${(Math.round(m.potencial * 100) / 100).toLocaleString("pt-BR")} pessoa).` });
+            });
+            // milk run: três ou mais fluxos chamados do mesmo ponto viram uma rota de comboio. O comboio carregado não gira
+            // no ponto nem entra em ramal: as paradas ficam no corredor, então a planta de estudo é gerada de novo (só
+            // para plantas geradas pelo questionário; numa planta desenhada à mão, isso é uma variante de layout)
+            if (planta.estudo?.gerada && entrada.respostas) {
+                const porOrigem = {};
+                fl.filter(f => (f.entrega || "chamada") === "chamada" && ["caixa", "carrinho"].includes(cargaDe(f)) && pesoDe(f) <= CAPACIDADE.T && f.q?.de && f.q?.para).forEach(f => { (porOrigem[f.q.de] = porOrigem[f.q.de] || []).push(f); });
+                Object.entries(porOrigem).filter(([, l]) => l.length >= 3).sort((a, b) => b[1].length - a[1].length).slice(0, 1).forEach(([deQ, l]) => {
+                    const pts = entrada.respostas?.pontos?.lista || [];
+                    const pq = id => pts.find(x => x.id === id) || { x: 0, y: 0 };
+                    const resta = [...new Set(l.map(f => f.q.para))], ordem = [];
+                    let atual = pq(deQ);
+                    while (resta.length) { resta.sort((a, b) => Math.hypot((pq(a).x || 0) - (atual.x || 0), (pq(a).y || 0) - (atual.y || 0)) - Math.hypot((pq(b).x || 0) - (atual.x || 0), (pq(b).y || 0) - (atual.y || 0))); const prox = resta.shift(); ordem.push(prox); atual = pq(prox); }
+                    const r2 = JSON.parse(JSON.stringify(entrada.respostas));
+                    const tirar = new Set(l.map(f => `${f.q.de}>${f.q.para}`));
+                    r2.fluxos.lista = (r2.fluxos.lista || []).filter(f => !(f && f.entrega !== "milkrun" && tirar.has(`${f.de}>${f.para}`)));
+                    const rotaQ = { de: deQ, para: ordem[0], paradas: ordem.slice(1), entrega: "milkrun", carga: "carrinho", oque: "kits e caixas", ciclo: 20, hoje: "pe" };
+                    r2.fluxos.lista.push(rotaQ);
+                    const g = plantaDoQuestionario(r2, { nome: planta.nome, bercos: (planta.nos || []).filter(n => n.tipo === "BERCO").length || 2 });
+                    if (!g.planta) return;
+                    const fq = fluxosDoQuestionario(r2, g.mapa);
+                    const rota = fq.fluxos.find(f => f.entrega === "milkrun" && f.q?.de === deQ && f.q?.para === ordem[0]);
+                    if (!rota) return;
+                    const mis = fq.missoes.find(m => m.id === rota.missao);
+                    const volta = Es.criarRotas(g.planta, fq.missoes, { passarSemParar: Number(prA.passarSemParar) > 0 })(mis, rota.de, "atta-t-o", rota);
+                    if (!volta.ok) return;
+                    // o ciclo cabe uma volta com folga (o comboio leva os kits que cada parada consome nesse tempo)
+                    const ciclo = Math.max(10, Math.min(40, Math.ceil(volta.dur / 60 * 1.25 / 5) * 5));
+                    rota.demanda = { tipo: "ciclo", cicloMin: ciclo }; rota.prazoMin = ciclo;
+                    const nomes = Object.fromEntries(pts.map(x => [x.id, x.nome || x.id]));
+                    const ad = adaptar(l, "T");
+                    propostas.push({ id: "milkrun-" + deQ, tipo: "milkrun", rotaQ: Object.assign({}, rotaQ, { ciclo }), tirarQ: [...tirar], nome: `Milk run saindo de ${nomes[deQ] || deQ} (${ordem.length} paradas, a cada ${ciclo} min)`, mudam: l.map(f => f.id),
+                        fluxos: fq.fluxos.filter(f => f.ativo !== false), missoes: fq.missoes, planta: g.planta, ad,
+                        nota: `O comboio passa de tempo em tempo deixando o cheio e pegando o vazio (${ordem.map(x => nomes[x] || x).join(", ")}), em vez de uma viagem por pedido. As paradas ficam no corredor.` });
+                });
+            }
+            const viab = entrada.viabilidade || {};
+            // um pouco de cada tipo: até 2 trocas de família, 1 modelo só, 2 frotas mistas e 1 milk run
+            const limite = { troca: 2, unico: 1, mista: 2, milkrun: 1 }, usados = {};
+            const ordenadas = propostas.filter(c => c.tipo === "troca").sort((x, y) => x.ad.custo - y.ad.custo).concat(propostas.filter(c => c.tipo !== "troca"));
+            const escolhidas = ordenadas.filter(c => { usados[c.tipo] = (usados[c.tipo] || 0) + 1; return usados[c.tipo] <= (limite[c.tipo] || 1); });
+            for (const c of escolhidas) {
+                const sim = await simularFluxos(c.fluxos, c.missoes, null, c.tipo === "mista" ? null : c.mudam, c.planta);
+                if (!sim.frota) { cenariosPlanta.push({ id: c.id, tipo: c.tipo, nome: c.nome, descricao: c.nota || "", fecha: false, limite: sim.limite, melhor: sim.melhor, viavel: viab[c.id]?.v || "confirmar", motivo: viab[c.id]?.motivo || "", mudam: c.mudam }); continue; }
+                const pg = pagarCom(sim.frota, c.ids || idsTodos, c.ad.custo);
+                const mods = [...new Set(sim.frota.filter(g => g.n).map(g => MODULO[g.modelo] || g.modelo))];
+                cenariosPlanta.push({ id: c.id, tipo: c.tipo, nome: c.nome, descricao: c.nota || "", modulos: mods, frota: Es.nomeFrota(sim.frota), frotaLista: sim.frota, total: totalFrota(sim.frota), fecha: true, rotaQ: c.rotaQ || null, tirarQ: c.tirarQ || null,
+                    adaptacao: c.ad.custo, pontos: c.ad.pontos, oque: c.ad.oque, noPrazo: sim.r?.noPrazo?.[1], viavel: viab[c.id]?.v || "confirmar", motivo: viab[c.id]?.motivo || "", mudam: c.mudam, de: c.de, para: c.para, ...pg });
+            }
+        }
+        // 7e. (0.24) onde o projeto se paga: os fluxos por ordem de valor (o tempo que tiram das pessoas por minuto de Atta), a frota que cada parte pede e o payback
+        const curvaPb = (() => {
+            if (!baseHoje.frota || semFrota || !(attaPessoa.porModelo || []).length) return null;
+            const attaMinDe = f => (attaPessoa.porModelo.find(m => m.modelo === (f.modelos || [])[0])?.attaMin) || (f.minViagem || 3) * 1.5;
+            const ordem = fl.slice().sort((a, b) => b.tempoManual.v / attaMinDe(b) - a.tempoManual.v / attaMinDe(a) || b.viagensDia - a.viagensDia);
+            const capAtta = (r?.horasDisp || op.turnos * horasTrab) * 60 * prA.ocupacaoMax;
+            const minTodos = {};
+            fl.forEach(f => { const m = (f.modelos || [])[0]; minTodos[m] = (minTodos[m] || 0) + f.viagensDia * attaMinDe(f); });
+            // calibra pela simulação: a frota da conta, com todos os fluxos, fica igual à recomendada
+            const fator = Object.fromEntries(Object.keys(minTodos).map(m => [m, Math.max(1, frotaFin.find(g => g.modelo === m)?.n || 1) / Math.max(0.01, minTodos[m] / capAtta)]));
+            const porN = {};
+            for (let k = 1; k <= ordem.length; k++) {
+                const sub = ordem.slice(0, k);
+                const min_ = {};
+                sub.forEach(f => { const m = (f.modelos || [])[0]; min_[m] = (min_[m] || 0) + f.viagensDia * attaMinDe(f); });
+                const frota = Object.entries(min_).map(([modelo, md]) => ({ modelo, n: Math.max(1, Math.ceil(md / capAtta * fator[modelo] - 0.05)) }));
+                const n = totalFrota(frota);
+                const pg = pagarCom(frota, sub.map(f => f.id));
+                // para cada tamanho de frota, a parte com mais fluxos (mais ganho com o mesmo investimento)
+                porN[n] = { n, k, frota: Es.nomeFrota(frota), frotaLista: frota, ids: sub.map(f => f.id), fluxos: sub.map(f => f.nome), ultimo: sub[k - 1].nome, ...pg };
+            }
+            const pontos = Object.values(porN).sort((a, b) => a.n - b.n);
+            const valido = pontos.filter(p => p.payback != null);
+            const melhor = valido.slice().sort((a, b) => a.payback - b.payback || a.n - b.n)[0] || null;
+            return { pontos, melhor, total: fl.length, nota: "estimativa pelos tempos da simulação; a fase 1 é simulada de novo" };
+        })();
+        let fase1 = null;
+        if (curvaPb?.melhor && curvaPb.melhor.k < fl.length) {
+            aoProgresso(0.97, "Simulando a fase 1");
+            const sub = fl.filter(f => curvaPb.melhor.ids.includes(f.id));
+            const sim = await simularFluxos(sub, null, curvaPb.melhor.frotaLista.map(g => ({ modelo: g.modelo, n: Math.max(1, g.n - 1) })));
+            if (sim.frota) {
+                const pg = pagarCom(sim.frota, sub.map(f => f.id));
+                const todo = cenariosPlanta[0] || pagarCom(frotaFin, idsTodos);
+                // a fase 1 só vale se ela se paga bem antes do projeto inteiro (3 meses ou mais)
+                if (pg.payback != null && (todo.payback == null || pg.payback <= todo.payback - 3)) fase1 = { frota: Es.nomeFrota(sim.frota), frotaLista: sim.frota, total: totalFrota(sim.frota), fluxos: sub.map(f => f.nome), ids: sub.map(f => f.id), noPrazo: sim.r?.noPrazo?.[1], ...pg };
+            }
+        }
+        // 7f. (0.24) coerência das pessoas: o cliente informou bem mais gente do que os fluxos explicam?
+        const coerencia = (() => {
+            if (R.pessoasTurno.origem !== "cliente") return null;
+            const inf = R.pessoasTurno.v, exp = R.pessoasEquivalentes.v;
+            if (!(inf - exp >= 2 && inf > exp * 1.4)) return null;
+            return { informadas: inf * op.turnos, explicadas: exp * op.turnos, sobra: (inf - exp) * op.turnos, dedicadas: R.dedicadas?.origem === "cliente" ? R.dedicadas.v * op.turnos : null };
+        })();
+
         // só para a E4M: o mesmo estudo em cada plano da tabela
         const planosCmp = pr.planos.map(p => {
             const prx = Object.assign({}, pr, { planoPadrao: p.id });
-            const fP = fluxoCaixa(prx, { frotaAnos: frotaPorAno(forecast, "so"), economiaAno: economia({ lado: "v", crescimento: true, potenciais: false }), modulosIO, energiaMes, capitalGiro: 0 });
-            const fC = fluxoCaixa(prx, { frotaAnos: frotaPorAno(forecast.map(() => null), "so"), economiaAno: economia({ lado: "min", crescimento: false, potenciais: false }), modulosIO, energiaMes, capitalGiro: 0 });
+            const fP = fluxoCaixa(prx, { frotaAnos: frotaPorAno(forecast, "so"), economiaAno: economia(CEN.provavel), modulosIO, energiaMes, capitalGiro: 0 });
+            const fC = fluxoCaixa(prx, { frotaAnos: frotaPorAno(forecast.map(() => null), "so"), economiaAno: economia(CEN.conservador), modulosIO, energiaMes, capitalGiro: 0 });
             return { id: p.id, nome: p.nome, mira: p.mira, inclui: p.inclui, mensal: mensalidade(p, totalFrota(frotaFin)), paybackProvavel: payback(fP.compra), paybackConservador: payback(fC.compra),
                 vpl5: vpl(fP.compra, R.custoCapital.v), escolhido: p.id === plano.id };
         });
@@ -1300,36 +1668,81 @@
         return {
             versao: VERSAO, em: new Date().toISOString(), ms: Date.now() - t0,
             cliente: entrada.cliente || {}, precos: pr, plano: plano.id, nomePlano: plano.nome, planoInfo: Object.assign({}, plano, { textoMira: MIRA_PLANO[plano.mira] }), miraPro: plano.mira === "pro",
-            custoPessoa: { v: R.custoPessoa.v, origem: R.custoPessoa.origem, nota: R.custoPessoa.nota, conta: R.contaPessoa }, attaPessoa, planos: planosCmp,
+            custoPessoa: { v: R.custoPessoa.v, origem: R.custoPessoa.origem, nota: R.custoPessoa.nota, conta: R.contaPessoa }, attaPessoa, planos: planosCmp, bateria,
+            semFrota, cenariosPlanta, curva: curvaPb, fase1, coerencia, viabilidade: entrada.viabilidade || {},
+            horas: { destino: R.destinoHoras || "", valorRealocacao: R.valorRealocacao.v, dedicadas: R.dedicadas ? { v: R.dedicadas.v * op.turnos, origem: R.dedicadas.origem } : null, rotasMilkRun: R.rotasMilkRun, turnoNovo: Boolean(R.turnoNovo && op.turnos < 3) },
+            operacaoAtta: { passarSemParar: Number(prA.passarSemParar) > 0, preparo: Number(prA.preparo) || 0, antecedenciaMin: Number(prA.antecedenciaMin) || 30 },
             operacao: { turnos: op.turnos, horasTurno: op.horasTurno.v, diasMes: op.diasMes.v, almoco: op.almoco.v },
             planta: { nome: planta.nome, semDesenho: Boolean(planta.estudo?.semDesenho), gerada: Boolean(planta.estudo?.gerada), nos: planta.nos.map(n => ({ id: n.id, tipo: n.tipo, x: n.x, y: n.y, nome: n.nome || planta.estacoes?.find(e => e.id === n.estacao)?.nome || "" })),
                 segmentos: planta.segmentos.map(s => ({ a: s.a, b: s.b, sentido: s.sentido, tipo: s.tipo })), dimensoes: planta.dimensoes },
-            fluxos: fl.map(f => ({ id: f.id, nome: f.nome, modelo: (f.modelos || [])[0] || "", porHora: Es.taxaBase(f), viagensDia: f.viagensDia, prazoMin: f.prazoMin, prazoOrigem: f.prazoOrigem || "cliente", metros: f.metros, distPessoa: f.distPessoa, minViagem: f.minViagem, hoje: f.q?.hoje || "", carga: f.q?.carga || "", origem: f.origem || "" })),
+            fluxos: fl.map(f => ({ id: f.id, nome: f.nome, modelo: (f.modelos || [])[0] || "", porHora: Es.taxaBase(f), entrega: f.entrega || "chamada", ciclo: f.demanda?.tipo === "ciclo" ? f.demanda.cicloMin : null, viagensDia: f.viagensDia, prazoMin: f.prazoMin, prazoOrigem: f.prazoOrigem || "cliente", metros: f.metros, distPessoa: f.distPessoa, minViagem: f.minViagem, hoje: f.q?.hoje || "", carga: f.q?.carga || "", origem: f.origem || "" })),
             simulacao: { recomendado: rec ? cortar(rec) : null, cenarios: res.cenarios.map(cortar), sensibilidade: res.sensibilidade.map(s => ({ nome: s.nome, crescimento: s.crescimento, indisponiveis: s.indisponiveis, atende: s.atende, noPrazo: s.r.noPrazo, ocupacao: s.r.ocupacao, precisa: s.precisa ? { nome: s.precisa.nome, total: s.precisa.total } : null, limite: s.limite || "", gargalo: s.gargalo || "" })),
                 porHora: r?.porHora || [], esperaZona: r?.esperaZona || {}, porFluxo: r?.porFluxo || {}, premissas: res.premissas, avisos: res.avisos, limite: res.limite, gargalo: res.gargalo },
-            hoje, acoes, forecast, capacidade, financeiro: { cenarios, comparacao, capitalGiro, energiaMes, equilibrio }, sensibilidade: sensib, metricas, implantacao, confianca, refinar, premissas: premissasLista,
+            hoje, acoes, forecast, capacidade, financeiro: { cenarios, comparacao, capitalGiro, energiaMes, equilibrio, destinos }, sensibilidade: sensib, metricas, implantacao, confianca, refinar, premissas: premissasLista,
             avisos: (entrada.avisos || []).concat(res.avisos || []), resumoMira: ""
         };
     }
 
+    // 0.24: usar um cenário da planta no estudo (a E4M confirmou na visita). Devolve o que muda:
+    // { fluxos, planta } (troca de módulo, frota mista) ou { respostas } (milk run: gerar a planta de novo)
+    function aplicarCenario(est, c) {
+        if (!c || !est) return null;
+        const fluxos = (est.fluxos || []).map(f => Object.assign({}, f));
+        const mudam = new Set(c.mudam || []);
+        if (c.tipo === "mista") return { fluxos: fluxos.map(f => (mudam.has(f.id) ? Object.assign(f, { ativo: false }) : f)), planta: est.planta };
+        if (c.tipo === "troca" || c.tipo === "unico") {
+            const novo = MODELO_DO_MODULO[c.para];
+            if (!novo) return null;
+            const fl2 = fluxos.map(f => (mudam.has(f.id) ? Object.assign(f, { modelos: [novo] }) : f));
+            const pl = JSON.parse(JSON.stringify(est.planta));
+            const pontos = f => (f.de || f.para) ? [f.de, f.para].concat(f.paradas || []).filter(Boolean)
+                : [...new Set(((est.missoes || []).find(m => m.id === f.missao)?.etapas || []).filter(e => e.tipo === "IR_PARA" && e.destino).map(e => e.destino))];
+            const pts = new Set(fl2.filter(f => mudam.has(f.id)).flatMap(pontos));
+            pts.forEach(id => {
+                const no = pl.nos.find(n => n.id === id);
+                const e = no && (pl.estacoes || []).find(x => x.id === no.estacao);
+                if (!e) return;
+                const mods = new Set(fl2.filter(f => f.ativo !== false && pontos(f).includes(id)).map(f => MODULO[(f.modelos || [])[0]]).filter(Boolean));
+                if (mods.size === 1 && [...mods][0] !== "T") e.carga = CARGA_ESTACAO[[...mods][0]]; else delete e.carga;
+            });
+            return { fluxos: fl2, planta: pl };
+        }
+        if (c.tipo === "milkrun" && c.rotaQ && est.respostas) {
+            const r2 = JSON.parse(JSON.stringify(est.respostas));
+            const tirar = new Set(c.tirarQ || []);
+            r2.fluxos = r2.fluxos || {};
+            r2.fluxos.lista = (r2.fluxos.lista || []).filter(f => !(f && f.entrega !== "milkrun" && tirar.has(`${f.de}>${f.para}`))).concat([Object.assign({}, c.rotaQ)]);
+            return { respostas: r2 };
+        }
+        return null;
+    }
+
     // um resumo curto (para a Mira Pro escrever o texto e para a lista de prospects)
     function resumoTexto(Rs) {
-        const f = Rs.financeiro?.cenarios?.conservador;
+        // 0.24: o cenário provável em destaque; o conservador é o piso ("no mínimo")
+        const f = Rs.financeiro?.cenarios?.provavel;
+        const co = Rs.financeiro?.cenarios?.conservador;
         const rec = Rs.simulacao?.recomendado;
+        const mm = v => (v == null ? null : Math.round(v * 10) / 10);
         return {
             frota: rec?.nome || null, noPrazo: rec?.r?.noPrazo?.[1], custoHojeAno: Rs.hoje?.custoAno, economiaAno: f?.economiaAno1?.total,
-            paybackMeses: f?.compra?.payback, investimento: f?.compra?.investimento, vpl5: f?.compra?.vpl, tir: f?.compra?.tir,
-            paybackProvavel: Rs.financeiro?.cenarios?.provavel?.compra?.payback, acoes: (Rs.acoes || []).slice(0, 4).map(a => ({ nome: a.nome, evitaHoje: a.evitaHoje, evita3: a.evita3, liquidoAno: Math.round(a.liquidoAno), custo: a.custo })),
+            paybackProvavel: f?.compra?.payback, investimento: f?.compra?.investimento, vpl5: f?.compra?.vpl, tir: f?.compra?.tir,
+            paybackConservador: co?.compra?.payback, paybackOtimista: Rs.financeiro?.cenarios?.otimista?.compra?.payback,
+            ganhosProvavel: f?.economiaAno1 ? { pessoas: f.economiaAno1.conf?.pessoas, empilhadeiras: f.economiaAno1.conf?.empilhadeiras, perdasInformadas: f.economiaAno1.potenciais } : null,
+            semFrota: Rs.semFrota || null, coerencia: Rs.coerencia || null, horas: Rs.horas || null,
+            cenariosPlanta: (Rs.cenariosPlanta || []).map(c => ({ nome: c.nome, frota: c.frota || null, fecha: c.fecha !== false, paybackHoje: mm(c.payback), investimento: c.investimento, adaptacao: c.adaptacao, viavel: c.viavel })),
+            fase1: Rs.fase1 ? { frota: Rs.fase1.frota, fluxos: Rs.fase1.fluxos, payback: mm(Rs.fase1.payback), investimento: Rs.fase1.investimento, pessoas: Rs.fase1.pessoas } : null, acoes: (Rs.acoes || []).slice(0, 4).map(a => ({ nome: a.nome, evitaHoje: a.evitaHoje, evita3: a.evita3, liquidoAno: Math.round(a.liquidoAno), custo: a.custo })),
             forecast: (Rs.forecast || []).map(x => ({ ano: x.ano, so: x.so?.nome || "não fecha", plano: x.plano?.nome || "não fecha" })), capacidade: Rs.capacidade,
             kmDia: Rs.metricas?.kmDia?.hoje, tonDia: Rs.metricas?.tonDia?.hoje, refinar: (Rs.refinar || []).slice(0, 4).map(x => x.item),
             plano: Rs.nomePlano || null, custoPessoaMes: Rs.custoPessoa?.v, custoPessoaOrigem: Rs.custoPessoa?.origem,
-            attaPessoa: Rs.attaPessoa ? { pessoasEquivalentes: Rs.attaPessoa.pessoasEquivalentes?.v, frotaAssume: Rs.attaPessoa.assume?.v, porAtta: Rs.attaPessoa.porAtta?.v, precisaPorAtta24: Rs.attaPessoa.precisa?.[24], ocupacaoMedia: Rs.attaPessoa.ocupacaoMedia } : null
+            attaPessoa: Rs.attaPessoa ? { pessoasEquivalentes: Rs.attaPessoa.pessoasEquivalentes?.v, frotaAssume: Rs.attaPessoa.assume?.v, porAtta: Rs.attaPessoa.porAtta?.v, precisaPorAtta24: Rs.attaPessoa.precisa?.[24], ocupacaoMedia: Rs.attaPessoa.ocupacaoMedia } : null,
+            bateria: Rs.bateria ? { carregadores: Rs.bateria.carregadores, kwhDia: Rs.bateria.kwhDia, como: Rs.bateria.como, attaExtra: Rs.bateria.attaExtra } : null
         };
     }
 
     return {
         VERSAO, PRECOS_PADRAO, REFERENCIAS, NOMES_PLANO, MIRA_PLANO, ORIGENS, PREMISSAS, SETORES, CAPACIDADE, precos, planoDe, mensalidade, encargos, custoDaPessoa, tempoManual, pessoaMes, operacao, calendarioDoQuestionario, modeloDoFluxo,
         plantaDoQuestionario, fluxosDoQuestionario, postosDosFluxos, resumoDiario, lerPlanilha, resumoPlanilha, aplicarSetor, resolver,
-        vpl, tir, payback, fluxoCaixa, estudar, resumoTexto, nomeModelo
+        vpl, tir, payback, fluxoCaixa, estudar, resumoTexto, nomeModelo, aplicarCenario, PRAZO_CARGA, NATIVO
     };
 });

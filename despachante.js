@@ -23,6 +23,10 @@
       Cada botão do posto diz quem atende: modelos (obrigatório), Atta
       preferidos (vão primeiro; sem nenhum livre, depois de
       esperaPreferidoS vai outro dos modelos) e "só estes" (espera).
+   7. (0.23) Bateria: o perfil do modelo (guia Baterias) diz o mínimo para
+      receber pedido e quem está carregando; a missão precisa caber na
+      carga (a missão, a volta ao carregador mais perto e a reserva); no
+      empate (até 5 s), vai quem tem mais carga.
 */
 (function (raiz, fabrica) {
     if (typeof module === "object" && module.exports) module.exports = fabrica(require("./planta.js"));
@@ -132,6 +136,32 @@
         };
     }
 
+    // 0.23: a energia da missão e da volta ao carregador mais perto (Wh) e se cabe
+    // agv.energia: { pct, perfil: { capacidadeWh, reserva, whKmVazio, whKmCarregado, consumoParadoW, whCicloCarga }, carregadores: [ids] }
+    const pctDe = x => (Number.isFinite(x?.energia?.pct) ? x.energia.pct : Number.isFinite(Number(x?.bateria)) && x?.bateria !== null && x?.bateria !== undefined ? Number(x.bateria) : 50);
+    function energiaParaMissao(planta, agv, p) {
+        const e = agv.energia;
+        if (!e || !Number.isFinite(e.pct) || !e.perfil || !p?.pacote) return null;
+        const f = e.perfil;
+        const total = (p.pacote.etapas || []).reduce((t, x) => t + (x.tipo === "MOVIMENTO" ? metrosEtapa(x) : 0), 0);
+        const ciclos = (p.pacote.etapas || []).filter(x => x.tipo === "CARREGAR" || x.tipo === "DESCARREGAR").length;
+        const ida = Math.min(total, p.metros || 0);
+        const wh = ida / 1000 * f.whKmVazio + (total - ida) / 1000 * (f.whKmVazio + f.whKmCarregado) / 2 + f.consumoParadoW * (p.tempo || 0) / 3600 + ciclos * f.whCicloCarga;
+        // a volta: a rota até o carregador mais perto (dos 3 mais perto em linha reta)
+        let volta = null;
+        const fim = p.fim ? Planta.noPorId(planta, p.fim) : null;
+        const cands = (e.carregadores || []).map(id => Planta.noPorId(planta, id)).filter(Boolean)
+            .sort((a, b) => (fim ? Math.hypot(a.x - fim.x, a.y - fim.y) - Math.hypot(b.x - fim.x, b.y - fim.y) : 0)).slice(0, 3);
+        for (const c of cands) {
+            if (c.id === p.fim) { volta = 0; break; }
+            const r = prever(planta, { id: "CARGA-" + c.id, etapas: [{ tipo: "IR_PARA", destino: c.id, exato: true }] }, p.fim, null, Object.assign({}, agv, { carregado: false }));
+            if (r.ok) volta = Math.min(volta ?? Infinity, r.metros || 0);
+        }
+        const whVolta = (volta ?? 0) / 1000 * f.whKmVazio;
+        const gasto = (wh + whVolta) / Math.max(1, f.capacidadeWh) * 100;
+        return { cabe: e.pct - gasto >= f.reserva, wh, whVolta, sobra: e.pct - gasto, metrosVolta: volta };
+    }
+
     // Por que um AGV não pode receber pedido agora (null = pode)
     function impedimento(agv, cfg) {
         if (agv.manutencao) return "em manutenção";
@@ -142,7 +172,9 @@
         if (agv.falha) return "com falha";
         if (agv.modo === "MANUAL") return "em manual";
         if (agv.turno === "fora") return "fora do turno";
-        if (agv.bateria != null && Number(agv.bateria) < cfg.bateriaMinima) return `bateria baixa (${Math.round(agv.bateria)}%)`;
+        // 0.23: a guia Baterias diz (carregando, precisa carregar, abaixo do mínimo do perfil); sem ela, o mínimo geral
+        if (agv.energia) { if (agv.energia.impedimento) return agv.energia.impedimento; }
+        else if (agv.bateria != null && Number(agv.bateria) < cfg.bateriaMinima) return `bateria baixa (${Math.round(agv.bateria)}%)`;
         if (!agv.posicaoConhecida || !agv.pontoAtual) return "posição desconhecida";
         return null;
     }
@@ -357,7 +389,11 @@
                     continue;
                 }
                 if (pedido.agvFixo) motivo = `AGV fixo · ${motivo}`;
-                if (!melhor || custo < melhor.custo) melhor = { agv, custo, eta, motivo, p };
+                // 0.23: a missão precisa caber na bateria (com a volta ao carregador e sem tocar na reserva)
+                const en = energiaParaMissao(planta, agv, p);
+                if (en && !en.cabe) { recusas.push(`${agv.id}: a bateria (${Math.round(agv.energia.pct)}%) não cobre a missão e a volta ao carregador sem tocar na reserva`); continue; }
+                // empate (até 5 s de diferença): vai quem tem mais carga
+                if (!melhor || custo < melhor.custo - 5 || (custo <= melhor.custo + 5 && pctDe(agv) > pctDe(melhor.agv)) || (custo < melhor.custo && pctDe(agv) >= pctDe(melhor.agv))) melhor = { agv, custo, eta, motivo, p };
                 if (prefere && prefere.has(agv.id) && (!melhorPreferido || custo < melhorPreferido.custo)) melhorPreferido = { agv, custo, eta, motivo: `preferido · ${motivo}`, p };
             }
 
@@ -404,6 +440,6 @@
     return {
         CONFIG_PADRAO, NOMES_PRIORIDADE, configuracao, prioridadeEfetiva, ordenar,
         tempoEtapa, tempoPacote, prever, impedimento, decidir, tempoTexto, metrosTexto, recusaModelo, estacoesRestritas,
-        regraDoBotao, recusaBotao
+        regraDoBotao, recusaBotao, energiaParaMissao
     };
 });

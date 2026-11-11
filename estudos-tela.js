@@ -23,13 +23,15 @@ const EstudosTela = (function () {
     const pode = () => !naNuvem() || Nuvem.papel() === "fornecedor";
     const N = () => EstudoNegocio;
     const ETAPAS = [["pesquisa", "Pesquisa"], ["estudo", "Estudo"], ["proposta", "Proposta"], ["fechado", "Fechado"], ["perdido", "Perdido"]];
-    const ABAS = [["cliente", "Cliente"], ["pesquisa", "Pesquisa"], ["planta", "Planta"], ["fluxos", "Fluxos"], ["resultado", "Resultado"]];
+    const ABAS = [["cliente", "Cliente"], ["pesquisa", "Pesquisa"], ["planta", "Planta"], ["fluxos", "Fluxos"], ["resultado", "Resultado"], ["proposta", "Proposta"]];
+    const CHAVE_NUM = "propostasNumeracao";
     const MODELOS = [["atta-g-o", "Atta G-O (garra, até 250 kg)"], ["atta-e-o-serie", "Atta E-O (elevação, até 1.000 kg)"], ["atta-r-o", "Atta R-O (roletes)"], ["atta-t-o", "Atta T-O (rebocador)"]];
     const CARGA_DO_MODELO = { "atta-g-o": "caixa", "atta-e-o-serie": "carrinho", "atta-r-o": "esteira", "atta-t-o": "comboio" };
     const dataTxt = s => (s ? new Date(s).toLocaleDateString("pt-BR") : "--");
     const n1 = v => (v == null || !Number.isFinite(Number(v)) ? "--" : ui.numero(Number(v), Number(v) < 10 ? 1 : 0));
 
     let lista = [], atual = null, aba = "cliente", carregado = false, precosTabela = null;
+    let propostas = [];
     let links = [], viagens = [], rodando = null, form = null, vezForm = 0, sujos = new Set(), timer = null, salvando = false;
 
     /* ---------------- guardar ---------------- */
@@ -39,14 +41,14 @@ const EstudosTela = (function () {
 
     async function carregarLista() {
         if (naNuvem()) {
-            const r = await Nuvem.cliente().from("prospects").select(RESUMO + ", payback:resultado->financeiro->cenarios->conservador->compra->payback, frota:resultado->simulacao->recomendado->>nome").order("atualizado_em", { ascending: false });
+            const r = await Nuvem.cliente().from("prospects").select(RESUMO + ", payback:resultado->financeiro->cenarios->provavel->compra->payback, frota:resultado->simulacao->recomendado->>nome").order("atualizado_em", { ascending: false });
             if (r.error) { ui.aviso(/prospects/.test(r.error.message || "") ? "O banco ainda não tem os estudos (rode o 01_esquema.sql da 0.22)." : r.error.message, "erro"); lista = []; }
             else lista = r.data || [];
             const t = await Nuvem.cliente().from("tabela_precos").select("dados").maybeSingle();
             precosTabela = t.data?.dados || null;
         } else {
             lista = lerLocal().map(p => ({ id: p.id, nome: p.nome, setor: p.setor, cidade: p.cidade, etapa: p.etapa, rev: p.rev, respondido_em: p.respondido_em, atualizado_em: p.atualizado_em, criado_em: p.criado_em,
-                payback: p.resultado?.financeiro?.cenarios?.conservador?.compra?.payback, frota: p.resultado?.simulacao?.recomendado?.nome }));
+                payback: p.resultado?.financeiro?.cenarios?.provavel?.compra?.payback, frota: p.resultado?.simulacao?.recomendado?.nome }));
             try { precosTabela = JSON.parse(localStorage.getItem(CHAVE_PRECOS) || "null"); } catch (e) { precosTabela = null; }
         }
         carregado = true;
@@ -61,6 +63,7 @@ const EstudosTela = (function () {
         } else {
             atual = JSON.parse(JSON.stringify(lerLocal().find(p => p.id === id) || null));
             links = []; viagens = [];
+            propostas = (atual?.propostas || []).slice().sort((a, b) => String(b.emitida_em).localeCompare(String(a.emitida_em)));
         }
         if (!atual) return;
         atual.estudo = atual.estudo || {}; atual.respostas = atual.respostas || {}; atual.contato = atual.contato || {};
@@ -69,12 +72,14 @@ const EstudosTela = (function () {
         desenhar();
     }
     async function carregarLinks() {
-        if (!naNuvem() || !atual?.id) { links = []; viagens = []; return; }
+        if (!naNuvem() || !atual?.id) { links = []; viagens = []; propostas = (atual?.propostas || []).slice().sort((a, b) => String(b.emitida_em).localeCompare(String(a.emitida_em))); return; }
         const [l, v] = await Promise.all([
             Nuvem.cliente().from("prospect_links").select("codigo, tipo, criado_em, expira_em, cancelado, usos, ultimo_uso").eq("prospect_id", atual.id).order("criado_em", { ascending: false }),
             Nuvem.cliente().from("prospect_viagens").select("de, para, saiu_em, chegou_em, carga, quem").eq("prospect_id", atual.id).order("saiu_em", { ascending: true }).limit(20000)
         ]);
         links = l.data || []; viagens = v.data || [];
+        const pp = await Nuvem.cliente().from("propostas").select("id, numero, revisao, status, valida_ate, emitida_em, aceite, aceita_em, dados").eq("prospect_id", atual.id).order("emitida_em", { ascending: false });
+        propostas = pp.error ? [] : (pp.data || []);
     }
     function marcar(...campos) {
         campos.forEach(c => sujos.add(c));
@@ -172,7 +177,7 @@ const EstudosTela = (function () {
     function gerarDoQuestionario(manterPlanta = false) {
         const resp = atual.respostas || {};
         const falta = Pesquisa.faltando(resp).filter(f => !/turnos/.test(f) || !resp.operacao?.turnos);
-        if ((resp.pontos?.lista || []).length < 2 || !(resp.fluxos?.lista || []).some(f => f.de && f.para && Number(f.quantidade) > 0)) { ui.aviso("Faltam os pontos e os fluxos no questionário (aba Pesquisa).", "aviso"); return false; }
+        if ((resp.pontos?.lista || []).length < 2 || !(resp.fluxos?.lista || []).some(f => f.de && f.para && (Number(f.quantidade) > 0 || (f.entrega === "milkrun" && Number(f.ciclo) > 0)))) { ui.aviso("Faltam os pontos e os fluxos no questionário (aba Pesquisa).", "aviso"); return false; }
         let planta = atual.planta, mapa = atual.estudo?.mapa || {}, avisos = atual.estudo?.avisosPlanta || [];
         if (!manterPlanta || !planta) {
             const g = N().plantaDoQuestionario(resp, { nome: `Estudo · ${atual.nome}`.slice(0, 60) });
@@ -331,7 +336,7 @@ const EstudosTela = (function () {
         rodando = { p: 0, msg: "Começando" }; aba = "resultado"; desenhar();
         let R;
         try {
-            R = await N().estudar({
+            R = await N().estudar({ viabilidade: atual.estudo.viabilidade || {},
                 respostas: atual.respostas, planta: atual.planta, fluxos: fl, missoes: atual.estudo.missoes || [], calendario: atual.estudo.calendario || N().calendarioDoQuestionario(atual.respostas),
                 premissas: atual.estudo.premissas || {}, precos: precosTabela, opcoes: atual.estudo.opcoes || {}, variantes: atual.estudo.variantes || [], premissasNegocio: atual.estudo.premissasNegocio || {},
                 avisos: atual.estudo.avisosPlanta || [], cliente: { nome: atual.nome, setor: atual.setor, cidade: atual.cidade }
@@ -348,8 +353,8 @@ const EstudosTela = (function () {
         marcar("resultado");
         await salvarJa();
         desenhar();
-        const pb = R.financeiro?.cenarios?.conservador?.compra?.payback;
-        ui.aviso(R.simulacao.recomendado ? `Frota: ${R.simulacao.recomendado.nome}. Payback conservador: ${RelatorioEstudo.meses(pb)}.` : "Nenhuma frota fecha. Veja as ações.", R.simulacao.recomendado ? "sucesso" : "aviso");
+        const pb = R.financeiro?.cenarios?.provavel?.compra?.payback;
+        ui.aviso(R.simulacao.recomendado ? `Frota: ${R.simulacao.recomendado.nome}. Payback provável: ${RelatorioEstudo.meses(pb)}${R.fase1 ? `; fase 1 (${R.fase1.frota}): ${RelatorioEstudo.meses(R.fase1.payback)}` : ""}.` : "Nenhuma frota fecha: o estudo não calcula payback. Veja as ações e os cenários da planta.", R.simulacao.recomendado ? "sucesso" : "aviso");
     }
     async function resumoMira() {
         const R = atual.resultado;
@@ -386,6 +391,142 @@ const EstudosTela = (function () {
         ui.aviso(`Empresa criada. Ela aparece em Trocar empresa.`, "sucesso");
         await abrirProspect(atual.id);
     }
+    /* ---------------- a proposta comercial (0.23) ---------------- */
+    const P = () => PropostaDoc;
+    const rascProposta = () => (atual.estudo.proposta = atual.estudo.proposta || {});
+    // o rascunho da proposta fica no estudo, mas não deixa o resultado "antigo"
+    function marcarProposta() { sujos.add("estudo"); clearTimeout(timer); timer = setTimeout(salvarJa, 1200); const s = document.getElementById("estudosSalvo"); if (s) s.textContent = "Salvando…"; }
+    const dadosProposta = () => P().montar(atual.resultado, precosTabela, atual, rascProposta());
+    const numLetra = x => `${x.numero} rev. ${P().letra(x.revisao)}`;
+    const ultimaAberta = () => propostas.find(x => x.status === "emitida" || x.status === "aceita");
+    function proximoNumeroLocal() {
+        const ano = new Date().getFullYear();
+        let n = {}; try { n = JSON.parse(localStorage.getItem(CHAVE_NUM) || "{}"); } catch (e) { n = {}; }
+        n[ano] = (Number(n[ano]) || 0) + 1;
+        try { localStorage.setItem(CHAVE_NUM, JSON.stringify(n)); } catch (e) { /* segue */ }
+        return `P-${ano}-${String(n[ano]).padStart(3, "0")}`;
+    }
+    async function emitirProposta(revisaoDe = null) {
+        if (!atual.resultado) { ui.aviso("Rode o estudo antes da proposta.", "aviso"); return; }
+        if (atual.resultado.desatualizado && !await ui.confirmar({ titulo: "O estudo mudou depois do resultado", texto: "A proposta usa o resultado de agora (frota, payback). Rode de novo antes, se a mudança importa.", confirmar: "Emitir assim mesmo" })) return;
+        const d = dadosProposta();
+        if (!d.nAtta) { ui.aviso("A proposta precisa de pelo menos um Atta.", "aviso"); return; }
+        const ex = d.exemplo.length;
+        const ok = await ui.confirmar({ titulo: revisaoDe ? `Emitir a revisão de ${revisaoDe}?` : "Emitir a proposta?", confirmar: "Emitir",
+            texto: `${ex ? `Atenção: ${ex} item(ns) da Tabela da E4M ainda são exemplo (${d.exemplo.slice(0, 4).join(", ")}${ex > 4 ? "…" : ""}) e a proposta sai marcada assim. ` : ""}Depois de emitida, a proposta não muda: uma mudança vira uma revisão nova.${revisaoDe ? " A revisão anterior fica substituída." : ""}` });
+        if (!ok) return;
+        if (sujos.size) await salvarJa();
+        const dados = Object.assign({}, d, { opcoes: JSON.parse(JSON.stringify(rascProposta())) });
+        if (naNuvem()) {
+            const r = await Nuvem.cliente().rpc("emitir_proposta", { p_prospect: atual.id, p_dados: dados, p_numero: revisaoDe });
+            if (r.error) { ui.aviso(r.error.message, "erro"); return; }
+            await abrirProspect(atual.id);
+            ui.aviso(`Proposta ${numLetra(r.data)} emitida.`, "sucesso");
+        } else {
+            const hoje = new Date();
+            const lista = atual.propostas = atual.propostas || [];
+            const numero = revisaoDe || proximoNumeroLocal();
+            const revisao = revisaoDe ? Math.max(...lista.filter(x => x.numero === numero).map(x => x.revisao)) + 1 : 1;
+            lista.forEach(x => { if (x.numero === numero && x.status === "emitida") x.status = "substituida"; });
+            const valida = new Date(hoje.getTime() + d.validadeDias * 864e5).toISOString().slice(0, 10);
+            lista.push({ id: "PL" + Date.now().toString(36), numero, revisao, status: "emitida", valida_ate: valida, emitida_em: hoje.toISOString(), aceite: null, dados: Object.assign(dados, { numero, revisao, emitidaEm: hoje.toISOString(), validaAte: valida }) });
+            if (atual.etapa === "pesquisa" || atual.etapa === "estudo") atual.etapa = "proposta";
+            sujos.add("etapa");
+            gravarLocal([JSON.parse(JSON.stringify(atual))].concat(lerLocal().filter(p => p.id !== atual.id)));
+            propostas = lista.slice().sort((a, b) => String(b.emitida_em).localeCompare(String(a.emitida_em)));
+            await salvarJa(); desenhar();
+            ui.aviso(`Proposta ${numero} rev. ${P().letra(revisao)} emitida (sem nuvem: só neste navegador, sem link para o cliente).`, "sucesso");
+        }
+    }
+    async function cancelarProposta(id) {
+        const x = propostas.find(p => p.id === id);
+        if (!x || !await ui.confirmar({ titulo: `Cancelar a proposta ${numLetra(x)}?`, texto: "Os links dela param de abrir. O número não volta.", confirmar: "Cancelar a proposta", perigo: true })) return;
+        if (naNuvem()) { const r = await Nuvem.cliente().rpc("cancelar_proposta", { p_id: id }); if (r.error) { ui.aviso(r.error.message, "erro"); return; } await abrirProspect(atual.id); }
+        else { const p = (atual.propostas || []).find(p => p.id === id); if (p) p.status = "cancelada"; gravarLocal([JSON.parse(JSON.stringify(atual))].concat(lerLocal().filter(q => q.id !== atual.id))); propostas = (atual.propostas || []).slice().reverse(); desenhar(); }
+    }
+    async function linkProposta(id) {
+        if (!naNuvem()) { ui.aviso("O link da proposta precisa da nuvem. Sem ela, mande o PDF.", "aviso"); return; }
+        const x = propostas.find(p => p.id === id);
+        const v = await ui.formulario({ titulo: `Link da proposta ${numLetra(x)}`, confirmar: "Criar o link", campos: [{ nome: "dias", rotulo: "Vale por (dias)", tipo: "number", valor: 30 }],
+            texto: "O cliente abre sem conta, baixa em PDF e pode aceitar (nome, cargo, e-mail e data ficam registrados)." });
+        if (!v) return;
+        const r = await Nuvem.cliente().rpc("criar_link_proposta", { p_proposta: id, p_dias: Math.max(1, Math.min(90, Math.round(Number(v.dias) || 30))) });
+        if (r.error) { ui.aviso(r.error.message, "erro"); return; }
+        await carregarLinks(); desenhar();
+        copiar(urlCliente("proposta", r.data.codigo));
+    }
+    function imprimirProposta(id) {
+        const x = id ? propostas.find(p => p.id === id) : null;
+        const d = x ? x.dados : dadosProposta();
+        let caixa = document.getElementById("relatorioImpressao");
+        if (!caixa) { caixa = document.createElement("div"); caixa.id = "relatorioImpressao"; document.body.appendChild(caixa); }
+        caixa.innerHTML = P().html(d, x ? { status: x.status, aceite: x.aceite ? { nome: x.aceite.nome, cargo: x.aceite.cargo, em: x.aceita_em || x.aceite.em } : null } : { rascunho: true });
+        document.body.classList.add("imprimindo-relatorio");
+        const fim = () => { document.body.classList.remove("imprimindo-relatorio"); removeEventListener("afterprint", fim); };
+        addEventListener("afterprint", fim);
+        setTimeout(() => { window.print(); setTimeout(fim, 500); }, 250);
+    }
+    function usarComoBase(id) {
+        const x = propostas.find(p => p.id === id);
+        if (!x?.dados?.opcoes) return;
+        atual.estudo.proposta = JSON.parse(JSON.stringify(x.dados.opcoes));
+        marcarProposta(); desenhar();
+        ui.aviso(`O rascunho agora parte de ${numLetra(x)}, com os preços de hoje da tabela.`, "info");
+    }
+    function htmlProposta() {
+        const R = atual.resultado;
+        if (!R) return `<div class="empty-state">A proposta sai do estudo: rode o estudo na aba Fluxos primeiro.</div>`;
+        const o = rascProposta();
+        const d = dadosProposta();
+        const pr = N().precos(precosTabela);
+        const brl = P().brl;
+        const frota = P().frotaDoEstudo(R);
+        const modelos = [...new Set(frota.map(g => g.modelo).concat(Object.keys(o.qtd || {})).concat(MODELOS.map(([m]) => m)))];
+        const pend = P().pendencias(precosTabela);
+        const aberta = ultimaAberta();
+        const extras = (o.extras || []).concat([{}]).slice(0, 12);
+        const STATUS = { emitida: "emitida", aceita: "aceita", substituida: "substituída", cancelada: "cancelada" };
+        const cont = d.cliente.contato || {};
+        return `${R.desatualizado ? `<div class="missao-dica ambar">O estudo mudou depois do resultado: a proposta usa o resultado antigo. Rode de novo se a mudança importa.</div>` : ""}
+        ${pend.length ? `<div class="missao-dica ambar"><b>${pend.filter(x => !x.aviso).length} item(ns) da Tabela da E4M ainda são exemplo</b> e saem marcados na proposta: ${pend.map(x => esc(x.rotulo)).join(", ")}. <button type="button" class="btn-link" data-es="precos">Abrir a Tabela da E4M</button></div>` : ""}
+        <section class="card estudo-duas proposta-form">
+            <div><h3>O que vai na proposta</h3>
+                <p class="suave">Parte da frota do estudo (${esc(R.simulacao?.recomendado?.nome || "nenhuma fecha")}). Preços, plano, serviços e condições vêm da Tabela da E4M.</p>
+                <div class="estudo-premissas">${modelos.map(m => `<label class="campo"><span>${esc(MODELOS.find(x => x[0] === m)?.[1].split(" (")[0] || m)} <small class="suave">${brl(Number(pr.atta[m]) || 0)}</small></span><input type="number" min="0" step="1" class="estudo-num" data-pp-qtd="${esc(m)}" value="${o.qtd?.[m] ?? (frota.find(g => g.modelo === m)?.n || 0)}"></label>`).join("")}
+                    <label class="campo"><span>Módulos Eciton I/O <small class="suave">${brl(pr.moduloIO)}</small></span><input type="number" min="0" step="1" class="estudo-num" data-pp="modulosIO" value="${Number(o.modulosIO) || 0}"></label>
+                    <label class="campo"><span>Berços a mais <small class="suave">${brl(pr.bercoExtra)}</small></span><input type="number" min="0" step="1" class="estudo-num" data-pp="bercos" value="${Number(o.bercos) || 0}"></label>
+                    <label class="campo"><span>Desconto no hardware</span><span class="estudo-un"><input type="number" min="0" max="50" step="0.5" data-pp="descontoPct" value="${Math.round((Number(o.descontoPct) || 0) * 1000) / 10}"><i>%</i></span></label>
+                    <label class="campo"><span>Validade</span><span class="estudo-un"><input type="number" min="1" max="180" step="1" data-pp="validadeDias" value="${d.validadeDias}"><i>dias</i></span></label></div>
+                <h4>Itens a mais</h4>
+                ${tabela(["Descrição", "Qtd.", "Preço unitário (R$)", ""], extras.map((x, i) => [
+                    `<input type="text" maxlength="80" data-pp-extra="${i}" data-c="descricao" value="${esc(x.descricao || "")}" placeholder="${i === (o.extras || []).length ? "ex.: carrinho adaptado" : ""}" aria-label="Descrição">`,
+                    `<input type="number" min="0" step="1" class="estudo-num" data-pp-extra="${i}" data-c="qtd" value="${x.qtd ?? ""}" aria-label="Quantidade">`,
+                    `<input type="text" inputmode="decimal" class="estudo-num" data-pp-extra="${i}" data-c="unitario" value="${x.unitario != null ? String(x.unitario).replace(".", ",") : ""}" aria-label="Preço unitário">`,
+                    i < (o.extras || []).length ? `<button type="button" class="btn-remover-fila" data-pp-tirar="${i}" aria-label="Tirar o item">×</button>` : ""]), "proposta-extras")}
+            </div>
+            <div><h3>Para quem e como</h3>
+                <label class="campo"><span>Aos cuidados de</span><input type="text" maxlength="80" data-pp-contato="nome" value="${esc(cont.nome || "")}"></label>
+                <label class="campo"><span>E-mail do contato</span><input type="email" maxlength="120" data-pp-contato="email" value="${esc(cont.email || "")}"></label>
+                <label class="campo"><span>Plano do Eciton</span><select data-pp="plano">${pr.planos.map(x => `<option value="${esc(x.id)}" ${d.plano.id === x.id ? "selected" : ""}>${esc(x.nome)} · ${brl(N().mensalidade(x, d.nAtta))}/mês</option>`).join("")}</select></label>
+                <label class="config-chave"><input type="checkbox" data-pp-mostrar="compra" ${d.mostrar.compra ? "checked" : ""}><span>Opção de compra</span></label>
+                <label class="config-chave"><input type="checkbox" data-pp-mostrar="mensalidade" ${d.mostrar.mensalidade ? "checked" : ""}><span>Opção de pagar por mês</span></label>
+                <label class="campo"><span>Observações (vão na proposta)</span><textarea rows="3" maxlength="2000" data-pp="observacoes">${esc(o.observacoes || "")}</textarea></label>
+                <div class="proposta-totais"><div><span>Compra</span><b>${brl(d.compra.total)}</b><small>+ ${brl(d.compra.mensal)}/mês</small></div><div><span>Por mês</span><b>${brl(d.mensalidade.total)}</b><small>+ ${brl(d.mensalidade.inicial)} na implantação</small></div></div>
+                <div class="grupo"><button type="button" class="btn btn-primario" data-es="emitirProposta">${aberta && aberta.status === "emitida" ? "Emitir como proposta nova" : "Emitir a proposta"}</button>
+                    ${aberta && aberta.status === "emitida" ? `<button type="button" class="btn" data-es="revisarProposta">Emitir a revisão de ${esc(aberta.numero)}</button>` : ""}
+                    <button type="button" class="btn" data-es="pdfRascunho">${ui.icone("pdf", "icone-p")}PDF do rascunho</button></div>
+            </div>
+        </section>
+        ${propostas.length ? `<section class="card"><h3>Propostas emitidas</h3>${tabela(["Proposta", "Emitida", "Válida até", "Compra", "Situação", ""], propostas.map(x => [
+            `<b>${esc(numLetra(x))}</b>`, dataTxt(x.emitida_em), x.valida_ate ? new Date(x.valida_ate + "T12:00:00").toLocaleDateString("pt-BR") : "--", brl(x.dados?.compra?.total),
+            `<span class="estudo-chip ${x.status === "aceita" ? "ok" : ""}">${STATUS[x.status] || x.status}</span>${x.aceite ? `<small class="suave estudo-origem">por ${esc(x.aceite.nome)}${x.aceite.cargo ? `, ${esc(x.aceite.cargo)}` : ""} em ${dataTxt(x.aceita_em || x.aceite.em)}</small>` : ""}`,
+            `<button type="button" class="btn btn-mini" data-pp-pdf="${esc(x.id)}">PDF</button>
+             ${x.status === "emitida" || x.status === "aceita" ? `<button type="button" class="btn btn-mini" data-pp-link="${esc(x.id)}">Link</button>` : ""}
+             <button type="button" class="btn btn-mini" data-pp-base="${esc(x.id)}">Usar como base</button>
+             ${x.status === "emitida" ? `<button type="button" class="btn btn-mini btn-perigo-suave" data-pp-cancelar="${esc(x.id)}">Cancelar</button>` : ""}`]))}</section>` : ""}
+        <div class="estudos-relatorio">${P().html(d, { rascunho: true })}</div>`;
+    }
+
     /* ---------------- a tabela da E4M (preços, planos, a pessoa de referência e as premissas) ---------------- */
     // as premissas mostradas em %, e o caminho de cada campo no rascunho ("atta.atta-g-o", "planos.0.nome", "premissas.pfd.0")
     const PCT_PREM = new Set(["pfd", "faltas", "disponibilidadeAtta", "coberturaFrota", "reducaoParadas", "reducaoErros", "reducaoAvarias", "reducaoAcidentes", "margemMinuto", "materialPct", "coberturaHoje", "coberturaE4M", "crescimento", "custoCapital"]);
@@ -396,7 +537,16 @@ const EstudosTela = (function () {
         crescimento: "Crescimento da demanda por ano", custoCapital: "Custo de capital por ano", custoM2: "Aluguel do m² por mês (R$)", larguraEmp: "Corredor de empilhadeira (m)", larguraAtta: "Corredor do Atta (m)",
         kwhHoraAtta: "Consumo do Atta (kWh por hora)", co2Kwh: "CO₂ da energia (kg por kWh)", glpHora: "Gás da empilhadeira (kg por hora)", co2Glp: "CO₂ do gás (kg por kg)", horasMes: "Horas de trabalho por mês" };
     let tabelaRasc = null, tabelaSuja = false;
-    function abrirTabela() {
+    let voltarPara = null;
+    // os campos que a E4M já mudou (os outros saem como exemplo na proposta)
+    const confirmadoRasc = cam => (tabelaRasc?.confirmados || []).some(c => c === cam || c.startsWith(cam + ".") || cam.startsWith(c + "."));
+    function confirmar(cam) {
+        if (!tabelaRasc || !cam) return;
+        const k = /^atta\./.test(cam) ? "atta" : /^planos/.test(cam) ? "planos" : /^comercial\.pagamentoCompra/.test(cam) ? "comercial.pagamentoCompra" : cam;
+        tabelaRasc.confirmados = [...new Set((tabelaRasc.confirmados || []).concat(k))];
+    }
+    async function abrirTabela() {
+        if (atual) { if (sujos.size) await salvarJa(); voltarPara = { id: atual.id, aba }; atual = null; }
         tabelaRasc = JSON.parse(JSON.stringify(N().precos(precosTabela)));
         tabelaSuja = false; desenhar();
     }
@@ -425,6 +575,8 @@ const EstudosTela = (function () {
             if (!f || !Array.isArray(o) || o.some(x => !Number.isFinite(Number(x))) || (o[0] === f[0] && o[1] === f[1] && o[2] === f[2])) delete dados.premissas[k];
         });
         if (!dados.planos.length) { ui.aviso("A tabela precisa de pelo menos um plano.", "aviso"); return; }
+        const somaParc = (dados.comercial.pagamentoCompra || []).reduce((x, y) => x + (Number(y.pct) || 0), 0);
+        if (Math.abs(somaParc - 100) > 0.01) { ui.aviso(`As parcelas do pagamento na compra somam ${somaParc}%: precisam dar 100%.`, "aviso"); return; }
         dados.atualizado = new Date().toISOString();
         if (naNuvem()) { const r = await Nuvem.cliente().rpc("salvar_tabela_precos", { p_dados: dados }); if (r.error) { ui.aviso(r.error.message, "erro"); return; } }
         else try { localStorage.setItem(CHAVE_PRECOS, JSON.stringify(dados)); } catch (e) { /* sem espaço */ }
@@ -435,10 +587,16 @@ const EstudosTela = (function () {
     function htmlTabela() {
         const t = tabelaRasc, Nn = N(), REF = Nn.REFERENCIAS || {};
         const brl = RelatorioEstudo.brl;
+        const exTag = cam => (confirmadoRasc(cam) ? "" : ` <span class="tag-exemplo" title="Valor de exemplo: mude para o da E4M">exemplo</span>`);
         const campo = (cam, rot, opc = {}) => {
             const v = lerCaminho(t, cam);
+            const marca = opc.exemplo ? exTag(cam) : "";
+            if (opc.area || opc.linhas) {
+                const txt = opc.linhas ? (Array.isArray(v) ? v.join("\n") : String(v || "")) : String(v ?? "");
+                return `<label class="campo campo-inteiro"><span>${rot}${marca}</span><textarea rows="${opc.linhas ? Math.max(3, (Array.isArray(v) ? v.length : 3) + 1) : 2}" data-tp="${esc(cam)}" data-tp-texto ${opc.linhas ? "data-tp-linhas" : ""} maxlength="${opc.max || 1000}">${esc(txt)}</textarea>${opc.dica ? `<small class="suave">${esc(opc.dica)}</small>` : ""}</label>`;
+            }
             const mostra = opc.texto ? (v ?? "") : v == null || v === "" ? "" : virg(opc.pct ? Math.round(v * 10000) / 100 : v);
-            return `<label class="campo ${opc.texto ? "campo-largo" : ""}"><span>${rot}</span><span class="estudo-un"><input type="${opc.texto ? "text" : "text"}" ${opc.texto ? "" : 'inputmode="decimal"'} data-tp="${esc(cam)}" ${opc.pct ? "data-tp-pct" : ""} ${opc.texto ? "data-tp-texto" : ""} value="${esc(mostra)}" ${opc.max ? `maxlength="${opc.max}"` : ""}>${opc.un ? `<i>${opc.un}</i>` : opc.pct ? "<i>%</i>" : ""}</span>${opc.dica ? `<small class="suave">${esc(opc.dica)}</small>` : ""}</label>`;
+            return `<label class="campo ${opc.texto ? "campo-largo" : ""}"><span>${rot}${marca}</span><span class="estudo-un"><input type="${opc.texto ? "text" : "text"}" ${opc.texto ? "" : 'inputmode="decimal"'} data-tp="${esc(cam)}" ${opc.pct ? "data-tp-pct" : ""} ${opc.texto ? "data-tp-texto" : ""} value="${esc(mostra)}" ${opc.max ? `maxlength="${opc.max}"` : ""}>${opc.un ? `<i>${opc.un}</i>` : opc.pct ? "<i>%</i>" : ""}</span>${opc.dica ? `<small class="suave">${esc(opc.dica)}</small>` : ""}</label>`;
         };
         const ref = k => (REF[k] ? `<p class="suave tabela-ref">Referência: ${esc(REF[k])}</p>` : "");
         const pes = t.pessoa;
@@ -450,9 +608,9 @@ const EstudosTela = (function () {
             <div class="grupo"><button type="button" class="btn" data-es="fabricaTabela">Valores de fábrica</button><button type="button" class="btn btn-primario" data-es="salvarTabela" ${tabelaSuja ? "" : "disabled"}>Salvar a tabela</button></div></div>
             ${precosTabela?.atualizado ? `<p class="suave">Última mudança salva em ${dataTxt(precosTabela.atualizado)}.</p>` : `<p class="missao-dica ambar">A E4M ainda não salvou uma tabela: os estudos usam os valores de partida abaixo.</p>`}
         </section>
-        <section class="card"><h3>Atta (preço de venda, por unidade)</h3>
+        <section class="card"><h3>Atta (preço de venda, por unidade)${exTag("atta")}</h3>
             <div class="estudo-premissas">${MODELOS.map(([id, nome]) => campo("atta." + id, nome.split(" (")[0], { un: "R$" })).join("")}</div>${ref("atta")}</section>
-        <section class="card"><div class="estudo-cab"><h3>Planos do Eciton</h3><button type="button" class="btn" data-es="planoNovo">+ Plano</button></div>
+        <section class="card"><div class="estudo-cab"><h3>Planos do Eciton${exTag("planos")}</h3><button type="button" class="btn" data-es="planoNovo">+ Plano</button></div>
             <p class="suave">O relatório usa o preço do plano escolhido em cada estudo (por mês: o fixo pela fábrica mais o valor por Atta). No resultado, a E4M vê o payback do estudo em cada plano daqui.</p>
             <div class="tabela-planos">${t.planos.map((p, i) => `<div class="tabela-plano ${t.planoPadrao === p.id ? "padrao" : ""}" data-tp-plano="${i}">
                 <label class="campo tabela-plano-nome"><span>Nome do plano</span><input type="text" data-tp="planos.${i}.nome" data-tp-texto maxlength="40" value="${esc(p.nome)}"></label>
@@ -470,11 +628,36 @@ const EstudosTela = (function () {
             </div>`).join("")}</div>
             ${ref("software")}${ref("mensalidade")}</section>
         <section class="card"><h3>Serviços</h3><div class="estudo-premissas">
-            ${campo("implantacaoPct", "Implantação (do hardware)", { pct: true })}${campo("manutencaoPct", "Manutenção por ano (do hardware)", { pct: true, dica: "a partir do 2º ano" })}
-            ${campo("expansaoPct", "Implantação de Atta a mais (do hardware novo)", { pct: true })}${campo("moduloIO", "Módulo Eciton I/O instalado", { un: "R$" })}
-            ${campo("locacaoPctMes", "Mensalidade do hardware (por mês)", { pct: true, dica: "na opção de pagar por mês, com a manutenção" })}${campo("locacaoMeses", "Contrato da mensalidade", { un: "meses" })}
-            ${campo("segundoAcesso", "Segundo acesso no gargalo", { un: "R$" })}${campo("bercoExtra", "Berço a mais", { un: "R$" })}${campo("energiaKwh", "Energia", { un: "R$/kWh" })}</div>
+            ${campo("implantacaoPct", "Implantação (do hardware)", { exemplo: true,  pct: true })}${campo("manutencaoPct", "Manutenção por ano (do hardware)", { exemplo: true,  pct: true, dica: "a partir do 2º ano" })}
+            ${campo("expansaoPct", "Implantação de Atta a mais (do hardware novo)", { pct: true })}${campo("moduloIO", "Módulo Eciton I/O instalado", { exemplo: true,  un: "R$" })}
+            ${campo("locacaoPctMes", "Mensalidade do hardware (por mês)", { exemplo: true,  pct: true, dica: "na opção de pagar por mês, com a manutenção" })}${campo("locacaoMeses", "Contrato da mensalidade", { exemplo: true,  un: "meses" })}
+            ${campo("segundoAcesso", "Segundo acesso no gargalo", { un: "R$" })}${campo("bercoExtra", "Berço a mais", { exemplo: true,  un: "R$" })}${campo("energiaKwh", "Energia", { un: "R$/kWh" })}</div>
             ${ref("manutencao")}${ref("implantacao")}</section>
+        <section class="card"><h3>Adaptar a planta para outro módulo${exTag("adaptacao")}</h3>
+            <p class="suave">Nos cenários da planta, quando um módulo passa a levar a carga de outro, o estudo soma este custo por ponto atendido (a origem e o destino de cada fluxo que muda). A carga sem linha aqui não vai nesse módulo.</p>
+            <div class="estudo-premissas">${Object.keys(t.adaptacao || {}).map(k => { const [cg, md] = k.split(":"); return campo(`adaptacao.${k}.0`, `${{ caixa: "Caixa ou kit", carrinho: "Carrinho", esteira: "Esteira", palete: "Palete", comboio: "Comboio" }[cg] || cg} no Atta ${md}`, { un: "R$", dica: t.adaptacao[k][1] }); }).join("")}</div></section>
+        <section class="card"><h3>A empresa na proposta</h3>
+            <p class="suave">Sem CNPJ, a proposta sai como <b>preliminar</b> ("o contrato e a nota fiscal são emitidos pela pessoa jurídica"). Preencha quando a E4M tiver o CNPJ: as próximas propostas já saem com ele.</p>
+            <div class="estudo-premissas">${campo("comercial.nomeFantasia", "Nome", { texto: true, max: 80 })}${campo("comercial.razaoSocial", "Razão social", { texto: true, max: 120 })}
+                ${campo("comercial.cnpj", "CNPJ", { texto: true, max: 20 })}${campo("comercial.endereco", "Endereço", { texto: true, max: 160 })}
+                ${campo("comercial.email", "E-mail comercial", { texto: true, max: 120 })}${campo("comercial.telefone", "Telefone", { texto: true, max: 30 })}
+                ${campo("comercial.site", "Site", { texto: true, max: 120 })}${campo("comercial.responsavel", "Quem assina pela E4M", { texto: true, max: 80 })}
+                ${campo("comercial.avisoAceite", "E-mail que recebe o aviso de aceite", { texto: true, max: 120, dica: "precisa do Resend ligado no banco (como os alertas)" })}</div></section>
+        <section class="card"><h3>Condições comerciais <small class="suave">da proposta</small></h3>
+            <p class="suave">Os valores de partida são <b>exemplos</b> e saem marcados assim na proposta até vocês mudarem cada um. Revise as condições com o jurídico e a contabilidade.</p>
+            <div class="estudo-premissas">${campo("comercial.validadeDias", "Validade da proposta", { un: "dias", exemplo: true })}${campo("comercial.prazoFabricacaoSemanas", "Prazo de fabricação", { un: "semanas", exemplo: true })}
+                ${campo("comercial.garantiaMeses", "Garantia", { un: "meses", exemplo: true })}</div>
+            <h4>Pagamento na compra${exTag("comercial.pagamentoCompra")} <small class="suave">(soma ${(t.comercial.pagamentoCompra || []).reduce((a, x) => a + (Number(x.pct) || 0), 0)}%${(t.comercial.pagamentoCompra || []).reduce((a, x) => a + (Number(x.pct) || 0), 0) !== 100 ? ", precisa dar 100%" : ""})</small></h4>
+            ${tabela(["Quando", "%", ""], (t.comercial.pagamentoCompra || []).map((x, i) => [
+                `<input type="text" maxlength="60" data-tp="comercial.pagamentoCompra.${i}.quando" data-tp-texto value="${esc(x.quando)}" aria-label="Quando" class="tabela-largo">`,
+                `<span class="estudo-un"><input type="text" inputmode="decimal" class="estudo-num" data-tp="comercial.pagamentoCompra.${i}.pct" value="${virg(x.pct)}" aria-label="Porcentagem"><i>%</i></span>`,
+                (t.comercial.pagamentoCompra || []).length > 1 ? `<button type="button" class="btn-remover-fila" data-tp-tirar-parcela="${i}" aria-label="Tirar a parcela">×</button>` : ""]))}
+            <button type="button" class="btn btn-mini" data-es="parcelaNova">+ Parcela</button>
+            <div class="estudo-premissas tabela-textos">${campo("comercial.pagamentoMensal", "Pagamento na opção por mês", { area: true, exemplo: true })}
+                ${campo("comercial.garantia", "O que a garantia cobre", { area: true, exemplo: true })}${campo("comercial.suporte", "Suporte", { area: true, exemplo: true })}
+                ${campo("comercial.frete", "Frete", { area: true, exemplo: true })}${campo("comercial.impostos", "Impostos", { area: true, exemplo: true })}${campo("comercial.reajuste", "Reajuste", { area: true, exemplo: true })}
+                ${campo("comercial.inclui", "A implantação inclui (um por linha)", { linhas: true, exemplo: true })}${campo("comercial.naoInclui", "O que fica com o cliente (um por linha)", { linhas: true, exemplo: true })}
+                ${campo("comercial.condicoesGerais", "Condições gerais", { area: true, exemplo: true, max: 3000 })}</div></section>
         <section class="card"><h3>A pessoa de referência <small class="suave">quando o cliente não sabe a folha</small></h3>
             <p class="suave">O cliente responde no questionário o salário médio, os benefícios, a PLR e o regime de impostos; o estudo calcula os encargos com os percentuais daqui. Sem resposta, usa esta pessoa. Hoje: <b>${brl(refPessoa, false)}</b> por mês (encargos de ${(Math.round(enc.total * 1000) / 10).toLocaleString("pt-BR")}%).</p>
             <div class="estudo-premissas">${campo("pessoa.salario", "Salário", { un: "R$" })}${campo("pessoa.fonteSalario", "Fonte do salário (vai no relatório)", { texto: true, max: 120 })}
@@ -507,7 +690,7 @@ const EstudosTela = (function () {
             <div class="grupo"><button type="button" class="btn" data-es="precos">Tabela da E4M</button><button type="button" class="btn btn-primario" data-es="novo">+ Prospect</button></div></div>
             ${naNuvem() ? "" : `<p class="missao-dica ambar">Sem nuvem: os estudos ficam neste navegador e não há links para o cliente.</p>`}
         </section>
-        ${lista.length ? `<section class="card">${tabela(["Prospect", "Setor", "Etapa", "Questionário", "Frota", "Payback conservador", "Atualizado"], lista.map(p => [
+        ${lista.length ? `<section class="card">${tabela(["Prospect", "Setor", "Etapa", "Questionário", "Frota", "Payback provável", "Atualizado"], lista.map(p => [
             `<button type="button" class="btn-link" data-es-abrir="${esc(p.id)}"><b>${esc(p.nome)}</b></button>${p.cidade ? `<small class="suave estudo-origem">${esc(p.cidade)}</small>` : ""}`,
             esc(p.setor || "--"), `<span class="estudo-chip">${esc(etapaTxt(p.etapa))}</span>`, p.respondido_em ? `respondido em ${dataTxt(p.respondido_em)}` : `<span class="suave">aguardando</span>`,
             esc(p.frota || "--"), p.payback !== undefined && p.frota ? esc(RelatorioEstudo.meses(p.payback)) : "--", dataTxt(p.atualizado_em)]))}</section>`
@@ -524,7 +707,7 @@ const EstudosTela = (function () {
     function htmlCliente() {
         const c = atual.contato || {};
         const vivos = links.filter(l => !l.cancelado && Date.parse(l.expira_em) > Date.now());
-        const TIPO = { pesquisa: "Questionário", diario: "Diário de viagens", relatorio: "Relatório" };
+        const TIPO = { pesquisa: "Questionário", diario: "Diário de viagens", relatorio: "Relatório", proposta: "Proposta" };
         return `<section class="card estudo-duas">
             <div><h3>Prospect</h3>
                 <label class="campo"><span>Empresa</span><input type="text" data-es-campo="nome" maxlength="80" value="${esc(atual.nome)}"></label>
@@ -594,14 +777,15 @@ const EstudosTela = (function () {
         const pn = atual.estudo.premissasNegocio || {};
         const tpPrem = k => (Array.isArray(tp.premissas?.[k]) ? tp.premissas[k] : N().PREMISSAS[k]);
         const PN = [["manuseioS", "Pegar ou entregar à mão, por ponta (s)"], ["velocidadePe", "Velocidade a pé com carga (m/s)"], ["pfd", "Pausas, fadiga e esperas"], ["faltas", "Faltas e afastamentos"], ["coberturaFrota", "Parte do transporte que a frota assume"], ["disponibilidadeAtta", "Disponibilidade do Atta"]];
-        const P = [["prazoAlvo", "Entregas no prazo (meta)", "%"], ["ocupacaoMax", "Ocupação máxima de cada Atta", "%"], ["variacao", "Variação de um dia para outro", "%"], ["picoInicio", "Pico no começo do turno", "%"], ["picoVolta", "Pico na volta do intervalo", "%"], ["rodadas", "Dias simulados por frota", ""]];
+        const P = [["prazoAlvo", "Entregas no prazo (meta)", "%"], ["ocupacaoMax", "Ocupação máxima de cada Atta", "%"], ["variacao", "Variação de um dia para outro", "%"], ["picoInicio", "Pico no começo do turno", "%"], ["picoVolta", "Pico na volta do intervalo", "%"], ["preparo", "Pré-abastecimento (parte do pico que sai antes)", "%"], ["rodadas", "Dias simulados por frota", ""]];
         const ORIG = { "questionário": "cliente", "diário": "diario", "planilha": "planilha", "Mira Pro": "estimado", "modelo do setor": "premissa" };
         return `<section class="card"><h3>Fluxos da simulação</h3>
             ${tabela(["", "Fluxo", "De", "Para", "Atta", "Viagens/h", "Prazo", "Origem"], fl.map((f, i) => [
-                `<input type="checkbox" data-es-fluxo="${i}" data-c="ativo" ${f.ativo !== false ? "checked" : ""} aria-label="Usar ${esc(f.nome)}">`, `<b>${esc(f.nome)}</b>`,
+                `<input type="checkbox" data-es-fluxo="${i}" data-c="ativo" ${f.ativo !== false ? "checked" : ""} aria-label="Usar ${esc(f.nome)}">`, `<b>${esc(f.nome)}</b>${f.entrega && f.entrega !== "chamada" ? `<small class="suave estudo-origem">${esc(Estudo.ENTREGAS[f.entrega] || f.entrega)}${f.paradas?.length ? ` · ${f.paradas.length + 1} paradas` : ""}</small>` : ""}`,
                 sel(pontos, f.de, `data-es-fluxo="${i}" data-c="de" aria-label="De"`), sel(pontos, f.para, `data-es-fluxo="${i}" data-c="para" aria-label="Para"`),
                 sel(MODELOS.map(([k, t]) => [k, t.split(" (")[0]]), (f.modelos || [])[0], `data-es-fluxo="${i}" data-c="modelo" aria-label="Modelo"`),
-                f.demanda?.tipo === "porHora" ? `<input type="number" min="0" step="0.5" class="estudo-num" data-es-fluxo="${i}" data-c="porHora" value="${f.demanda.porHora}" aria-label="Viagens por hora">` : `${(f.demanda?.horarios || []).length} horários`,
+                f.demanda?.tipo === "porHora" ? `<input type="number" min="0" step="0.5" class="estudo-num" data-es-fluxo="${i}" data-c="porHora" value="${f.demanda.porHora}" aria-label="Viagens por hora">`
+                    : f.demanda?.tipo === "ciclo" ? `a cada <input type="number" min="5" step="1" class="estudo-num" data-es-fluxo="${i}" data-c="ciclo" value="${f.demanda.cicloMin}" aria-label="Ciclo da rota"> min` : `${(f.demanda?.horarios || []).length} horários`,
                 `<input type="number" min="1" step="1" class="estudo-num" data-es-fluxo="${i}" data-c="prazoMin" value="${f.prazoMin}" aria-label="Prazo"> min`,
                 `<span class="rv-tag rv-o-${ORIG[f.origem] || "cliente"}">${esc(f.origem || "questionário")}</span>`]))}
             <p class="suave">Mudar aqui vale para a simulação; o questionário do cliente fica como ele respondeu. "Gerar de novo" (aba Planta) refaz os fluxos a partir do questionário.</p></section>
@@ -634,7 +818,33 @@ const EstudosTela = (function () {
             ${eq ? `<p class="suave estudo-equilibrio"><b>Só para a E4M:</b> cada Atta custa ${brl(eq.custoAttaAno)} por ano (compra em 5 anos, implantação, plano e manutenção), ${ui.numero(eq.custoAttaAno / Math.max(1, eq.pessoaAno), 1)} vez(es) o custo de uma pessoa (${brl(eq.pessoaAno / 12, false)} por mês). Payback de ${eq.alvo} meses no cenário provável: ${eq.fatorPreco != null ? `com o Atta a ${Math.round(eq.fatorPreco * 100)}% da tabela (≈ ${brl(eq.precoMedio)} em média)` : "nem com o Atta de graça"}${eq.fatorAssinatura != null ? `, ou com o plano a ${brl(eq.assinatura, false)} por mês para a frota (hoje ${brl(eq.assinaturaHoje, false)})` : ""}.</p>` : ""}
             ${(R.planos || []).length > 1 ? `<div class="estudo-equilibrio"><b class="suave">Só para a E4M: este estudo em cada plano da tabela</b>${tabela(["Plano", "Mira", "Por mês (esta frota)", "Payback provável", "Payback conservador", "VPL em 5 anos"], R.planos.map(p => [`${p.escolhido ? "<b>" : ""}${esc(p.nome)}${p.escolhido ? "</b> <small class=\"suave\">(no relatório)</small>" : ""}`, esc(N().MIRA_PLANO[p.mira] || ""), brl(p.mensal, false), esc(RelatorioEstudo.meses(p.paybackProvavel)), esc(RelatorioEstudo.meses(p.paybackConservador)), brl(p.vpl5)]))}</div>` : ""}
         </section>
+        ${htmlCenariosE4M(R)}
         <div class="estudos-relatorio">${RelatorioEstudo.html(R, { paraCliente: false })}</div>`;
+    }
+    // 0.24: a E4M marca na visita se cada cenário da planta é viável; "usar no estudo" muda os fluxos (e a planta) e pede rodar de novo
+    function htmlCenariosE4M(R) {
+        const CP = (R.cenariosPlanta || []).filter(c => c.id !== "atual");
+        if (!CP.length) return "";
+        const v = atual.estudo.viabilidade || {};
+        const OPC = [["confirmar", "a confirmar na visita"], ["sim", "viável"], ["nao", "não dá"]];
+        return `<section class="card"><h3>Cenários da planta <small class="suave">só para a E4M: depois da visita, marque o que dá para fazer</small></h3>
+            ${tabela(["Cenário", "Frota", "Payback (hoje)", "Viável?", "Por quê", ""], CP.map(c => [`<b>${esc(c.nome)}</b>`, c.fecha === false ? "não fecha" : esc(c.frota), c.fecha === false ? "—" : esc(RelatorioEstudo.meses(c.payback)),
+                `<select data-es-viavel="${esc(c.id)}" aria-label="Viável?">${OPC.map(([k, t]) => `<option value="${k}" ${(v[c.id]?.v || "confirmar") === k ? "selected" : ""}>${t}</option>`).join("")}</select>`,
+                `<input type="text" maxlength="120" data-es-viavel-motivo="${esc(c.id)}" value="${esc(v[c.id]?.motivo || "")}" placeholder="ex.: a linha 2 não cabe rack" aria-label="Por quê">`,
+                c.fecha === false ? "" : `<button type="button" class="btn btn-mini" data-es-usar-cenario="${esc(c.id)}">Usar no estudo</button>`]))}
+            <p class="suave">O relatório mostra a marcação na hora, sem rodar de novo. "Usar no estudo" muda os fluxos${CP.some(c => c.tipo === "milkrun") ? " (no milk run, o questionário e a planta)" : ""} para o cenário; depois rode o estudo.</p></section>`;
+    }
+    async function usarCenario(id) {
+        const R = atual.resultado;
+        const c = (R?.cenariosPlanta || []).find(x => x.id === id);
+        if (!c) return;
+        if (!await ui.confirmar({ titulo: `Usar "${c.nome}" no estudo?`, texto: c.tipo === "milkrun" ? "O questionário ganha a rota de milk run no lugar dos fluxos dela e a planta de estudo é gerada de novo (o que foi mudado no editor se perde)." : c.tipo === "mista" ? "Os fluxos desse módulo ficam fora da simulação (continuam com as pessoas)." : "Os fluxos passam para o módulo novo e as estações deles aceitam esse módulo.", confirmar: "Usar" })) return;
+        const m = N().aplicarCenario({ fluxos: atual.estudo.fluxos, missoes: atual.estudo.missoes, planta: atual.planta, respostas: atual.respostas }, c);
+        if (!m) { ui.aviso("Este cenário não dá para aplicar sozinho: mude os fluxos na aba Fluxos.", "aviso"); return; }
+        if (m.respostas) { atual.respostas = m.respostas; marcar("respostas"); if (!gerarDoQuestionario(false)) return; }
+        else { atual.estudo.fluxos = m.fluxos; if (m.planta) { atual.planta = m.planta; marcar("planta"); } marcar("estudo"); }
+        aba = "fluxos"; desenhar();
+        ui.aviso(`Cenário aplicado: ${c.nome}. Rode o estudo de novo.`, "sucesso");
     }
 
     function desenhar() {
@@ -644,7 +854,7 @@ const EstudosTela = (function () {
         if (!carregado) { caixa.innerHTML = `<div class="empty-state">Carregando…</div>`; return; }
         if (!atual && tabelaRasc) { caixa.innerHTML = htmlTabela(); return; }
         if (!atual) { caixa.innerHTML = htmlLista(); return; }
-        const corpo = { cliente: htmlCliente, pesquisa: htmlPesquisa, planta: htmlPlanta, fluxos: htmlFluxos, resultado: htmlResultado }[aba]();
+        const corpo = { cliente: htmlCliente, pesquisa: htmlPesquisa, planta: htmlPlanta, fluxos: htmlFluxos, resultado: htmlResultado, proposta: htmlProposta }[aba]();
         caixa.innerHTML = htmlTopo() + corpo;
         if (aba === "pesquisa") {
             const alvo = document.getElementById("estudosPesquisa");
@@ -663,14 +873,24 @@ const EstudosTela = (function () {
             const b = ev.target.closest("button");
             if (!b) return;
             const a = b.dataset.es;
+            if (b.dataset.ppPdf) { imprimirProposta(b.dataset.ppPdf); return; }
+            if (b.dataset.ppLink) { linkProposta(b.dataset.ppLink); return; }
+            if (b.dataset.ppBase) { usarComoBase(b.dataset.ppBase); return; }
+            if (b.dataset.ppCancelar) { cancelarProposta(b.dataset.ppCancelar); return; }
+            if (b.dataset.ppTirar !== undefined) { const o = rascProposta(); (o.extras || []).splice(Number(b.dataset.ppTirar), 1); marcarProposta(); desenhar(); return; }
+            if (a === "emitirProposta") { emitirProposta(null); return; }
+            if (a === "revisarProposta") { emitirProposta(ultimaAberta()?.numero || null); return; }
+            if (a === "pdfRascunho") { imprimirProposta(null); return; }
+            if (b.dataset.tpTirarParcela !== undefined && tabelaRasc) { tabelaRasc.comercial.pagamentoCompra.splice(Number(b.dataset.tpTirarParcela), 1); confirmar("comercial.pagamentoCompra"); tabelaSuja = true; desenhar(); return; }
             if (b.dataset.tpTirar !== undefined && tabelaRasc) {
                 const i = Number(b.dataset.tpTirar), p = tabelaRasc.planos[i];
                 if (!p || !await ui.confirmar({ titulo: `Tirar o plano ${p.nome}?`, texto: "Os estudos que usam este plano passam para o plano padrão quando rodarem de novo.", confirmar: "Tirar", perigo: true })) return;
-                tabelaRasc.planos.splice(i, 1);
+                tabelaRasc.planos.splice(i, 1); confirmar("planos");
                 if (!tabelaRasc.planos.some(x => x.id === tabelaRasc.planoPadrao)) tabelaRasc.planoPadrao = tabelaRasc.planos[0].id;
                 tabelaSuja = true; desenhar(); return;
             }
             if (b.dataset.esAbrir) { aba = "cliente"; await abrirProspect(b.dataset.esAbrir); return; }
+            if (b.dataset.esUsarCenario) { usarCenario(b.dataset.esUsarCenario); return; }
             if (b.dataset.esAba) { if (sujos.size) salvarJa(); aba = b.dataset.esAba; desenhar(); return; }
             if (b.dataset.esLink) { criarLink(b.dataset.esLink); return; }
             if (b.dataset.esCopiar) { copiar(b.dataset.esCopiar); return; }
@@ -686,14 +906,17 @@ const EstudosTela = (function () {
             else if (a === "salvarTabela") salvarTabela();
             else if (a === "voltarTabela") {
                 if (tabelaSuja && !await ui.confirmar({ titulo: "Sair sem salvar?", texto: "As mudanças na tabela da E4M se perdem.", confirmar: "Sair sem salvar", perigo: true })) return;
-                tabelaRasc = null; tabelaSuja = false; desenhar();
+                tabelaRasc = null; tabelaSuja = false;
+                if (voltarPara) { const v = voltarPara; voltarPara = null; aba = v.aba; await abrirProspect(v.id); } else desenhar();
             } else if (a === "fabricaTabela") {
                 if (!await ui.confirmar({ titulo: "Voltar aos valores de fábrica?", texto: "Preços, planos, a pessoa de referência e as premissas voltam aos de partida (só ficam valendo se salvar).", confirmar: "Voltar" })) return;
                 tabelaRasc = JSON.parse(JSON.stringify(N().precos(null))); tabelaSuja = true; desenhar();
             } else if (a === "planoNovo") {
                 let n = tabelaRasc.planos.length + 1, id = "plano" + n;
                 while (tabelaRasc.planos.some(p => p.id === id)) id = "plano" + (++n);
-                tabelaRasc.planos.push({ id, nome: "Plano novo", inclui: "", mira: "nao", fixoMes: 0, porAttaMes: 0 }); tabelaSuja = true; desenhar();
+                tabelaRasc.planos.push({ id, nome: "Plano novo", inclui: "", mira: "nao", fixoMes: 0, porAttaMes: 0 }); confirmar("planos"); tabelaSuja = true; desenhar();
+            } else if (a === "parcelaNova") {
+                tabelaRasc.comercial.pagamentoCompra.push({ quando: "", pct: 0 }); confirmar("comercial.pagamentoCompra"); tabelaSuja = true; desenhar();
             }
             else if (a === "voltar") { if (sujos.size) await salvarJa(); atual = null; await carregarLista(); desenhar(); }
             else if (a === "apagar") apagar();
@@ -713,6 +936,25 @@ const EstudosTela = (function () {
         });
         caixa.addEventListener("change", ev => {
             const t = ev.target;
+            if (atual && aba === "proposta" && (t.dataset.pp || t.dataset.ppQtd || t.dataset.ppExtra !== undefined || t.dataset.ppContato || t.dataset.ppMostrar)) {
+                const o = rascProposta();
+                if (t.dataset.ppQtd) o.qtd = Object.assign({}, o.qtd, { [t.dataset.ppQtd]: Math.max(0, Math.round(Number(t.value) || 0)) });
+                else if (t.dataset.ppMostrar) o.mostrar = Object.assign({ compra: true, mensalidade: true }, o.mostrar, { [t.dataset.ppMostrar]: t.checked });
+                else if (t.dataset.ppContato) o.contato = Object.assign({}, o.contato, { [t.dataset.ppContato]: t.value.trim() });
+                else if (t.dataset.ppExtra !== undefined) {
+                    const i = Number(t.dataset.ppExtra), c = t.dataset.c;
+                    o.extras = (o.extras || []).slice();
+                    const x = o.extras[i] = Object.assign({}, o.extras[i] || {});
+                    x[c] = c === "descricao" ? t.value.trim() : c === "qtd" ? Math.max(0, Math.round(Number(t.value) || 0)) : (numTxt(t.value) ?? 0);
+                    o.extras = o.extras.filter(e => e && (e.descricao || e.qtd || e.unitario));
+                } else {
+                    const k = t.dataset.pp;
+                    if (k === "plano" || k === "observacoes") o[k] = t.value;
+                    else if (k === "descontoPct") o.descontoPct = Math.max(0, Math.min(50, Number(t.value) || 0)) / 100;
+                    else o[k] = Math.max(0, Math.round(Number(t.value) || 0));
+                }
+                marcarProposta(); desenhar(); return;
+            }
             if (tabelaRasc && !atual && (t.dataset.tp || t.dataset.tpPrem || t.dataset.tpPadrao)) {
                 if (t.dataset.tpPadrao) tabelaRasc.planoPadrao = t.dataset.tpPadrao;
                 else if (t.dataset.tpPrem) {
@@ -722,16 +964,18 @@ const EstudosTela = (function () {
                     const o = (tabelaRasc.premissas[k] || f.slice(0, 3)).slice(0, 3);
                     o[j] = v == null ? f[j] : v;
                     if (o[0] === f[0] && o[1] === f[1] && o[2] === f[2]) delete tabelaRasc.premissas[k]; else tabelaRasc.premissas[k] = o;
-                } else if (t.hasAttribute("data-tp-texto")) gravarCaminho(tabelaRasc, t.dataset.tp, t.value.trim());
+                } else if (t.hasAttribute("data-tp-linhas")) gravarCaminho(tabelaRasc, t.dataset.tp, t.value.split(/\n+/).map(x => x.trim()).filter(Boolean).slice(0, 20));
+                else if (t.hasAttribute("data-tp-texto")) gravarCaminho(tabelaRasc, t.dataset.tp, t.value.trim());
                 else {
                     const v = numTxt(t.value);
                     if (v == null || v < 0) { ui.aviso("Use um número (zero ou mais).", "aviso"); t.value = t.hasAttribute("data-tp-pct") ? Math.round(lerCaminho(tabelaRasc, t.dataset.tp) * 10000) / 100 : lerCaminho(tabelaRasc, t.dataset.tp); return; }
                     gravarCaminho(tabelaRasc, t.dataset.tp, t.hasAttribute("data-tp-pct") ? v / 100 : v);
                 }
                 tabelaSuja = true;
+                confirmar(t.dataset.tp || (t.dataset.tpPadrao ? "planos" : ""));
                 const bt = document.querySelector('[data-es="salvarTabela"]'); if (bt) bt.disabled = false;
-                // o total da pessoa de referência muda na hora
-                if (/^(pessoa|planos)\./.test(t.dataset.tp || "") || t.dataset.tpPadrao) desenhar();
+                // o total da pessoa de referência, os planos, a soma das parcelas e as marcas de exemplo mudam na hora
+                if (/^(pessoa|planos|comercial)\./.test(t.dataset.tp || "") || /^(atta|implantacaoPct|manutencaoPct|moduloIO|locacao|bercoExtra)/.test(t.dataset.tp || "") || t.dataset.tpPadrao) desenhar();
                 return;
             }
             if (t.matches("[data-es-planilha]") && t.files?.[0]) { importarPlanilha(t.files[0]); t.value = ""; return; }
@@ -742,18 +986,19 @@ const EstudosTela = (function () {
                 if (!f) return;
                 if (c === "ativo") f.ativo = t.checked;
                 else if (c === "porHora") f.demanda = { tipo: "porHora", porHora: Math.max(0, Number(t.value) || 0) };
+                else if (c === "ciclo") { const cmin = Math.max(5, Math.round(Number(t.value) || 20)); f.demanda = { tipo: "ciclo", cicloMin: cmin }; f.prazoMin = cmin; }
                 else if (c === "prazoMin") { f.prazoMin = Math.max(1, Number(t.value) || 15); f.prazoOrigem = "cliente"; }
                 else if (c === "modelo") f.modelos = [t.value];
                 else if (c === "de" || c === "para") {
                     f[c] = t.value;
                     const m = (atual.estudo.missoes || []).find(x => x.id === f.missao);
-                    if (m) m.etapas = [{ tipo: "IR_PARA", destino: f.de }, { tipo: "CARREGAR" }, { tipo: "IR_PARA", destino: f.para }, { tipo: "DESCARREGAR" }];
+                    if (m) m.etapas = Estudo.etapasDaEntrega(f);
                 }
                 marcar("estudo"); return;
             }
             if (t.dataset.esPremissa) {
                 const k = t.dataset.esPremissa, v = Number(t.value);
-                atual.estudo.premissas = Object.assign({}, atual.estudo.premissas, { [k]: ["prazoAlvo", "ocupacaoMax", "variacao", "picoInicio", "picoVolta"].includes(k) ? Math.max(0, v) / 100 : Math.max(1, Math.min(20, Math.round(v) || 6)) });
+                atual.estudo.premissas = Object.assign({}, atual.estudo.premissas, { [k]: ["prazoAlvo", "ocupacaoMax", "variacao", "picoInicio", "picoVolta", "preparo"].includes(k) ? Math.max(0, v) / 100 : Math.max(1, Math.min(20, Math.round(v) || 6)) });
                 marcar("estudo"); return;
             }
             if (t.dataset.esPn) {
@@ -767,6 +1012,18 @@ const EstudosTela = (function () {
                     pn[k] = [v, Math.min(v, f[1]), Math.max(v, f[2])];
                 }
                 atual.estudo.premissasNegocio = pn; marcar("estudo"); return;
+            }
+            if (t.dataset.esViavel || t.dataset.esViavelMotivo) {
+                const id = t.dataset.esViavel || t.dataset.esViavelMotivo;
+                const v = Object.assign({}, atual.estudo.viabilidade);
+                v[id] = Object.assign({ v: "confirmar", motivo: "" }, v[id], t.dataset.esViavel ? { v: t.value } : { motivo: t.value.trim().slice(0, 120) });
+                atual.estudo.viabilidade = v;
+                // vale na hora no relatório (não deixa o resultado "antigo")
+                if (atual.resultado) { atual.resultado.viabilidade = v; sujos.add("resultado"); }
+                sujos.add("estudo"); clearTimeout(timer); timer = setTimeout(salvarJa, 1200);
+                const rel = document.querySelector("#estudosConteudo .estudos-relatorio");
+                if (rel && atual.resultado) rel.innerHTML = RelatorioEstudo.html(atual.resultado, { paraCliente: false });
+                return;
             }
             if (t.dataset.esOpcao) { atual.estudo.opcoes = Object.assign({}, atual.estudo.opcoes, { [t.dataset.esOpcao]: t.type === "checkbox" ? t.checked : t.value }); marcar("estudo"); }
         });

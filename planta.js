@@ -847,6 +847,11 @@
             no.rfid = normalizarRfid(no.rfid);
             no.nome = no.nome || "";
             no.barreira = Number(no.barreira) || 0;
+            // 0.23: berço com carregador (e os modelos que ele carrega; vazio = todos)
+            if (no.tipo === "BERCO" && no.carregador) {
+                no.carregador = true;
+                if (Array.isArray(no.carregaModelos) && no.carregaModelos.length) no.carregaModelos = [...new Set(no.carregaModelos.map(String))].sort(); else delete no.carregaModelos;
+            } else { delete no.carregador; delete no.carregaModelos; }
             if (no.tipo === "ESTACAO") {
                 no.orientacaoChegada = no.orientacaoChegada === null || no.orientacaoChegada === undefined ||
                                        no.orientacaoChegada === ""
