@@ -454,14 +454,20 @@ const EstudosTela = (function () {
             <div class="estudo-premissas">${MODELOS.map(([id, nome]) => campo("atta." + id, nome.split(" (")[0], { un: "R$" })).join("")}</div>${ref("atta")}</section>
         <section class="card"><div class="estudo-cab"><h3>Planos do Eciton</h3><button type="button" class="btn" data-es="planoNovo">+ Plano</button></div>
             <p class="suave">O relatório usa o preço do plano escolhido em cada estudo (por mês: o fixo pela fábrica mais o valor por Atta). No resultado, a E4M vê o payback do estudo em cada plano daqui.</p>
-            ${tabela(["Padrão", "Nome", "O que inclui (vai no relatório)", "Mira", "Fixo por mês", "Por Atta por mês", ""], t.planos.map((p, i) => [
-                `<input type="radio" name="tpPadrao" data-tp-padrao="${esc(p.id)}" ${t.planoPadrao === p.id ? "checked" : ""} aria-label="Plano padrão: ${esc(p.nome)}">`,
-                `<input type="text" data-tp="planos.${i}.nome" data-tp-texto maxlength="40" value="${esc(p.nome)}" aria-label="Nome do plano">`,
-                `<input type="text" data-tp="planos.${i}.inclui" data-tp-texto maxlength="160" value="${esc(p.inclui)}" aria-label="O que o plano inclui" class="tabela-largo">`,
-                `<select data-tp="planos.${i}.mira" data-tp-texto aria-label="Mira no plano">${Object.entries(Nn.MIRA_PLANO).map(([k, x]) => `<option value="${k}" ${p.mira === k ? "selected" : ""}>${x}</option>`).join("")}</select>`,
-                `<span class="estudo-un"><input type="text" inputmode="decimal" data-tp="planos.${i}.fixoMes" value="${virg(p.fixoMes)}" class="estudo-num" aria-label="Fixo por mês"><i>R$</i></span>`,
-                `<span class="estudo-un"><input type="text" inputmode="decimal" data-tp="planos.${i}.porAttaMes" value="${virg(p.porAttaMes)}" class="estudo-num" aria-label="Por Atta por mês"><i>R$</i></span>`,
-                t.planos.length > 1 ? `<button type="button" class="btn-remover-fila" data-tp-tirar="${i}" aria-label="Tirar o plano ${esc(p.nome)}">×</button>` : ""]))}
+            <div class="tabela-planos">${t.planos.map((p, i) => `<div class="tabela-plano ${t.planoPadrao === p.id ? "padrao" : ""}" data-tp-plano="${i}">
+                <label class="campo tabela-plano-nome"><span>Nome do plano</span><input type="text" data-tp="planos.${i}.nome" data-tp-texto maxlength="40" value="${esc(p.nome)}"></label>
+                <div class="tabela-plano-topo">
+                    <label class="campo"><span>Mira</span><select data-tp="planos.${i}.mira" data-tp-texto>${Object.entries(Nn.MIRA_PLANO).map(([k, x]) => `<option value="${k}" ${p.mira === k ? "selected" : ""}>${x}</option>`).join("")}</select></label>
+                    <label class="config-chave tabela-plano-padrao"><input type="radio" name="tpPadrao" data-tp-padrao="${esc(p.id)}" ${t.planoPadrao === p.id ? "checked" : ""}><span>Padrão</span></label>
+                    ${t.planos.length > 1 ? `<button type="button" class="btn-remover-fila" data-tp-tirar="${i}" aria-label="Tirar o plano ${esc(p.nome)}" title="Tirar o plano">×</button>` : ""}
+                </div>
+                <label class="campo"><span>O que inclui <small class="suave">(vai no relatório do cliente)</small></span><textarea data-tp="planos.${i}.inclui" data-tp-texto maxlength="160" rows="2">${esc(p.inclui)}</textarea></label>
+                <div class="tabela-plano-precos">
+                    <label class="campo"><span>Fixo por mês <small class="suave">(a fábrica)</small></span><span class="estudo-un"><input type="text" inputmode="decimal" data-tp="planos.${i}.fixoMes" value="${virg(p.fixoMes)}"><i>R$</i></span></label>
+                    <label class="campo"><span>Por Atta, por mês</span><span class="estudo-un"><input type="text" inputmode="decimal" data-tp="planos.${i}.porAttaMes" value="${virg(p.porAttaMes)}"><i>R$</i></span></label>
+                    <p class="suave tabela-plano-exemplo">Com 5 Atta: <b>${brl(Nn.mensalidade(p, 5), false)}</b> por mês</p>
+                </div>
+            </div>`).join("")}</div>
             ${ref("software")}${ref("mensalidade")}</section>
         <section class="card"><h3>Serviços</h3><div class="estudo-premissas">
             ${campo("implantacaoPct", "Implantação (do hardware)", { pct: true })}${campo("manutencaoPct", "Manutenção por ano (do hardware)", { pct: true, dica: "a partir do 2º ano" })}
@@ -725,7 +731,7 @@ const EstudosTela = (function () {
                 tabelaSuja = true;
                 const bt = document.querySelector('[data-es="salvarTabela"]'); if (bt) bt.disabled = false;
                 // o total da pessoa de referência muda na hora
-                if (/^pessoa\./.test(t.dataset.tp || "")) desenhar();
+                if (/^(pessoa|planos)\./.test(t.dataset.tp || "") || t.dataset.tpPadrao) desenhar();
                 return;
             }
             if (t.matches("[data-es-planilha]") && t.files?.[0]) { importarPlanilha(t.files[0]); t.value = ""; return; }

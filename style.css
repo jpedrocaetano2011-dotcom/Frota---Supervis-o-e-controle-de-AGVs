@@ -2389,6 +2389,21 @@ body.modo-nuvem:not(.papel-fornecedor) .so-fornecedor, body.modo-demo .so-fornec
 .estudos-relatorio .rv2 { border: 1px solid var(--border); }
 .estudo-equilibrio { margin: 10px 0 0; border-left: 3px solid var(--purple); padding-left: 10px; }
 .tabela-ref { font-size: 12px; margin: 8px 0 0; }
+.tabela-planos { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; margin-top: 10px; }
+.tabela-plano { border: 1px solid var(--border); border-radius: 10px; padding: 12px; display: grid; gap: 10px; align-content: start; }
+.tabela-plano.padrao { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.tabela-plano .campo { margin: 0; }
+.tabela-plano input[type="text"], .tabela-plano textarea, .tabela-plano select { width: 100%; box-sizing: border-box; }
+.tabela-plano textarea { resize: vertical; font: inherit; }
+.tabela-plano-topo { display: flex; gap: 10px; align-items: flex-end; }
+.tabela-plano-topo > .campo { flex: 1; min-width: 0; }
+.tabela-plano-nome input { font-weight: 600; }
+.tabela-plano-padrao { margin-bottom: 8px; white-space: nowrap; }
+.tabela-plano-topo .btn-remover-fila { margin-bottom: 6px; }
+.tabela-plano-precos { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: end; }
+.tabela-plano-precos .estudo-un input { width: 100%; }
+.tabela-plano-exemplo { grid-column: 1 / -1; margin: 0; font-size: 12.5px; }
+@media (max-width: 520px) { .tabela-plano-precos { grid-template-columns: 1fr; } }
 .tabela-largo { width: 100%; min-width: 320px; }
 .estudo-premissas .campo-largo { grid-column: span 2; }
 .estudo-premissas .campo-largo input { width: 100%; }
