@@ -185,7 +185,7 @@
         estacao("CNC2", "CNC 2", "ESTEIRA", 36, 31.2, 270, "NOR36", 250);
         estacao("CNC3", "CNC 3", "ESTEIRA", 28, 31.2, 270, "NOR28", 250);
         estacao("INSP", "Inspeção", "ESTEIRA", 20, 31.2, 270, "NOR20", 250);
-        estacao("KITS", "Supermercado de kits", "KIT", 14, 37, 90, "NOR14");
+        estacao("KITS", "Supermercado de kits", "KIT", 14, 37, 90, "NOR14", 400);   // 0.24.3: o flow rack fica a 0,95 m do sensor (a barreira padrão, 1 m, parava o Atta 2 cm antes da tag)
         parada("W01", "Espera norte", "ESPERA", 20, 37, "NOR20");
         parada("B01", "Berço 1", "BERCO", 28, 37, "NOR28", 90);
         parada("B02", "Berço 2", "BERCO", 36, 37, "NOR36", 90);
