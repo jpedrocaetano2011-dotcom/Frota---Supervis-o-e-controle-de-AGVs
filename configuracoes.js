@@ -7,7 +7,7 @@
 */
 
 const SECOES_CONFIG = [
-    { id: "linha", titulo: "Seguidor de linha", descricao: "PID do QTR-8A e o que fazer quando a linha some." },
+    { id: "linha", titulo: "Seguidor de linha", descricao: "PID do seguidor (QTR-8RC ou QTR-8A) e o que fazer quando a linha some." },
     { id: "movimento", titulo: "Movimento", descricao: "Velocidades, rampas e manobras." },
     { id: "mecanica", titulo: "Mecânica e cinemática", descricao: "Medidas do AGV e sentido de cada motor. Use o assistente de calibração." },
     { id: "seguranca", titulo: "Segurança e rota", descricao: "Barreira dos VL53 e limites dos trechos." },

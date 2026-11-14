@@ -117,8 +117,8 @@ const Modelos = (function () {
             garra_tempo_s: "a medir", garra_orientacao: "Frente do AGV", garra_lados: "Entra por baixo, pela frente",
             torque_elevacao_nm: 0.52, fuso: "TR8x8 (avanço 8 mm)",
             comprimento_carregado_mm: "tamanho do carrinho", gira_carregado: "sim", lateral_carregado: "sim",
-            guiamento: "Fita óptica no chão (QTR-8A) e tags RFID nos pontos",
-            precisao_parada_mm: "a medir", sensores: "QTR-8A (linha), 2 × VL53L0X (frente), leitor RFID",
+            guiamento: "Fita óptica no chão (QTR-8RC) e tags RFID nos pontos",
+            precisao_parada_mm: "a medir", sensores: "QTR-8RC (linha), 2 × VL53L0X (frente), leitor RFID",
             cobertura: "Frente, até ~1,2 m", energia: "a definir", autonomia_h: "a medir", recarga: "a definir",
             piso: "Liso e plano, fita contrastante", desnivel_max_mm: "a medir", situacao: "Pronto para piloto"
         },

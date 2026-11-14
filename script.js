@@ -5271,7 +5271,7 @@ function componentesDiagnostico(agv) {
     add("Distância esquerdo (VL53L0X)", e.vl53_1 > 0 ? "Canal 0 · falhas de leitura (cabo ou conector?)" : "Canal 0", nivelPorErros(e.vl53_1), e.vl53_1, "vl53_1");
     add("Distância direito (VL53L0X)", e.vl53_2 > 0 ? "Canal 1 · falhas de leitura (cabo ou conector?)" : "Canal 1", nivelPorErros(e.vl53_2), e.vl53_2, "vl53_2");
     const calibrado = agv.sensores?.qtr?.calibrado;
-    add("Seguidor de linha (QTR-8A)", `${calibrado ? "Calibrado" : "Sem calibração"} · linha perdida ${e.linhaPerdida ?? 0}×`,
+    add("Seguidor de linha (QTR)", `${calibrado ? "Calibrado" : "Sem calibração"} · linha perdida ${e.linhaPerdida ?? 0}×`,
         calibrado === false ? "aviso" : "ok", e.linhaPerdida, "qtr");
     add("Leitor RFID (RDM6300)", `${ui.milhar(d.rfidLeituras ?? 0)} leituras · ${e.rfidInvalidos ?? 0} quadros inválidos`,
         nivelPorErros(e.rfidInvalidos), e.rfidInvalidos, "rfid");
