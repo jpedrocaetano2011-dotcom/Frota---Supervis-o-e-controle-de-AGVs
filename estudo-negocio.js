@@ -875,6 +875,12 @@
         R.orcamento = valorOu(lerNum(resp, "futuro", "orcamento"), num(0, "premissa", "não informado"));
         R.cruzamentos = valorOu(lerNum(resp, "corredores", "cruzamentos"), num(0, "premissa", "não informado"));
         R.portas = valorOu(lerNum(resp, "corredores", "portas"), num(0, "premissa", "não informado"));
+        // 0.24.7: Wi-Fi do galpão (pré-requisito do Atta) e pico sazonal (o mês mais cheio do ano)
+        R.wifi = lerTexto(resp, "corredores", "wifi") || "";
+        const psz = lerNum(resp, "futuro", "picoSazonal");
+        R.picoSazonal = psz && Number.isFinite(psz.v) ? Math.max(0, psz.v) / 100 : 0;
+        const msz = lerNum(resp, "futuro", "mesesSazonal");
+        R.mesesSazonal = msz && Number.isFinite(msz.v) ? Math.max(0, Math.round(msz.v)) : null;
         R.turnoNovo = lerTexto(resp, "futuro", "turnoNovo") === "sim";
         // 0.24: postos dedicados (quem faz só transporte sai inteiro quando a frota assume o trabalho dele) e o destino das horas
         R.rotasMilkRun = fluxos.filter(f => f.entrega === "milkrun").length;
@@ -1140,6 +1146,19 @@
             if (await rodaCom(hi)) lo = hi;
             else for (let k = 0; k < 5; k++) { const m = (lo + hi) / 2; if (await rodaCom(m)) lo = m; else hi = m; }
             capacidade = Math.round(lo * 100) / 100;
+        }
+
+        // 5b. pico sazonal: a frota recomendada aguenta o mês mais cheio? (reforço temporário, não compra)
+        let sazonal = null;
+        if (baseHoje.frota && R.picoSazonal > 0) {
+            aoProgresso(0.87, "Testando o pico sazonal");
+            const atende = atendeCom(prA);
+            const prPico = Object.assign({}, prA, { crescimento: (prA.crescimento || 0) + R.picoSazonal });
+            const ok = atende(Es.rodarFrota(ctx, baseHoje.frota, prPico));
+            const precisa = ok ? null : await menorFrota(ctx, prPico, baseHoje.frota, 10);
+            sazonal = { pico: R.picoSazonal, meses: R.mesesSazonal, atende: ok,
+                precisa: precisa && precisa.frota ? { nome: Es.nomeFrota(precisa.frota), total: totalFrota(precisa.frota) } : null,
+                limite: precisa && !precisa.frota ? (precisa.limite || "faixa") : "", gargalo: precisa && !precisa.frota ? (precisa.gargalo || "") : "" };
         }
 
         // 6. o financeiro (5 anos), nos três cenários
@@ -1678,7 +1697,7 @@
             fluxos: fl.map(f => ({ id: f.id, nome: f.nome, modelo: (f.modelos || [])[0] || "", porHora: Es.taxaBase(f), entrega: f.entrega || "chamada", ciclo: f.demanda?.tipo === "ciclo" ? f.demanda.cicloMin : null, viagensDia: f.viagensDia, prazoMin: f.prazoMin, prazoOrigem: f.prazoOrigem || "cliente", metros: f.metros, distPessoa: f.distPessoa, minViagem: f.minViagem, hoje: f.q?.hoje || "", carga: f.q?.carga || "", origem: f.origem || "" })),
             simulacao: { recomendado: rec ? cortar(rec) : null, cenarios: res.cenarios.map(cortar), sensibilidade: res.sensibilidade.map(s => ({ nome: s.nome, crescimento: s.crescimento, indisponiveis: s.indisponiveis, atende: s.atende, noPrazo: s.r.noPrazo, ocupacao: s.r.ocupacao, precisa: s.precisa ? { nome: s.precisa.nome, total: s.precisa.total } : null, limite: s.limite || "", gargalo: s.gargalo || "" })),
                 porHora: r?.porHora || [], esperaZona: r?.esperaZona || {}, porFluxo: r?.porFluxo || {}, premissas: res.premissas, avisos: res.avisos, limite: res.limite, gargalo: res.gargalo },
-            hoje, acoes, forecast, capacidade, financeiro: { cenarios, comparacao, capitalGiro, energiaMes, equilibrio, destinos }, sensibilidade: sensib, metricas, implantacao, confianca, refinar, premissas: premissasLista,
+            hoje, acoes, forecast, capacidade, sazonal, wifi: R.wifi, financeiro: { cenarios, comparacao, capitalGiro, energiaMes, equilibrio, destinos }, sensibilidade: sensib, metricas, implantacao, confianca, refinar, premissas: premissasLista,
             avisos: (entrada.avisos || []).concat(res.avisos || []), resumoMira: ""
         };
     }

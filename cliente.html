@@ -25,6 +25,7 @@
        cliente.html?pesquisa=<código>   o questionário do estudo de frota
        cliente.html?diario=<código>     o diário de viagens (no celular)
        cliente.html?relatorio=<código>  o relatório (ler e baixar em PDF)
+       cliente.html?relatorio=<código>&proposta=<código>  o relatório e a proposta juntos (0.24.6)
        cliente.html?proposta=<código>   a proposta comercial (ler, aceitar, baixar em PDF)
      O banco confere o código e o prazo em cada chamada (funções
      ler_*_prospect e salvar_*/registrar_*). Aqui só a chave pública
@@ -53,8 +54,10 @@
     const tipo = ["pesquisa", "diario", "relatorio", "proposta"].find(k => q.get(k));
     const codigo = tipo ? q.get(tipo) : "";
     if (!tipo || !/^[A-Za-z0-9]{20,64}$/.test(codigo)) { erro("Link incompleto. Abra o endereço exatamente como a E4M mandou."); return; }
+    // 0.24.6: o relatório pode vir com a proposta junto (cliente.html?relatorio=<código>&proposta=<código>)
+    const codigoProposta = tipo === "relatorio" && /^[A-Za-z0-9]{20,64}$/.test(q.get("proposta") || "") ? q.get("proposta") : "";
     // tira o código da barra de endereço depois de ler (não fica no histórico de quem olhar a tela)
-    try { history.replaceState(null, "", location.pathname + "?" + tipo + "=" + codigo); } catch (e) { /* segue */ }
+    try { history.replaceState(null, "", location.pathname + "?" + tipo + "=" + codigo + (codigoProposta ? "&proposta=" + codigoProposta : "")); } catch (e) { /* segue */ }
 
     const cfg = window.CONFIG_NUVEM || {};
     const url = String(cfg.url || "").trim().replace(/\/+$/, "").replace(/\/rest\/v1$/, "")
@@ -166,17 +169,13 @@
     }
 
     /* ---------------- a proposta comercial (0.23) ---------------- */
-    if (tipo === "proposta") {
-        let p;
-        try { p = await rpc("ler_proposta_prospect", { p_codigo: codigo }); } catch (e) { erro(e.message); return; }
+    // desenha a proposta (com o aceite) dentro de "alvo"; codigoP = o código do link da proposta
+    function mostrarProposta(alvo, p, codigoP, comPdf = true) {
         const d = p.dados || {};
         const num = `${p.numero} rev. ${PropostaDoc.letra(p.revisao)}`;
-        document.getElementById("clienteTitulo").textContent = "Proposta comercial";
-        document.getElementById("clienteNome").textContent = `${d.cliente?.nome || ""} · ${num}`;
-        document.title = `E4M · Proposta ${num}`;
         const desenhar = () => {
             const podeAceitar = p.status === "emitida" && !p.vencida && !p.temRevisaoNova;
-            caixa.innerHTML = `<div class="cliente-acoes grupo"><button type="button" class="btn btn-primario" id="baixarPdf">Baixar em PDF</button><span class="suave">No diálogo de impressão, escolha "Salvar como PDF".</span></div>
+            alvo.innerHTML = `${comPdf ? `<div class="cliente-acoes grupo"><button type="button" class="btn btn-primario" data-baixar>Baixar em PDF</button><span class="suave">No diálogo de impressão, escolha "Salvar como PDF".</span></div>` : ""}
                 ${PropostaDoc.html(d, { status: p.status, aceite: p.aceite, vencida: p.vencida, temRevisaoNova: p.temRevisaoNova })}
                 ${podeAceitar ? `<section class="card pp-aceitar"><h2>Aceitar a proposta ${esc(num)}</h2>
                     <p class="suave">O aceite fica registrado com o seu nome, cargo, e-mail e a data, e avisa a E4M. O pedido é confirmado com o contrato de fornecimento.</p>
@@ -187,21 +186,31 @@
                     </div>
                     <label class="config-chave"><input type="checkbox" id="acLi"><span>Li a proposta ${esc(num)} e aceito as condições dela em nome de ${esc(d.cliente?.nome || "minha empresa")}.</span></label>
                     <button type="button" class="btn btn-primario" id="acOk" disabled>Aceitar a proposta</button></section>` : ""}`;
-            document.getElementById("baixarPdf").addEventListener("click", () => window.print());
-            const li = document.getElementById("acLi"), ok = document.getElementById("acOk");
+            const bx = alvo.querySelector("[data-baixar]"); if (bx) bx.addEventListener("click", () => window.print());
+            const li = alvo.querySelector("#acLi"), ok = alvo.querySelector("#acOk");
             if (li && ok) {
                 li.addEventListener("change", () => { ok.disabled = !li.checked; });
                 ok.addEventListener("click", async () => {
                     ok.disabled = true;
                     try {
-                        const r = await rpc("aceitar_proposta", { p_codigo: codigo, p_nome: document.getElementById("acNome").value, p_cargo: document.getElementById("acCargo").value, p_email: document.getElementById("acEmail").value });
-                        p.status = "aceita"; p.aceite = { nome: r.nome, cargo: document.getElementById("acCargo").value.trim(), em: r.em };
+                        const r = await rpc("aceitar_proposta", { p_codigo: codigoP, p_nome: alvo.querySelector("#acNome").value, p_cargo: alvo.querySelector("#acCargo").value, p_email: alvo.querySelector("#acEmail").value });
+                        p.status = "aceita"; p.aceite = { nome: r.nome, cargo: alvo.querySelector("#acCargo").value.trim(), em: r.em };
                         desenhar(); aviso("Proposta aceita. A E4M entra em contato para o contrato.", "sucesso");
                     } catch (e) { ok.disabled = false; aviso(e.message, "erro"); }
                 });
             }
         };
         desenhar();
+        return num;
+    }
+    if (tipo === "proposta") {
+        let p;
+        try { p = await rpc("ler_proposta_prospect", { p_codigo: codigo }); } catch (e) { erro(e.message); return; }
+        const d = p.dados || {};
+        document.getElementById("clienteTitulo").textContent = "Proposta comercial";
+        const num = mostrarProposta(caixa, p, codigo);
+        document.getElementById("clienteNome").textContent = `${d.cliente?.nome || ""} · ${num}`;
+        document.title = `E4M · Proposta ${num}`;
         return;
     }
 
@@ -212,7 +221,28 @@
     document.getElementById("clienteNome").textContent = d.nome || "";
     document.title = `E4M · Estudo de frota · ${d.nome || ""}`;
     const R = Object.assign({}, d.resultado, { cliente: Object.assign({ nome: d.nome, setor: d.setor, cidade: d.cidade }, d.resultado?.cliente || {}) });
-    caixa.innerHTML = `<div class="cliente-acoes grupo"><button type="button" class="btn btn-primario" id="baixarPdf">Baixar em PDF</button><span class="suave">No diálogo de impressão, escolha "Salvar como PDF".</span></div>${RelatorioEstudo.html(R, { paraCliente: true })}`;
+    let prop = null;
+    if (codigoProposta) { try { prop = await rpc("ler_proposta_prospect", { p_codigo: codigoProposta }); } catch (e) { prop = { erro: e.message }; } }
+    if (!prop) {
+        caixa.innerHTML = `<div class="cliente-acoes grupo"><button type="button" class="btn btn-primario" id="baixarPdf">Baixar em PDF</button><span class="suave">No diálogo de impressão, escolha "Salvar como PDF".</span></div>${RelatorioEstudo.html(R, { paraCliente: true })}`;
+        document.getElementById("baixarPdf").addEventListener("click", () => window.print());
+        return;
+    }
+    // relatório e proposta no mesmo link: duas abas; o PDF imprime a aba aberta
+    const numP = prop.erro ? "" : `${prop.numero} rev. ${PropostaDoc.letra(prop.revisao)}`;
+    caixa.innerHTML = `<div class="cliente-acoes grupo cliente-abas" role="tablist">
+            <button type="button" class="btn btn-primario" role="tab" data-ca="rel" aria-selected="true">Relatório do estudo</button>
+            <button type="button" class="btn" role="tab" data-ca="prop" aria-selected="false">Proposta comercial${numP ? " · " + esc(numP) : ""}</button>
+            <button type="button" class="btn" id="baixarPdf">Baixar em PDF</button></div>
+        <div id="caRel">${RelatorioEstudo.html(R, { paraCliente: true })}</div><div id="caProp" hidden></div>`;
+    const caProp = document.getElementById("caProp");
+    if (prop.erro) caProp.innerHTML = `<div class="cliente-erro">${esc(prop.erro)}</div>`; else mostrarProposta(caProp, prop, codigoProposta, false);
+    const abrir = k => {
+        document.getElementById("caRel").hidden = k !== "rel"; caProp.hidden = k !== "prop";
+        caixa.querySelectorAll("[data-ca]").forEach(b => { const on = b.dataset.ca === k; b.classList.toggle("btn-primario", on); b.setAttribute("aria-selected", String(on)); });
+        document.title = k === "rel" ? `E4M · Estudo de frota · ${d.nome || ""}` : `E4M · Proposta ${numP}`;
+    };
+    caixa.querySelectorAll("[data-ca]").forEach(b => b.addEventListener("click", () => abrir(b.dataset.ca)));
     document.getElementById("baixarPdf").addEventListener("click", () => window.print());
 })();
 </script>

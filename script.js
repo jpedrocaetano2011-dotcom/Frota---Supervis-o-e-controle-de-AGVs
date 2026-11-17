@@ -5268,8 +5268,8 @@ function componentesDiagnostico(agv) {
     add("Painel de botões (MCP23017)", d.entradas === -1 ? "Sem resposta no endereço 0x20" : "Respondendo · endereço 0x20",
         d.entradas === -1 || /MCP/i.test(hardwareFalha) ? "falha" : nivelPorErros(e.mcp), e.mcp, "mcp");
     add("Multiplexador I²C (TCA9548A)", "Endereço 0x70", /TCA/i.test(hardwareFalha) ? "falha" : nivelPorErros(e.tca), e.tca, "tca");
-    add("Distância esquerdo (VL53L0X)", e.vl53_1 > 0 ? "Canal 0 · falhas de leitura (cabo ou conector?)" : "Canal 0", nivelPorErros(e.vl53_1), e.vl53_1, "vl53_1");
-    add("Distância direito (VL53L0X)", e.vl53_2 > 0 ? "Canal 1 · falhas de leitura (cabo ou conector?)" : "Canal 1", nivelPorErros(e.vl53_2), e.vl53_2, "vl53_2");
+    add("Distância esquerdo (VL53L1X)", e.vl53_1 > 0 ? "Canal 0 · falhas de leitura (cabo ou conector?)" : "Canal 0", nivelPorErros(e.vl53_1), e.vl53_1, "vl53_1");
+    add("Distância direito (VL53L1X)", e.vl53_2 > 0 ? "Canal 1 · falhas de leitura (cabo ou conector?)" : "Canal 1", nivelPorErros(e.vl53_2), e.vl53_2, "vl53_2");
     const calibrado = agv.sensores?.qtr?.calibrado;
     add("Seguidor de linha (QTR)", `${calibrado ? "Calibrado" : "Sem calibração"} · linha perdida ${e.linhaPerdida ?? 0}×`,
         calibrado === false ? "aviso" : "ok", e.linhaPerdida, "qtr");

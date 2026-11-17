@@ -13,7 +13,7 @@
     else raiz.PropostaDoc = fabrica(raiz.EstudoNegocio);
 })(typeof self !== "undefined" ? self : this, function (N) {
     "use strict";
-    const VERSAO = "0.24.0";
+    const VERSAO = "0.24.6";
     const esc = t => String(t ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
     const fmt = (v, c = 0) => (v == null || !Number.isFinite(v) ? "--" : v.toLocaleString("pt-BR", { minimumFractionDigits: c, maximumFractionDigits: c }));
     const brl = v => (v == null || !Number.isFinite(v) ? "--" : "R$ " + fmt(Math.round(v * 100) / 100, Math.abs(v - Math.round(v)) > 0.004 ? 2 : 0));
@@ -112,12 +112,20 @@
     const dataTxt = s => (s ? new Date(String(s).length === 10 ? s + "T12:00:00" : s).toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" }) : "--");
     const lista = xs => `<ul class="pp-lista">${(xs || []).map(x => `<li>${esc(x)}</li>`).join("")}</ul>`;
 
+    // 0.24.6: o mesmo visual do relatório v3 (partes com uma frase que já responde, cartões e a linha do tempo)
+    const parte = (n, titulo, frase, corpo) => `<section class="rv-secao rv3-parte"><h2><span class="rv-num">${n}</span>${esc(titulo)}</h2>${frase ? `<p class="rv3-frase">${frase}</p>` : ""}${corpo}</section>`;
+    const cartao = (rot, val, sub, classe = "") => `<div class="rv3-cartao ${classe}"><span>${esc(rot)}</span><b>${val}</b>${sub ? `<em>${sub}</em>` : ""}</div>`;
+    const checks = xs => `<ul class="rv3-porque pp-checks">${(xs || []).map(x => `<li>${esc(x)}</li>`).join("")}</ul>`;
+    const chip = id => `<span class="rv3-chip rv3-m-${esc(String(id || "").split("-")[1] || "x")}">${esc(nomeModelo(id))}</span>`;
+
     // opcoes: { marca, rascunho (ainda não emitida), status, aceite, vencida, temRevisaoNova }
     function html(d, opcoes = {}) {
         if (!d) return "";
         const e = d.emitente || {}, cl = d.cliente || {};
         const num = d.numero ? `${esc(d.numero)} rev. ${letra(d.revisao)}` : "rascunho";
         const ex = (d.exemplo || []).length;
+        const attas = d.itens.filter(i => i.grupo === "atta");
+        const frotaTxt = attas.map(i => `${i.qtd} ${i.descricao}`).join(" + ");
         const partes = [];
         partes.push(`<header class="rv-capa">
             ${opcoes.marca !== false ? `<img src="${esc(opcoes.marca || "img/e4m-marca-claro.webp")}" alt="E4M" width="130" height="41" class="rv-marca">` : ""}
@@ -132,54 +140,66 @@
         ${opcoes.status === "cancelada" ? `<p class="rv-exemplo">Esta proposta foi cancelada.</p>` : ""}
         ${opcoes.vencida && opcoes.status !== "aceita" ? `<p class="rv-exemplo">A validade desta proposta venceu. Peça uma revisão à E4M.</p>` : ""}`);
 
-        // 1. resumo
+        // 1. a proposta
         const es = d.estudo;
-        const opc = [d.mostrar?.compra ? `compra: ${brl(d.compra.total)} e ${brl(d.compra.mensal)} por mês` : "", d.mostrar?.mensalidade ? `mensalidade: ${brl(d.mensalidade.inicial)} na implantação e ${brl(d.mensalidade.total)} por mês` : ""].filter(Boolean);
-        partes.push(secao(1, "Resumo", `<p>A E4M propõe ${fmt(d.nAtta)} Atta (${esc(d.itens.filter(i => i.grupo === "atta").map(i => `${i.qtd} ${i.descricao}`).join(" + "))}) com o ${esc(d.plano.nome)} ${esc(d.plano.textoMira || "")}, a implantação completa e o acompanhamento do piloto. ${opc.length ? `Opções: ${opc.join("; ")}.` : ""}</p>
-            ${es ? `<div class="rv-destaques">
-                <div class="rv-destaque"><span>Frota do estudo</span><b>${esc(es.frota || "--")}</b>${es.noPrazo != null ? `<small>${pct(es.noPrazo)} das entregas no prazo</small>` : ""}</div>
-                <div class="rv-destaque ${es.paybackProvavel != null ? "ok" : ""}"><span>Payback provável (compra)</span><b>${esc(meses(es.paybackProvavel))}</b><small>no mínimo (conservador): ${esc(es.paybackConservador != null ? meses(es.paybackConservador) : "não volta em 5 anos")}</small></div>
-                <div class="rv-destaque"><span>Ganho por ano (provável)</span><b>${brl(es.economiaAno)}</b><small>${es.economiaConfirmada != null ? `${brl(es.economiaConfirmada)} confirmados` : "do estudo de frota"}</small></div>
-            </div>${es.igual ? "" : `<p class="rv-nota">O estudo foi calculado com a frota recomendada e os preços sem desconto; os valores desta proposta são os da tabela abaixo.</p>`}` : ""}`));
+        const formas = [d.mostrar?.compra ? `<b>${brl(d.compra.total)}</b> na compra` : "", d.mostrar?.mensalidade ? `<b>${brl(d.mensalidade.inicial)}</b> de entrada e <b>${brl(d.mensalidade.total)} por mês</b>` : ""].filter(Boolean);
+        partes.push(parte(1, "A proposta", `A E4M propõe <b>${esc(frotaTxt)}</b> com o ${esc(d.plano.nome)}, a implantação completa e o acompanhamento do piloto, por ${formas.join(" ou ")}.`, `
+            <div class="rv3-tres">
+                ${cartao("A frota", `${fmt(d.nAtta)} <small>Atta</small>`, attas.map(i => `${i.qtd} × ${chip(i.modelo)}`).join(" "))}
+                ${d.mostrar?.compra ? cartao("Comprando", brl(d.compra.total), `com a implantação · ${brl(d.compra.mensal)} por mês de ${esc(d.plano.nome)}`) : cartao("Por mês", brl(d.mensalidade.total), `${brl(d.mensalidade.inicial)} de entrada · ${fmt(d.mensalidade.meses)} meses`)}
+                ${es && !es.semFrota ? cartao("Payback provável (do estudo)", esc(meses(es.paybackProvavel)), `no mínimo (conservador): ${esc(es.paybackConservador != null ? meses(es.paybackConservador) : "não volta em 5 anos")}`, es.paybackProvavel != null ? "ok" : "falta longo") : cartao("Prazo de fabricação", `${fmt(d.condicoes.prazoFabricacaoSemanas)} <small>semanas</small>`, "a partir do pedido")}
+            </div>
+            ${es && !es.semFrota ? `<ul class="rv3-porque">
+                ${es.frota ? `<li>A frota do estudo de frota: <b>${esc(es.frota)}</b>${es.noPrazo != null ? `, ${pct(es.noPrazo)} das entregas no prazo` : ""}</li>` : ""}
+                ${es.economiaAno > 0 ? `<li>Ganho de <b>${brl(Math.round(es.economiaAno))} por ano</b> no cenário provável${es.economiaConfirmada != null ? ` (${brl(Math.round(es.economiaConfirmada))} são ganhos certos)` : ""}</li>` : ""}
+                ${es.custoHojeAno != null ? `<li>Hoje, mover material custa <b>${brl(Math.round(es.custoHojeAno))} por ano</b></li>` : ""}
+                ${es.paybackMensalidade != null && d.mostrar?.mensalidade ? `<li>Pagando por mês, o payback provável é de <b>${esc(meses(es.paybackMensalidade))}</b></li>` : ""}
+            </ul>${es.igual ? "" : `<p class="rv3-obs">O estudo foi calculado com a frota recomendada e os preços sem desconto; os valores desta proposta são os da tabela da parte 2.</p>`}` : ""}`));
 
-        // 2. escopo
-        partes.push(secao(2, "O que a E4M fornece", `${tabela(["Item", "Qtd.", "Preço unitário", "Total"], d.itens.map(i => [`<b>${esc(i.descricao)}</b>${i.detalhe ? `<small>${esc(i.detalhe)}</small>` : ""}`, fmt(i.qtd), brl(i.unitario), brl(i.total)])
+        // 2. o que a E4M fornece
+        partes.push(parte(2, "O que a E4M fornece", `${fmt(d.nAtta)} Atta${d.itens.some(i => i.grupo !== "atta") ? " e os itens da instalação" : ""}, a implantação e o ${esc(d.plano.nome)} ${esc(d.plano.textoMira || "")}.`, `
+            ${tabela(["Item", "Qtd.", "Preço unitário", "Total"], d.itens.map(i => [`<b>${esc(i.descricao)}</b>${i.detalhe ? `<small>${esc(i.detalhe)}</small>` : ""}`, fmt(i.qtd), brl(i.unitario), brl(i.total)])
                 .concat(d.desconto > 0 ? [[`Desconto (${pct(d.descontoPct)})`, "", "", `−${brl(d.desconto)}`]] : [])
-                .concat([[`<b>Hardware</b>`, "", "", `<b>${brl(d.hardware)}</b>`], [`<b>Implantação</b><small>${pct(d.implantacao.pct)} do valor dos Atta</small>`, "", "", `<b>${brl(d.implantacao.valor)}</b>`]]), "pp-itens")}
-            <div class="rv-duas"><div><h3>A implantação inclui</h3>${lista(d.implantacao.inclui)}</div>
-            <div><h3>${esc(d.plano.nome)} <small>${esc(d.plano.textoMira || "")}</small></h3><p>${esc(d.plano.inclui || "")}</p>
-                <p>${d.plano.fixoMes ? `${brl(d.plano.fixoMes)} por mês pela fábrica + ` : ""}${brl(d.plano.porAttaMes)} por Atta por mês: <b>${brl(d.plano.mensal)} por mês</b> para ${fmt(d.nAtta)} Atta.</p></div></div>`));
+                .concat([[`<b>Hardware</b>`, "", "", `<b>${brl(d.hardware)}</b>`], [`<b>Implantação</b><small>${pct(d.implantacao.pct)} do valor dos Atta</small>`, "", "", `<b>${brl(d.implantacao.valor)}</b>`]]), "pp-itens rv3-fluxos")}
+            <div class="rv3-duas pp-duas">
+                <div class="rv3-cartao pp-bloco"><span>A implantação inclui</span>${checks(d.implantacao.inclui)}</div>
+                <div class="rv3-cartao pp-bloco"><span>${esc(d.plano.nome)} ${esc(d.plano.textoMira || "")}</span><b>${brl(d.plano.mensal)} <small>por mês</small></b>
+                    <em>${d.plano.fixoMes ? `${brl(d.plano.fixoMes)} pela fábrica + ` : ""}${brl(d.plano.porAttaMes)} por Atta, para ${fmt(d.nAtta)} Atta</em><p>${esc(d.plano.inclui || "")}</p></div>
+            </div>`));
 
-        // 3. o que fica com o cliente
-        partes.push(secao(3, "O que fica com o cliente", `${lista(d.condicoes.naoInclui)}<p class="rv-nota">Sem esses itens prontos, a implantação espera; a E4M ajuda a definir cada um na visita técnica.</p>`));
+        // 3. investimento
+        const opCompra = d.mostrar?.compra ? `<div class="rv3-opcao pp-opcao principal"><span>Comprar</span><b>${brl(d.compra.total)}</b><em>hardware e implantação</em>
+            <dl><dt>Por mês</dt><dd>${brl(d.compra.mensal)} (${esc(d.plano.nome)})</dd><dt>Manutenção</dt><dd>${pct(d.compra.manutencaoPct)} ao ano a partir do 2º ano (${brl(d.compra.manutencaoAno)})</dd></dl>
+            ${d.compra.parcelas.length ? `<ol class="pp-parcelas">${d.compra.parcelas.map(x => `<li><b>${pct(x.pct)}</b><span>${esc(x.quando)}</span><strong>${brl(x.valor)}</strong></li>`).join("")}</ol>` : ""}</div>` : "";
+        const opMens = d.mostrar?.mensalidade ? `<div class="rv3-opcao pp-opcao"><span>Pagar por mês</span><b>${brl(d.mensalidade.total)} <small>por mês</small></b><em>${brl(d.mensalidade.inicial)} na implantação · contrato de ${fmt(d.mensalidade.meses)} meses</em>
+            <dl><dt>Hardware com manutenção</dt><dd>${brl(d.mensalidade.hardwareMes)} (${pct(d.mensalidade.pctMes)} ao mês)</dd><dt>${esc(d.plano.nome)}</dt><dd>${brl(d.mensalidade.planoMes)}</dd></dl>
+            ${d.mensalidade.pagamento ? `<p class="rv-nota">${esc(d.mensalidade.pagamento)}</p>` : ""}</div>` : "";
+        partes.push(parte(3, "Investimento", d.mostrar?.compra && d.mostrar?.mensalidade ? "Duas formas de pagar, lado a lado: comprar a frota ou pagar por mês, com a manutenção incluída." : d.mostrar?.compra ? "Comprando a frota, com a implantação paga junto." : "Pagando por mês, com a manutenção incluída.", `
+            <div class="rv3-opcoes pp-opcoes">${opCompra}${opMens}</div>
+            <p class="rv3-obs">${[d.condicoes.impostos, d.condicoes.reajuste, d.condicoes.frete].filter(Boolean).map(esc).join(" ")}</p>`));
 
-        // 4. investimento
-        const blocoCompra = d.mostrar?.compra ? `<div class="rv-cenario principal"><h3>Comprar</h3><dl>
-            <dt>Investimento</dt><dd><b>${brl(d.compra.total)}</b></dd><dt>Por mês</dt><dd>${brl(d.compra.mensal)} <small>(${esc(d.plano.nome)})</small></dd>
-            <dt>Manutenção</dt><dd>${pct(d.compra.manutencaoPct)} do hardware por ano, a partir do 2º ano (${brl(d.compra.manutencaoAno)})</dd></dl>
-            ${d.compra.parcelas.length ? tabela(["Pagamento", "%", "Valor"], d.compra.parcelas.map(x => [esc(x.quando), pct(x.pct), brl(x.valor)])) : ""}</div>` : "";
-        const blocoMens = d.mostrar?.mensalidade ? `<div class="rv-cenario"><h3>Pagar por mês</h3><dl>
-            <dt>Na implantação</dt><dd><b>${brl(d.mensalidade.inicial)}</b></dd><dt>Por mês</dt><dd><b>${brl(d.mensalidade.total)}</b></dd>
-            <dt>Composição</dt><dd>hardware ${brl(d.mensalidade.hardwareMes)} (${pct(d.mensalidade.pctMes)} ao mês, com a manutenção) + ${esc(d.plano.nome)} ${brl(d.mensalidade.planoMes)}</dd>
-            <dt>Contrato</dt><dd>${fmt(d.mensalidade.meses)} meses</dd></dl>${d.mensalidade.pagamento ? `<p class="rv-nota">${esc(d.mensalidade.pagamento)}</p>` : ""}</div>` : "";
-        partes.push(secao(4, "Investimento", `<div class="rv-cenarios pp-opcoes">${blocoCompra}${blocoMens}</div>
-            <p class="rv-nota">${esc(d.condicoes.impostos)} ${esc(d.condicoes.reajuste)} ${esc(d.condicoes.frete)}</p>`));
+        // 4. prazos
+        const cr = d.cronograma || [];
+        partes.push(parte(4, "Prazos", cr.length ? `Do pedido à frota completa: fabricação em <b>${fmt(d.condicoes.prazoFabricacaoSemanas)} semanas</b> e a implantação em seguida, começando pelo piloto.` : "",
+            `<ol class="rv3-tempo">${cr.map((f, i) => `<li class="${/piloto|frota|meia/i.test(f.fase) ? "ganha" : ""}"><span class="rv3-tempo-bola">${i + 1}</span><b>${esc(f.fase)}</b><em>${esc(f.quando)}</em><span>${esc(f.oque)}</span></li>`).join("")}</ol>`));
 
-        // 5. prazos
-        partes.push(secao(5, "Prazos", tabela(["Fase", "Quando", "O quê"], (d.cronograma || []).map(f => [`<b>${esc(f.fase)}</b>`, esc(f.quando), esc(f.oque)]))));
+        // 5. o que fica com o cliente
+        partes.push(parte(5, "O que fica com o cliente", "Sem estes itens prontos, a implantação espera; a E4M ajuda a definir cada um na visita técnica.", `<div class="rv3-cartao pp-bloco pp-cliente">${checks(d.condicoes.naoInclui)}</div>`));
 
-        // 6. garantia e suporte
-        partes.push(secao(6, "Garantia e suporte", `<p><b>Garantia de ${fmt(d.condicoes.garantiaMeses)} meses.</b> ${esc(d.condicoes.garantia)}</p><p><b>Suporte.</b> ${esc(d.condicoes.suporte)}</p>`));
-
-        // 7. condições e aceite
+        // 6. garantia, condições e aceite
         const ac = opcoes.aceite;
-        partes.push(secao(7, "Condições e aceite", `<p>${esc(d.condicoes.condicoesGerais)}</p>
+        partes.push(parte(6, "Garantia, condições e aceite", `<b>${fmt(d.condicoes.garantiaMeses)} meses de garantia</b> e suporte da E4M durante o contrato.`, `
+            <div class="rv3-duas pp-duas">
+                <div class="rv3-cartao pp-bloco"><span>Garantia</span><b>${fmt(d.condicoes.garantiaMeses)} <small>meses</small></b><p>${esc(d.condicoes.garantia)}</p></div>
+                <div class="rv3-cartao pp-bloco"><span>Suporte</span><p>${esc(d.condicoes.suporte)}</p></div>
+            </div>
+            <h3>Condições gerais</h3><p class="pp-gerais">${esc(d.condicoes.condicoesGerais)}</p>
             ${d.observacoes ? `<h3>Observações</h3><p class="pp-obs">${esc(d.observacoes)}</p>` : ""}
             ${ac ? `<div class="pp-aceite ok"><b>Aceita</b> por ${esc(ac.nome)}${ac.cargo ? `, ${esc(ac.cargo)}` : ""}, em ${esc(new Date(ac.em).toLocaleString("pt-BR"))}, pelo link desta proposta (${num}).</div>`
                 : `<div class="pp-assinaturas"><div><span></span>${esc(cl.nome || "Cliente")}<small>nome, cargo e data</small></div><div><span></span>${esc(e.nomeFantasia)}<small>${esc(e.responsavel || "responsável")}</small></div></div>`}`));
 
         partes.push(`<footer class="rv-rodape">${esc(e.nomeFantasia)}${e.razaoSocial ? ` · ${esc(e.razaoSocial)}` : ""}${e.cnpj ? ` · CNPJ ${esc(e.cnpj)}` : ""}${e.endereco ? ` · ${esc(e.endereco)}` : ""}${e.email ? ` · ${esc(e.email)}` : ""}${e.telefone ? ` · ${esc(e.telefone)}` : ""}${e.site ? ` · ${esc(e.site)}` : ""} · Proposta ${num}</footer>`);
-        return `<article class="rv2 pp">${partes.join("")}</article>`;
+        return `<article class="rv2 rv3 pp">${partes.join("")}</article>`;
     }
 
     return { VERSAO, CAMPOS, pendencias, montar, html, letra, frotaDoEstudo, brl };

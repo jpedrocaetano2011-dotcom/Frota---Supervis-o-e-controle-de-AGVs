@@ -81,6 +81,8 @@
         ] },
         { id: "futuro", titulo: "O futuro", ajuda: "Para a previsão de 3 anos.", campos: [
             { id: "crescimento", rotulo: "Crescimento de produção esperado por ano", tipo: "numero", unidade: "%", faixa: true },
+            { id: "picoSazonal", rotulo: "Pico sazonal: quanto a demanda sobe no mês mais cheio?", tipo: "numero", unidade: "%", ajuda: "fim de ano, safra, campanha; a mais sobre um mês médio. Deixe vazio se a demanda é parelha o ano todo" },
+            { id: "mesesSazonal", rotulo: "Quantos meses por ano nesse pico?", tipo: "numero", unidade: "meses" },
             { id: "turnoNovo", rotulo: "Pensa em abrir mais um turno?", tipo: "sim_nao" },
             { id: "prazo", rotulo: "Para quando quer a frota rodando?", tipo: "escolha", opcoes: [["3m", "Até 3 meses"], ["6m", "Até 6 meses"], ["12m", "Até 1 ano"], ["sem", "Sem pressa, estudando"]] },
             { id: "orcamento", rotulo: "Orçamento previsto para o projeto", tipo: "numero", unidade: "R$" },

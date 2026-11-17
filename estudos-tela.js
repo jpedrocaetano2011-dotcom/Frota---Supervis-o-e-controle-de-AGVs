@@ -152,15 +152,32 @@ const EstudosTela = (function () {
         if (tipo === "relatorio" && !atual.resultado) { ui.aviso("Rode o estudo antes de mandar o relatório.", "aviso"); return; }
         if (tipo === "diario" && (atual.respostas?.pontos?.lista || []).length < 2) { ui.aviso("O diário usa os pontos do questionário: marque pelo menos dois antes.", "aviso"); return; }
         const dias = { pesquisa: 15, diario: 7, relatorio: 30 }[tipo];
-        const v = await ui.formulario({ titulo: { pesquisa: "Link do questionário", diario: "Link do diário de viagens", relatorio: "Link do relatório" }[tipo], confirmar: "Criar o link",
-            campos: [{ nome: "dias", rotulo: "Vale por (dias)", tipo: "number", valor: dias }],
+        // 0.24.6: o relatório pode ir junto com a proposta (a emitida, ou uma emitida agora com a frota do estudo)
+        const prop = tipo === "relatorio" ? ultimaAberta() : null;
+        const campos = [{ nome: "dias", rotulo: "Vale por (dias)", tipo: "number", valor: dias }];
+        if (tipo === "relatorio") campos.push({ nome: "comProposta", tipo: "checkbox", valor: Boolean(prop),
+            rotulo: prop ? `Mandar junto a proposta ${numLetra(prop)}` : "Emitir a proposta com a frota do estudo e mandar junto",
+            dica: prop ? "O cliente vê o relatório e a proposta no mesmo link e pode aceitar a proposta." : "Usa o rascunho da aba Proposta (frota do estudo, preços da Tabela da E4M). Ela ganha número e fica congelada." });
+        const v = await ui.formulario({ titulo: { pesquisa: "Link do questionário", diario: "Link do diário de viagens", relatorio: "Link do relatório" }[tipo], confirmar: "Criar o link", campos,
             texto: { pesquisa: "O cliente responde sozinho, sem conta. O que ele salva aparece aqui na aba Pesquisa.", diario: "No celular: a equipe toca \"saí\" e \"cheguei\" em cada viagem. Três a cinco dias bastam.", relatorio: "Só leitura, com o botão de baixar em PDF. Se você rodar o estudo de novo, o link mostra o resultado novo." }[tipo] });
         if (!v) return;
         if (sujos.size) await salvarJa();
-        const r = await Nuvem.cliente().rpc("criar_link_prospect", { p_id: atual.id, p_tipo: tipo, p_dias: Math.max(1, Math.min(90, Math.round(Number(v.dias) || dias))) });
+        const nDias = Math.max(1, Math.min(90, Math.round(Number(v.dias) || dias)));
+        let propLink = null;
+        if (tipo === "relatorio" && v.comProposta) {
+            let alvo = ultimaAberta();
+            if (!alvo) { await emitirProposta(); alvo = ultimaAberta(); }
+            if (!alvo) { ui.aviso("A proposta não foi emitida: o link sai só com o relatório.", "aviso"); }
+            else {
+                const rp = await Nuvem.cliente().rpc("criar_link_proposta", { p_proposta: alvo.id, p_dias: nDias });
+                if (rp.error) { ui.aviso(rp.error.message, "erro"); return; }
+                propLink = rp.data.codigo;
+            }
+        }
+        const r = await Nuvem.cliente().rpc("criar_link_prospect", { p_id: atual.id, p_tipo: tipo, p_dias: nDias });
         if (r.error) { ui.aviso(r.error.message, "erro"); return; }
         await carregarLinks(); desenhar();
-        copiar(urlCliente(tipo, r.data.codigo));
+        copiar(urlCliente(tipo, r.data.codigo) + (propLink ? `&proposta=${propLink}` : ""));
     }
     async function copiar(texto) {
         try { await navigator.clipboard.writeText(texto); ui.aviso("Link copiado. Mande ao cliente por e-mail ou WhatsApp.", "sucesso"); }
@@ -329,7 +346,11 @@ const EstudosTela = (function () {
 
     /* ---------------- rodar o estudo ---------------- */
     async function rodar() {
-        if (!atual.planta || !(atual.estudo?.fluxos || []).length) { ui.aviso("Gere a planta e os fluxos do questionário primeiro (aba Planta).", "aviso"); return; }
+        if (!atual.planta || !(atual.estudo?.fluxos || []).length) {
+            // 0.24.6: do questionário ao relatório num clique: sem planta ou fluxos, gera do questionário antes de rodar
+            if (!gerarDoQuestionario(Boolean(atual.planta))) return;
+            ui.aviso(`Planta e ${atual.estudo.fluxos.length} fluxo(s) gerados do questionário. Rodando o estudo…`, "sucesso");
+        }
         const fl = atual.estudo.fluxos.filter(f => f.ativo !== false);
         const quebrados = fl.filter(f => !atual.planta.nos.some(n => n.id === f.de) || !atual.planta.nos.some(n => n.id === f.para));
         if (quebrados.length) { ui.aviso(`Fluxo(s) apontando para ponto que não existe mais na planta: ${quebrados.map(f => f.nome).join(", ")}. Corrija na aba Fluxos.`, "aviso"); aba = "fluxos"; desenhar(); return; }
@@ -805,7 +826,8 @@ const EstudosTela = (function () {
     function htmlResultado() {
         if (rodando) return `<section class="card estudo-rodando"><h3>Rodando o estudo…</h3><progress id="estudosProgresso" max="1" value="${rodando.p}"></progress><span id="estudosProgressoTexto">${Math.round(rodando.p * 100)}% · ${esc(rodando.msg || "")}</span></section>`;
         const R = atual.resultado;
-        if (!R) return `<div class="empty-state">Rode o estudo na aba Fluxos.</div><div class="estudo-rodar"><button type="button" class="btn btn-primario btn-grande" data-es="rodar" ${(atual.estudo?.fluxos || []).length ? "" : "disabled"}>Rodar o estudo completo</button></div>`;
+        if (!R) { const temQ = (atual.respostas?.pontos?.lista || []).length >= 2 || (atual.estudo?.fluxos || []).length;
+            return `<div class="empty-state">${atual.planta ? "Rode o estudo: ele simula a frota, as ações e os 3 anos e monta o relatório." : "Com o questionário respondido, um clique gera a planta e os fluxos, roda o estudo e monta o relatório."}</div><div class="estudo-rodar"><button type="button" class="btn btn-primario btn-grande" data-es="rodar" ${temQ ? "" : "disabled"}>${atual.planta ? "Rodar o estudo completo" : "Gerar a planta e rodar o estudo"}</button></div>`; }
         const temPro = window.Mira && Mira.temPro && Mira.temPro();
         const eq = R.financeiro?.equilibrio;
         const brl = RelatorioEstudo.brl;
@@ -813,6 +835,7 @@ const EstudosTela = (function () {
         <section class="card"><div class="grupo">
             <button type="button" class="btn btn-primario" data-es="pdf">${ui.icone("pdf", "icone-p")}PDF</button>
             <button type="button" class="btn" data-es-link="relatorio">Link do relatório</button>
+            <button type="button" class="btn" data-es="irProposta">${propostas.some(x => x.status === "emitida" || x.status === "aceita") ? "Ver a proposta" : "Fazer a proposta deste estudo"}</button>
             ${temPro ? `<button type="button" class="btn" data-es="resumoMira">${R.resumoMira ? "Refazer o resumo com a Mira Pro" : "Resumo com a Mira Pro"}</button>` : ""}
             <button type="button" class="btn" data-es="rodar">Rodar de novo</button></div>
             ${eq ? `<p class="suave estudo-equilibrio"><b>Só para a E4M:</b> cada Atta custa ${brl(eq.custoAttaAno)} por ano (compra em 5 anos, implantação, plano e manutenção), ${ui.numero(eq.custoAttaAno / Math.max(1, eq.pessoaAno), 1)} vez(es) o custo de uma pessoa (${brl(eq.pessoaAno / 12, false)} por mês). Payback de ${eq.alvo} meses no cenário provável: ${eq.fatorPreco != null ? `com o Atta a ${Math.round(eq.fatorPreco * 100)}% da tabela (≈ ${brl(eq.precoMedio)} em média)` : "nem com o Atta de graça"}${eq.fatorAssinatura != null ? `, ou com o plano a ${brl(eq.assinatura, false)} por mês para a frota (hoje ${brl(eq.assinaturaHoje, false)})` : ""}.</p>` : ""}
@@ -920,6 +943,7 @@ const EstudosTela = (function () {
             }
             else if (a === "voltar") { if (sujos.size) await salvarJa(); atual = null; await carregarLista(); desenhar(); }
             else if (a === "apagar") apagar();
+            else if (a === "irProposta") { aba = "proposta"; desenhar(); }
             else if (a === "converter") converter();
             else if (a === "setor") usarSetor();
             else if (a === "diario") usarDiario();
